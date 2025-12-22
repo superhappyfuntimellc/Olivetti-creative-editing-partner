@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v3.0")
+st.title("📝 Pro Writer Suite — v4.0 (Voices & AI Tools)")
 
 client = OpenAI()
 
@@ -26,6 +26,36 @@ if "projects" not in st.session_state:
     }
 
 projects = st.session_state.projects
+
+# ================== HELPERS ==================
+def build_story_bible(sb):
+    out = []
+    for k, v in sb.items():
+        if v:
+            if isinstance(v, list):
+                out.append("Characters:")
+                for c in v:
+                    out.append(f"- {c['name']}: {c['description']}")
+            else:
+                out.append(f"{k.title()}: {v}")
+    return "\n".join(out)
+
+def instruction_for(tool):
+    return {
+        "Expand": "Continue the text naturally. Do not summarize.",
+        "Rewrite": "Rewrite the text with improved clarity and flow.",
+        "Describe": "Add richer sensory detail and emotion.",
+        "Brainstorm": "Generate creative ideas or next plot beats."
+    }[tool]
+
+VOICE_PROFILES = {
+    "Default": "",
+    "Comedy": "Witty, playful, humorous tone with timing and surprise.",
+    "Noir": "Hard-boiled, cynical, sharp imagery, restrained emotion.",
+    "Lyrical": "Musical language, metaphor, flowing sentences.",
+    "Thriller": "Tight pacing, tension, urgency, vivid action.",
+    "Ironic": "Detached, clever, subtle humor, knowing voice."
+}
 
 # ================== SIDEBAR ==================
 with st.sidebar:
@@ -65,9 +95,6 @@ with st.sidebar:
     if st.button("Add Character") and name:
         sb["characters"].append({"name": name, "description": desc})
 
-    for c in sb["characters"]:
-        st.markdown(f"• **{c['name']}** — {c['description']}")
-
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
@@ -86,6 +113,35 @@ with left:
         height=400
     )
 
+    tool = st.selectbox("Tool", ["Expand", "Rewrite", "Describe", "Brainstorm"])
+    voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+
+    run = st.button("Run AI")
+
 with right:
     st.header("🤖 AI Output")
-    st.info("v3.0 foundation locked. No AI tools yet.")
+
+    if run and chapters[chapter_name].strip():
+        system_prompt = (
+            "You are a professional creative writing assistant.\n"
+            "You must follow the story bible exactly.\n\n"
+            f"STORY BIBLE:\n{build_story_bible(sb)}"
+        )
+
+        if VOICE_PROFILES[voice]:
+            system_prompt += f"\n\nSTYLE:\n{VOICE_PROFILES[voice]}"
+
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            temperature=creativity,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapters[chapter_name]}"
+                }
+            ],
+        )
+
+        st.text_area("Result", response.output_text, height=400)
