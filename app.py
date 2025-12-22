@@ -4,11 +4,11 @@ from datetime import datetime
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v5.0")
+st.title("📝 Personal Sudowrite — v6.0")
 
 client = OpenAI()
 
-# ================== STATE ==================
+# ================== STATE INIT ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
         "New Project": {
@@ -25,7 +25,6 @@ if "projects" not in st.session_state:
             "chapters": {
                 "Chapter 1": {
                     "text": "",
-                    "locked": False,
                     "versions": []
                 }
             }
@@ -37,24 +36,25 @@ projects = st.session_state.projects
 # ================== VOICES ==================
 VOICE_PROFILES = {
     "Default": "",
-    "Literary": "Long sentences. Interior monologue. Metaphor. Controlled pacing.",
-    "Minimal": "Short sentences. Subtext. Restraint.",
-    "Noir": "Hard edges. Cynical tone. Concrete imagery.",
-    "Romantic": "Emotional intimacy. Sensory focus.",
-    "Epic": "Elevated diction. Mythic scale."
+    "Literary": "Long sentences, interiority, metaphor, controlled pacing.",
+    "Minimal": "Short sentences, restraint, subtext.",
+    "Noir": "Hard edges, cynicism, concrete imagery.",
+    "Romantic": "Emotional intimacy, sensory focus.",
+    "Epic": "Elevated diction, mythic scale."
 }
 
 # ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
     for k, v in sb.items():
-        if v:
-            if isinstance(v, list):
-                out.append("Characters:")
-                for c in v:
-                    out.append(f"- {c['name']}: {c['description']}")
-            else:
-                out.append(f"{k.replace('_',' ').title()}: {v}")
+        if not v:
+            continue
+        if isinstance(v, list):
+            out.append("Characters:")
+            for c in v:
+                out.append(f"- {c['name']}: {c['description']}")
+        else:
+            out.append(f"{k.replace('_',' ').title()}: {v}")
     return "\n".join(out)
 
 def instruction_for(tool):
@@ -64,12 +64,16 @@ def instruction_for(tool):
         "Describe": "Add vivid sensory detail.",
         "Brainstorm": "Generate plot ideas or options.",
         "Proofread": "Fix grammar, spelling, and punctuation only.",
-        "Diagnostics": "Analyze pacing, clarity, tension, POV, and consistency."
+        "Diagnostics": (
+            "Analyze pacing, clarity, POV consistency, tension, and continuity. "
+            "Return bullet points."
+        )
     }[tool]
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
+
     project_name = st.selectbox("Project", list(projects.keys()))
     project = projects[project_name]
 
@@ -81,7 +85,7 @@ with st.sidebar:
             },
             "outline": "",
             "timeline": "",
-            "chapters": {"Chapter 1": {"text": "", "locked": False, "versions": []}}
+            "chapters": {"Chapter 1": {"text": "", "versions": []}}
         }
 
     st.divider()
@@ -95,8 +99,8 @@ with st.sidebar:
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
     st.subheader("🧍 Characters")
-    cname = st.text_input("Name")
-    cdesc = st.text_area("Description")
+    cname = st.text_input("Character Name")
+    cdesc = st.text_area("Character Description")
     if st.button("Add / Update Character") and cname:
         sb["characters"] = [c for c in sb["characters"] if c["name"] != cname]
         sb["characters"].append({"name": cname, "description": cdesc})
@@ -105,7 +109,7 @@ with st.sidebar:
     st.header("🧭 Outline")
     project["outline"] = st.text_area("Outline / Beats", project["outline"], height=150)
 
-    st.header("⏱️ Timeline / Continuity")
+    st.header("⏱️ Timeline")
     project["timeline"] = st.text_area("Timeline Notes", project["timeline"], height=120)
 
 # ================== MAIN ==================
@@ -120,24 +124,21 @@ with left:
 
     if st.button("➕ New Chapter"):
         chapters[f"Chapter {len(chapters)+1}"] = {
-            "text": "", "locked": False, "versions": []
+            "text": "",
+            "versions": []
         }
-
-    locked = st.checkbox("🔒 Lock Chapter", chapter["locked"])
-    chapter["locked"] = locked
 
     chapter_text = st.text_area(
         "Chapter Text",
-        value=chapter["text"],
-        height=350,
-        disabled=locked
+        chapter["text"],
+        height=350
     )
 
-    if not locked:
-        chapter["text"] = chapter_text  # AUTOSAVE
+    # AUTOSAVE
+    chapter["text"] = chapter_text
 
     pov = st.selectbox(
-        "POV Lock (optional)",
+        "POV Lock",
         ["None"] + [c["name"] for c in sb["characters"]]
     )
 
@@ -156,11 +157,7 @@ with right:
 
     if run and chapter_text.strip():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        chapter["versions"].append({
-            "time": timestamp,
-            "text": chapter_text
-        })
+        chapter["versions"].append({"time": timestamp, "text": chapter_text})
 
         system_prompt = (
             "You are a professional creative writing assistant.\n"
@@ -170,7 +167,7 @@ with right:
         )
 
         if pov != "None":
-            system_prompt += f"\n\nWrite strictly from {pov}'s POV."
+            system_prompt += f"\n\nStrict POV: {pov}"
 
         if VOICE_PROFILES[voice]:
             system_prompt += f"\n\nSTYLE GUIDE:\n{VOICE_PROFILES[voice]}"
@@ -192,19 +189,10 @@ with right:
 
         st.text_area("Result", output, height=300)
 
-        with st.expander("🔍 Before / After Diff"):
+        with st.expander("🔍 Before / After"):
             st.markdown("### BEFORE")
             st.text(chapter_text)
             st.markdown("### AFTER")
             st.text(output)
 
-        with st.expander("🧬 Version History"):
-            for v in reversed(chapter["versions"][-10:]):
-                st.markdown(f"**{v['time']}**")
-                st.text(v["text"][:500])
-
-        st.download_button(
-            "⬇ Download Result",
-            output,
-            file_name=f"{chapter_name}_{tool}.txt"
-        )
+        with st
