@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v3.0")
+st.title("📝 Personal Sudowrite — v4.0")
 
 client = OpenAI()
 
@@ -19,8 +19,12 @@ if "projects" not in st.session_state:
                 "world_rules": "",
                 "characters": []
             },
+            "outline": "",
             "chapters": {
-                "Chapter 1": ""
+                "Chapter 1": {
+                    "text": "",
+                    "locked": False
+                }
             }
         }
     }
@@ -31,46 +35,41 @@ projects = st.session_state.projects
 VOICE_PROFILES = {
     "Default": "",
     "Literary": "Long sentences. Interior monologue. Metaphor. Controlled pacing.",
-    "Minimal": "Short sentences. Subtext. Restraint. No excess description.",
-    "Noir": "Hard edges. Dry voice. Concrete imagery. Cynical tone.",
-    "Romantic": "Emotional language. Intimacy. Sensory focus.",
-    "Epic": "Elevated diction. Grand scope. Mythic tone."
+    "Minimal": "Short sentences. Subtext. Restraint.",
+    "Noir": "Hard edges. Cynical tone. Concrete imagery.",
+    "Romantic": "Emotional intimacy. Sensory focus.",
+    "Epic": "Elevated diction. Mythic scale."
 }
 
 # ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
-    if sb["title"]: out.append(f"Title: {sb['title']}")
-    if sb["genre"]: out.append(f"Genre: {sb['genre']}")
-    if sb["tone"]: out.append(f"Tone: {sb['tone']}")
-    if sb["themes"]: out.append(f"Themes: {sb['themes']}")
-    if sb["world_rules"]:
-        out.append("World Rules / Canon:")
-        out.append(sb["world_rules"])
-    if sb["characters"]:
-        out.append("Characters:")
-        for c in sb["characters"]:
-            out.append(f"- {c['name']}: {c['description']}")
+    for key, val in sb.items():
+        if val:
+            if isinstance(val, list):
+                out.append("Characters:")
+                for c in val:
+                    out.append(f"- {c['name']}: {c['description']}")
+            else:
+                out.append(f"{key.replace('_',' ').title()}: {val}")
     return "\n".join(out)
 
 def instruction_for(tool):
     return {
         "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite for clarity, flow, and grammar.",
-        "Describe": "Add richer sensory detail and emotion.",
-        "Brainstorm": "Generate ideas or possible next plot beats.",
-        "Proofread": "Correct grammar, spelling, and punctuation only."
+        "Rewrite": "Rewrite for clarity, flow, and style.",
+        "Describe": "Enhance sensory detail and emotion.",
+        "Brainstorm": "Generate ideas or plot options.",
+        "Proofread": "Fix grammar, spelling, and punctuation only.",
+        "Diagnostics": "Analyze pacing, tension, clarity, and voice."
     }[tool]
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_name = st.selectbox(
-        "Project",
-        list(projects.keys()),
-        key="project_select"
-    )
+    project_name = st.selectbox("Project", list(projects.keys()))
+    project = projects[project_name]
 
     if st.button("➕ New Project"):
         projects[f"Project {len(projects)+1}"] = {
@@ -78,14 +77,13 @@ with st.sidebar:
                 "title": "", "genre": "", "tone": "",
                 "themes": "", "world_rules": "", "characters": []
             },
-            "chapters": {"Chapter 1": ""}
+            "outline": "",
+            "chapters": {"Chapter 1": {"text": "", "locked": False}}
         }
-
-    project = projects[project_name]
-    sb = project["story_bible"]
 
     st.divider()
     st.header("📘 Story Bible")
+    sb = project["story_bible"]
 
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
@@ -103,7 +101,15 @@ with st.sidebar:
     for c in sb["characters"]:
         st.markdown(f"**{c['name']}** — {c['description']}")
 
-# ================== MAIN UI ==================
+    st.divider()
+    st.header("🧭 Outline / Beats")
+    project["outline"] = st.text_area(
+        "Outline",
+        project["outline"],
+        height=200
+    )
+
+# ================== MAIN ==================
 left, right = st.columns(2)
 
 with left:
@@ -111,22 +117,27 @@ with left:
 
     chapters = project["chapters"]
     chapter_name = st.selectbox("Chapter", list(chapters.keys()))
+    chapter = chapters[chapter_name]
 
     if st.button("➕ New Chapter"):
-        chapters[f"Chapter {len(chapters)+1}"] = ""
+        chapters[f"Chapter {len(chapters)+1}"] = {"text": "", "locked": False}
+
+    locked = st.checkbox("🔒 Lock Chapter", value=chapter["locked"])
+    chapter["locked"] = locked
 
     chapter_text = st.text_area(
         "Chapter Text",
-        value=chapters[chapter_name],
-        height=350
+        value=chapter["text"],
+        height=350,
+        disabled=locked
     )
 
-    # AUTOSAVE
-    chapters[chapter_name] = chapter_text
+    if not locked:
+        chapter["text"] = chapter_text  # AUTO-SAVE
 
     tool = st.selectbox(
         "Tool",
-        ["Expand", "Rewrite", "Describe", "Brainstorm", "Proofread"]
+        ["Expand", "Rewrite", "Describe", "Brainstorm", "Proofread", "Diagnostics"]
     )
 
     voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
@@ -140,14 +151,14 @@ with right:
     if run and chapter_text.strip():
         system_prompt = (
             "You are a professional creative writing assistant.\n"
-            "You MUST follow the story bible exactly.\n\n"
+            "The story bible is canon and must be followed.\n\n"
             f"STORY BIBLE:\n{build_story_bible(sb)}"
         )
 
         if VOICE_PROFILES[voice]:
             system_prompt += f"\n\nSTYLE GUIDE:\n{VOICE_PROFILES[voice]}"
 
-        with st.spinner("Writing…"):
+        with st.spinner("Processing…"):
             response = client.responses.create(
                 model="gpt-4.1-mini",
                 temperature=creativity,
@@ -164,4 +175,10 @@ with right:
             "Result",
             value=response.output_text,
             height=400
+        )
+
+        st.download_button(
+            "⬇ Download Result (.txt)",
+            response.output_text,
+            file_name=f"{chapter_name}_{tool}.txt"
         )
