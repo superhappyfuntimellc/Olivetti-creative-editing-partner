@@ -1,3 +1,6 @@
+import os
+os.environ["STREAMLIT_WATCH_FILES"] = "false"
+
 import streamlit as st
 
 # ================== SETUP ==================
@@ -156,3 +159,4 @@ with right:
                 st.markdown(f"- {name}")
 
     st.info("AI tools will be added after workflow validation.")
+
