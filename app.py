@@ -63,10 +63,7 @@ def instruction_for(tool):
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_name = st.selectbox(
-        "Project",
-        list(projects.keys())
-    )
+    project_name = st.selectbox("Project", list(projects.keys()))
 
     if st.button("➕ New Project"):
         projects[f"Project {len(projects)+1}"] = {
@@ -142,19 +139,14 @@ with left:
         chapters[new_name] = chapters.pop(chapter_name)
         st.rerun()
 
-    chapter["locked"] = st.checkbox(
-        "🔒 Lock chapter",
-        chapter["locked"]
-    )
+    chapter["locked"] = st.checkbox("🔒 Lock chapter", chapter["locked"])
 
-    user_text = st.text_area(
+    chapter["text"] = st.text_area(
         "Chapter Text",
         chapter["text"],
         height=350,
         disabled=chapter["locked"]
     )
-
-    chapter["text"] = user_text  # autosave
 
     tool = st.selectbox(
         "Tool",
@@ -168,7 +160,7 @@ with left:
 with right:
     st.header("🤖 AI Output")
 
-    if run and user_text.strip() and not chapter["locked"]:
+    if run and chapter["text"].strip() and not chapter["locked"]:
         system_prompt = (
             "You are a professional creative writing assistant.\n"
             "You MUST follow the story bible exactly.\n\n"
@@ -183,13 +175,9 @@ with right:
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
-                        "content": f"{instruction_for(tool)}\n\nTEXT:\n{user_text}"
+                        "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapter['text']}"
                     }
                 ],
             )
 
-        st.text_area(
-            "Result",
-            value=response.output_text,
-            height=400
-        )
+        st.text_area("Result", value=response.output_text, height=400)
