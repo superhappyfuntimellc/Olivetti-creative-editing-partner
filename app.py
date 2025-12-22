@@ -3,7 +3,10 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="Olivetti v11.12")
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(layout="wide", page_title="Olivetti v12")
 client = OpenAI()
 
 # =========================
@@ -38,28 +41,43 @@ VOICES = {
     "Poetic": "Figurative, flowing, evocative."
 }
 
+REVISION_MODES = {
+    "Line Edit": "Improve clarity and flow. Do not add new content.",
+    "Compress": "Cut redundancy. Reduce word count by ~15%.",
+    "Sharpen Conflict": "Increase tension without changing events.",
+    "Voice Consistency": "Align voice with the selected style."
+}
+
 # =========================
 # HELPERS
 # =========================
+def normalize_chapter(ch):
+    defaults = {
+        "outline": "",
+        "workflow": "Draft",
+        "versions": [],
+        "genre": "Literary",
+        "voice": "Neutral Editor",
+        "notes": "",
+        "diagnostics": {}
+    }
+    for k, v in defaults.items():
+        ch.setdefault(k, v)
+    return ch
+
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
     for i in range(1, len(parts), 2):
-        chapters.append({
+        chapters.append(normalize_chapter({
             "title": parts[i].title(),
-            "text": parts[i+1].strip(),
-            "outline": "",
-            "workflow": "Draft",
-            "versions": []
-        })
+            "text": parts[i+1].strip()
+        }))
     if not chapters:
-        chapters.append({
+        chapters.append(normalize_chapter({
             "title": "Chapter 1",
-            "text": text,
-            "outline": "",
-            "workflow": "Draft",
-            "versions": []
-        })
+            "text": text
+        }))
     return chapters
 
 def save_version(ch):
@@ -68,140 +86,66 @@ def save_version(ch):
         "text": ch["text"]
     })
 
-def generate_outline(text, genre, voice, sample):
-    style = f"Genre: {GENRES[genre]}\nVoice: {VOICES[voice]}"
-    if sample:
-        style += f"\nMatch this writing style:\n{sample}"
+def call_llm(system, prompt, temp=0.3):
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temp
+    )
+    return r.output_text
 
+def generate_outline(ch):
+    style = f"{GENRES[ch['genre']]} | {VOICES[ch['voice']]}"
     prompt = f"""
 Create a concise chapter outline.
 • Bullet points only
 • Major story beats
 • No rewriting
 
-STYLE GUIDE:
+STYLE:
 {style}
 
 CHAPTER:
-{text}
+{ch['text']}
 """
-    r = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[
-            {"role": "system", "content": "You are a professional developmental editor."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
-    )
-    return r.output_text
+    return call_llm("You are a professional developmental editor.", prompt)
+
+def run_diagnostics(ch):
+    prompt = f"""
+Analyze this chapter. Do NOT rewrite.
+
+Return:
+• Scene purpose (1 sentence)
+• What changes from start → end
+• Pacing issues (if any)
+• Redundant beats
+• One concrete revision priority
+
+CHAPTER:
+{ch['text']}
+"""
+    return call_llm("You are a senior developmental editor.", prompt)
+
+def revise_text(ch, mode):
+    instruction = REVISION_MODES[mode]
+    prompt = f"""
+{instruction}
+
+Maintain genre and voice.
+
+GENRE: {ch['genre']}
+VOICE: {ch['voice']}
+
+TEXT:
+{ch['text']}
+"""
+    return call_llm("You are a professional line editor.", prompt, temp=0.4)
 
 # =========================
-# SIDEBAR — PROJECTS + DASHBOARD
+# SIDEBAR
 # =========================
 with st.sidebar:
     st.header("📁 Projects")
-
-    projects = list(st.session_state.projects.keys())
-    choice = st.selectbox("Project", ["— New —"] + projects)
-
-    if choice == "— New —":
-        name = st.text_input("Project name")
-        if st.button("Create Project") and name:
-            st.session_state.projects[name] = {"chapters": []}
-            st.session_state.current_project = name
-            st.session_state.current_chapter = 0
-    else:
-        st.session_state.current_project = choice
-
-    if st.session_state.current_project:
-        upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
-        if upload:
-            text = upload.read().decode("utf-8")
-            st.session_state.projects[
-                st.session_state.current_project
-            ]["chapters"] = split_into_chapters(text)
-            st.session_state.current_chapter = 0
-
-    # DASHBOARD
-    if st.session_state.current_project:
-        st.divider()
-        st.header("📊 Workflow Dashboard")
-        chapters = st.session_state.projects[st.session_state.current_project]["chapters"]
-        stages = ["Draft", "Revise", "Polish", "Final"]
-
-        for s in stages:
-            count = sum(1 for c in chapters if c["workflow"] == s)
-            st.write(f"{s}: {count}")
-
-        for i, c in enumerate(chapters):
-            if st.button(f"{i+1}. {c['title']} ({c['workflow']})", key=f"dash_{i}"):
-                st.session_state.current_chapter = i
-
-# =========================
-# MAIN
-# =========================
-if not st.session_state.current_project:
-    st.title("🫒 Olivetti")
-    st.write("Create or select a project to begin.")
-    st.stop()
-
-project = st.session_state.projects[st.session_state.current_project]
-chapters = project["chapters"]
-
-if not chapters:
-    st.write("Import a manuscript to begin.")
-    st.stop()
-
-idx = st.session_state.current_chapter
-chapter = chapters[idx]
-
-left, center, right = st.columns([1.2, 2.8, 2.2])
-
-# =========================
-# LEFT — CHAPTERS
-# =========================
-with left:
-    st.subheader("📚 Chapters")
-    for i, ch in enumerate(chapters):
-        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
-            st.session_state.current_chapter = i
-    chapter["title"] = st.text_input("Chapter title", chapter["title"])
-
-# =========================
-# CENTER — WRITING
-# =========================
-with center:
-    st.subheader("✍️ Chapter Text")
-    chapter["text"] = st.text_area("", chapter["text"], height=520)
-
-    col1, col2 = st.columns(2)
-    if col1.button("💾 Save Version"):
-        save_version(chapter)
-    chapter["workflow"] = col2.selectbox(
-        "Workflow Stage",
-        ["Draft", "Revise", "Polish", "Final"],
-        index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
-    )
-
-# =========================
-# RIGHT — STYLE + OUTLINE
-# =========================
-with right:
-    st.subheader("🎭 Style Controls")
-
-    genre = st.selectbox("Genre Style", list(GENRES.keys()))
-    voice = st.selectbox("Voice", list(VOICES.keys()))
-    sample = st.text_area("Match My Writing Style (optional)", height=120)
-
-    st.divider()
-    st.subheader("📑 Outline")
-
-    if st.button("Generate / Update Outline"):
-        with st.spinner("Analyzing chapter…"):
-            chapter["outline"] = generate_outline(
-                chapter["text"], genre, voice, sample
-            )
-
-    chapter["outline"] = st.text_area("", chapter["outline"], height=220)
-
-st.caption("Olivetti v11.12 — Built for real novels")
