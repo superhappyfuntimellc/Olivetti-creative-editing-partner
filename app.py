@@ -1,16 +1,13 @@
 import streamlit as st
-from openai import OpenAI
 
-# ================== SETUP ==================
+# ================== PAGE SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v6.0")
+st.title("📝 Pro Writer Suite — v6.2 (Stable Foundation)")
 
-client = OpenAI()
-
-# ================== STATE ==================
+# ================== SESSION STATE ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
-        "My First Project": {
+        "New Project": {
             "story_bible": {
                 "title": "",
                 "genre": "",
@@ -25,75 +22,38 @@ if "projects" not in st.session_state:
             }
         }
     }
-    st.session_state.active_project = "My First Project"
+
+if "active_project" not in st.session_state:
+    st.session_state.active_project = "New Project"
 
 projects = st.session_state.projects
 
-# ================== STYLE SYSTEM ==================
-VOICE_PROFILES = {
-    "Default": "",
-    "Comedy": "Witty, playful, sharp humor.",
-    "Noir": "Hard-boiled, cynical, spare prose.",
-    "Lyrical": "Poetic rhythm, metaphor-rich.",
-    "Thriller": "Urgent pacing and tension.",
-    "Ironic": "Detached, understated wit."
-}
-
-GENRE_STYLES = {
-    "None": "",
-    "Comedy": "Emphasize humor and comic timing.",
-    "Noir": "Dark tone, moral ambiguity.",
-    "Lyrical": "Focus on beauty of language.",
-    "Thriller": "Heighten suspense and danger.",
-    "Ironic": "Contrast tone with events."
-}
-
-def build_story_bible(sb):
-    out = []
-    for k, v in sb.items():
-        if v:
-            if isinstance(v, list):
-                out.append("Characters:")
-                for c in v:
-                    out.append(f"- {c['name']}: {c['description']}")
-            else:
-                out.append(f"{k.title()}: {v}")
-    return "\n".join(out)
-
-def instruction_for(tool):
-    return {
-        "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite with better clarity and flow.",
-        "Describe": "Add richer sensory detail.",
-        "Brainstorm": "Generate creative ideas."
-    }[tool]
-
-# ================== SIDEBAR — PROJECTS ==================
+# ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
     project_names = list(projects.keys())
-    selected = st.selectbox(
+    active = st.selectbox(
         "Active Project",
         project_names,
         index=project_names.index(st.session_state.active_project)
     )
 
-    st.session_state.active_project = selected
-    project = projects[selected]
+    st.session_state.active_project = active
+    project = projects[active]
 
-    st.divider()
-
-    new_name = st.text_input("Rename project", value=selected)
-    if new_name and new_name != selected:
-        projects[new_name] = projects.pop(selected)
+    # --- Rename project ---
+    new_name = st.text_input("Rename project", value=active)
+    if new_name and new_name != active and new_name not in projects:
+        projects[new_name] = projects.pop(active)
         st.session_state.active_project = new_name
+        st.rerun()
 
+    # --- Create project ---
     st.divider()
-
     create_name = st.text_input("New project name")
-    if st.button("➕ Create Project") and create_name:
-        if create_name not in projects:
+    if st.button("➕ Create Project"):
+        if create_name and create_name not in projects:
             projects[create_name] = {
                 "story_bible": {
                     "title": "",
@@ -107,12 +67,11 @@ with st.sidebar:
                 "chapters": {"Chapter 1": ""}
             }
             st.session_state.active_project = create_name
+            st.rerun()
 
-# ================== MAIN PAGES ==================
-tabs = st.tabs(["📘 Story Bible", "🧭 Outline", "✍️ Writing"])
-
-# ---------- STORY BIBLE ----------
-with tabs[0]:
+    # ================= STORY BIBLE =================
+    st.divider()
+    st.header("📘 Story Bible")
     sb = project["story_bible"]
 
     sb["title"] = st.text_input("Title", sb["title"])
@@ -121,63 +80,50 @@ with tabs[0]:
     sb["themes"] = st.text_area("Themes", sb["themes"])
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
-    st.subheader("Characters")
+    # ================= CHARACTERS =================
+    st.subheader("🧍 Characters")
+
     cname = st.text_input("Character name")
     cdesc = st.text_area("Character description")
 
-    if st.button("Add Character") and cname:
-        sb["characters"].append({"name": cname, "description": cdesc})
+    if st.button("Add / Update Character"):
+        if cname:
+            sb["characters"] = [c for c in sb["characters"] if c["name"] != cname]
+            sb["characters"].append({"name": cname, "description": cdesc})
+            st.rerun()
 
-# ---------- OUTLINE ----------
-with tabs[1]:
+    for c in sb["characters"]:
+        st.markdown(f"**{c['name']}** — {c['description']}")
+
+    # ================= OUTLINE =================
+    st.divider()
+    st.header("🧭 Outline")
     project["outline"] = st.text_area(
         "Outline / Beats",
         project["outline"],
+        height=200
+    )
+
+# ================== MAIN UI ==================
+left, right = st.columns(2)
+
+with left:
+    st.header("✍️ Writing")
+
+    chapters = project["chapters"]
+    chapter_names = list(chapters.keys())
+
+    chapter = st.selectbox("Chapter", chapter_names)
+    chapters[chapter] = st.text_area(
+        "Chapter Text",
+        chapters[chapter],
         height=400
     )
 
-# ---------- WRITING ----------
-with tabs[2]:
-    chapters = project["chapters"]
-
-    chapter_name = st.selectbox("Chapter", list(chapters.keys()))
-
-    if st.button("➕ New Chapter"):
+    if st.button("➕ Add Chapter"):
         chapters[f"Chapter {len(chapters)+1}"] = ""
+        st.rerun()
 
-    chapters[chapter_name] = st.text_area(
-        "Chapter Text",
-        chapters[chapter_name],
-        height=350
-    )
-
-    tool = st.selectbox("Tool", ["Expand", "Rewrite", "Describe", "Brainstorm"])
-    voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
-    genre_style = st.selectbox("Genre Style", list(GENRE_STYLES.keys()))
-    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-
-    if st.button("Run AI") and chapters[chapter_name].strip():
-        system_prompt = (
-            "You are a professional creative writing assistant.\n"
-            "Follow the story bible strictly.\n\n"
-            f"{build_story_bible(sb)}"
-        )
-
-        if VOICE_PROFILES[voice]:
-            system_prompt += f"\n\nVOICE:\n{VOICE_PROFILES[voice]}"
-        if GENRE_STYLES[genre_style]:
-            system_prompt += f"\n\nGENRE STYLE:\n{GENRE_STYLES[genre_style]}"
-
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            temperature=creativity,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f"{instruction_for(tool)}\n\n{chapters[chapter_name]}"
-                }
-            ],
-        )
-
-        st.text_area("🤖 AI Output", response.output_text, height=350)
+with right:
+    st.header("🤖 AI Output")
+    st.info("v6.2 foundation locked.\n\nAI, voices, tense, styles coming next.")
