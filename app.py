@@ -96,3 +96,60 @@ with left:
 
     chapters = project["chapters"]
     chapter_name =
+    chapter_name = st.selectbox("Chapter", list(chapters.keys()))
+    chapter = chapters[chapter_name]
+
+    chapter["locked"] = st.checkbox("🔒 Lock this chapter", value=chapter["locked"])
+
+    chapter["text"] = st.text_area(
+        "Chapter Text",
+        chapter["text"],
+        height=300,
+        disabled=chapter["locked"]
+    )
+
+    tool = st.selectbox("Tool", ["Expand", "Rewrite", "Describe", "Brainstorm"])
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+    run = st.button("Run")
+
+# ================== OUTPUT ==================
+with right:
+    st.header("🤖 AI Output")
+
+    if run and chapter["text"].strip():
+        system_prompt = (
+            "You are a professional creative writing assistant.\n"
+            "You MUST follow the story bible exactly.\n"
+            "Do NOT modify locked text.\n\n"
+            f"STORY BIBLE:\n{build_story_bible(project['story_bible'])}\n\n"
+            f"OUTLINE:\n{project['outline']}"
+        )
+
+        user_prompt = (
+            f"{instruction_for(tool)}\n\n"
+            f"TEXT:\n{chapter['text']}"
+        )
+
+        with st.spinner("Writing…"):
+            try:
+                response = client.responses.create(
+                    model="gpt-4.1-mini",
+                    temperature=creativity,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                )
+
+                st.text_area(
+                    "Result",
+                    response.output_text,
+                    height=400
+                )
+
+            except Exception:
+                st.error(
+                    "⚠️ Temporary connection issue.\n\n"
+                    "Please wait a moment and click **Run** again."
+                )
+
