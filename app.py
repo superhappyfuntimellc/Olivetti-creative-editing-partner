@@ -2,12 +2,12 @@ import streamlit as st
 from openai import OpenAI
 
 # ================== SETUP ==================
+st.set_page_config(layout="wide")
+st.title("📝 Personal Sudowrite — v3.0")
+
 client = OpenAI()
 
-st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v2.1 (Projects, Chapters, Autosave)")
-
-# ================== DATA MODEL ==================
+# ================== DATA MODEL (AUTOSAVE) ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
         "New Project": {
@@ -21,10 +21,7 @@ if "projects" not in st.session_state:
             },
             "outline": "",
             "chapters": {
-                "Chapter 1": {
-                    "text": "",
-                    "locked": False
-                }
+                "Chapter 1": ""
             }
         }
     }
@@ -34,14 +31,10 @@ projects = st.session_state.projects
 # ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
-    if sb["title"]:
-        out.append(f"Title: {sb['title']}")
-    if sb["genre"]:
-        out.append(f"Genre: {sb['genre']}")
-    if sb["tone"]:
-        out.append(f"Tone: {sb['tone']}")
-    if sb["themes"]:
-        out.append(f"Themes: {sb['themes']}")
+    if sb["title"]: out.append(f"Title: {sb['title']}")
+    if sb["genre"]: out.append(f"Genre: {sb['genre']}")
+    if sb["tone"]: out.append(f"Tone: {sb['tone']}")
+    if sb["themes"]: out.append(f"Themes: {sb['themes']}")
     if sb["world_rules"]:
         out.append("World Rules / Canon:")
         out.append(sb["world_rules"])
@@ -54,9 +47,9 @@ def build_story_bible(sb):
 def instruction_for(tool):
     return {
         "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite with improved clarity and flow.",
-        "Describe": "Rewrite with richer sensory detail and emotion.",
-        "Brainstorm": "Generate ideas, plot beats, or options."
+        "Rewrite": "Rewrite with better clarity and flow.",
+        "Describe": "Add richer sensory detail and emotion.",
+        "Brainstorm": "Generate ideas or possible next plot beats."
     }[tool]
 
 # ================== SIDEBAR ==================
@@ -64,32 +57,21 @@ with st.sidebar:
     st.header("📁 Projects")
 
     project_name = st.selectbox("Project", list(projects.keys()))
+    project = projects[project_name]
 
     if st.button("➕ New Project"):
         projects[f"Project {len(projects)+1}"] = {
             "story_bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
+                "title": "", "genre": "", "tone": "",
+                "themes": "", "world_rules": "", "characters": []
             },
             "outline": "",
-            "chapters": {
-                "Chapter 1": {
-                    "text": "",
-                    "locked": False
-                }
-            }
+            "chapters": {"Chapter 1": ""}
         }
-        st.rerun()
-
-    project = projects[project_name]
-    sb = project["story_bible"]
 
     st.divider()
     st.header("📘 Story Bible")
+    sb = project["story_bible"]
 
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
@@ -101,10 +83,9 @@ with st.sidebar:
     cname = st.text_input("Character name")
     cdesc = st.text_area("Character description")
 
-    if st.button("Add / Update Character") and cname.strip():
+    if st.button("Add / Update Character") and cname:
         sb["characters"] = [c for c in sb["characters"] if c["name"] != cname]
         sb["characters"].append({"name": cname, "description": cdesc})
-        st.rerun()
 
     for c in sb["characters"]:
         st.markdown(f"**{c['name']}** — {c['description']}")
@@ -125,28 +106,15 @@ with left:
 
     chapters = project["chapters"]
     chapter_name = st.selectbox("Chapter", list(chapters.keys()))
-    chapter = chapters[chapter_name]
-
-    if st.button("➕ New Chapter"):
-        chapters[f"Chapter {len(chapters)+1}"] = {
-            "text": "",
-            "locked": False
-        }
-        st.rerun()
-
-    new_name = st.text_input("Rename chapter", chapter_name)
-    if new_name and new_name != chapter_name:
-        chapters[new_name] = chapters.pop(chapter_name)
-        st.rerun()
-
-    chapter["locked"] = st.checkbox("🔒 Lock chapter", chapter["locked"])
-
-    chapter["text"] = st.text_area(
+    chapters[chapter_name] = st.text_area(
         "Chapter Text",
-        chapter["text"],
-        height=350,
-        disabled=chapter["locked"]
+        chapters[chapter_name],
+        height=350
     )
+
+    new_chapter = st.text_input("New chapter name")
+    if st.button("Add Chapter") and new_chapter:
+        chapters[new_chapter] = ""
 
     tool = st.selectbox(
         "Tool",
@@ -154,17 +122,19 @@ with left:
     )
 
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-
-    run = st.button("Run AI")
+    run = st.button("Run")
 
 with right:
     st.header("🤖 AI Output")
 
-    if run and chapter["text"].strip() and not chapter["locked"]:
+    if run and chapters[chapter_name].strip():
+        story_bible_text = build_story_bible(project["story_bible"])
+        instruction = instruction_for(tool)
+
         system_prompt = (
             "You are a professional creative writing assistant.\n"
             "You MUST follow the story bible exactly.\n\n"
-            f"STORY BIBLE:\n{build_story_bible(sb)}"
+            f"STORY BIBLE:\n{story_bible_text}"
         )
 
         with st.spinner("Writing…"):
@@ -175,9 +145,13 @@ with right:
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
-                        "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapter['text']}"
+                        "content": f"{instruction}\n\nTEXT:\n{chapters[chapter_name]}"
                     }
                 ],
             )
 
-        st.text_area("Result", value=response.output_text, height=400)
+        st.text_area(
+            "Result",
+            value=response.output_text,
+            height=400
+        )
