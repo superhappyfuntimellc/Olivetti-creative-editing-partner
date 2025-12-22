@@ -3,24 +3,24 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v15.0")
+st.title("🖋️ Olivetti — Writer OS v16.0")
 
 client = OpenAI()
 
 # ================== CONSTANTS ==================
 GENRE_STYLES = {
-    "Comedy": "Witty, playful, sharp timing, humorous observations.",
-    "Noir": "Hard-edged, cynical, moody, sparse.",
-    "Lyrical": "Poetic, flowing, image-rich, emotional.",
-    "Ironic": "Detached, clever, self-aware, understated.",
-    "Thriller": "Fast-paced, tense, vivid action, urgency."
+    "Comedy": "Witty, playful, sharp timing.",
+    "Noir": "Hard-edged, cynical, moody.",
+    "Lyrical": "Poetic, flowing, emotional.",
+    "Ironic": "Detached, clever, understated.",
+    "Thriller": "Fast-paced, tense, urgent."
 }
 
 VOICE_PRESETS = {
-    "Default": "Neutral, clear, professional.",
-    "Literary": "Elegant prose, interiority, metaphor.",
-    "Minimal": "Lean sentences, restraint, implication.",
-    "Noir": "Dry voice, blunt imagery, cynicism."
+    "Default": "Neutral, clear.",
+    "Literary": "Elegant prose, metaphor.",
+    "Minimal": "Lean, restrained.",
+    "Noir": "Dry, blunt."
 }
 
 # ================== DATA MODEL ==================
@@ -37,7 +37,7 @@ if "projects" not in st.session_state:
             },
             "outline": "",
             "chapters": {"Chapter 1": ""},
-            "genre_style": "Literary",
+            "genre_style": "Lyrical",
             "voice": "Default",
             "tense": "Past",
             "style_sample": ""
@@ -56,24 +56,24 @@ def build_bible(sb):
                 for c in v:
                     out.append(f"- {c['name']}: {c['description']}")
             else:
-                out.append(f"{k.replace('_',' ').title()}: {v}")
+                out.append(f"{k.title()}: {v}")
     return "\n".join(out)
 
 def instruction_for(tool):
     return {
-        "Expand": "Continue naturally. Do not summarize.",
-        "Rewrite": "Rewrite with better clarity and flow.",
+        "Grammar & Style": "Correct grammar and polish style.",
+        "Expand": "Continue naturally without summarizing.",
+        "Rewrite": "Rewrite with better flow and clarity.",
         "Describe": "Add sensory detail and emotion.",
-        "Brainstorm": "Generate ideas or next beats.",
-        "Grammar & Style": "Correct grammar and improve style without changing voice."
+        "Brainstorm": "Generate ideas or next beats."
     }[tool]
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
-    names = list(projects.keys())
-    current = st.selectbox("Project", names)
+    project_names = list(projects.keys())
+    current = st.selectbox("Project", project_names)
     project = projects[current]
 
     rename = st.text_input("Rename project", current)
@@ -89,7 +89,7 @@ with st.sidebar:
             },
             "outline": "",
             "chapters": {"Chapter 1": ""},
-            "genre_style": "Literary",
+            "genre_style": "Lyrical",
             "voice": "Default",
             "tense": "Past",
             "style_sample": ""
@@ -103,7 +103,7 @@ with st.sidebar:
     sb["genre"] = st.text_input("Genre", sb["genre"])
     sb["tone"] = st.text_input("Tone", sb["tone"])
     sb["themes"] = st.text_area("Themes", sb["themes"])
-    sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
+    sb["world_rules"] = st.text_area("World Rules", sb["world_rules"])
 
     st.subheader("Characters")
     cname = st.text_input("Character name")
@@ -112,41 +112,58 @@ with st.sidebar:
         sb["characters"].append({"name": cname, "description": cdesc})
 
     st.divider()
-    st.header("🎨 Style Controls")
-    project["genre_style"] = st.selectbox(
-        "Genre Style", list(GENRE_STYLES.keys()),
-        index=list(GENRE_STYLES.keys()).index(project["genre_style"])
-    )
+    st.header("🧭 Outline")
+    project["outline"] = st.text_area("Outline / Beats", project["outline"], height=200)
 
-    project["voice"] = st.selectbox(
-        "Voice Preset", list(VOICE_PRESETS.keys()),
-        index=list(VOICE_PRESETS.keys()).index(project["voice"])
-    )
+    if st.button("Generate Chapters from Outline"):
+        beats = [b.strip() for b in project["outline"].split("\n") if b.strip()]
+        project["chapters"] = {f"Chapter {i+1}": beat for i, beat in enumerate(beats)}
+        st.stop()
 
-    project["tense"] = st.radio(
-        "Tense", ["Past", "Present"], horizontal=True,
-        index=0 if project["tense"] == "Past" else 1
-    )
-
-    st.subheader("✍️ Match My Writing Style")
-    project["style_sample"] = st.text_area(
-        "Paste your writing sample",
-        project["style_sample"],
-        height=160
-    )
-    use_personal_style = st.checkbox("Use my writing style")
+    st.divider()
+    st.header("🔍 Find & Replace")
+    find = st.text_input("Find")
+    replace = st.text_input("Replace")
+    if st.button("Replace All") and find:
+        for k in project["chapters"]:
+            project["chapters"][k] = project["chapters"][k].replace(find, replace)
 
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
 with left:
-    st.header("✍️ Writing")
+    st.header("📖 Chapters")
 
-    chapters = project["chapters"]
-    chapter = st.selectbox("Chapter", list(chapters.keys()))
-    chapters[chapter] = st.text_area(
+    chapter_names = list(project["chapters"].keys())
+    chapter = st.selectbox("Chapter", chapter_names)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("⬆ Move Up"):
+            i = chapter_names.index(chapter)
+            if i > 0:
+                chapter_names[i-1], chapter_names[i] = chapter_names[i], chapter_names[i-1]
+                project["chapters"] = {k: project["chapters"][k] for k in chapter_names}
+                st.stop()
+    with col2:
+        if st.button("⬇ Move Down"):
+            i = chapter_names.index(chapter)
+            if i < len(chapter_names)-1:
+                chapter_names[i+1], chapter_names[i] = chapter_names[i], chapter_names[i+1]
+                project["chapters"] = {k: project["chapters"][k] for k in chapter_names}
+                st.stop()
+    with col3:
+        if st.button("❌ Delete Chapter"):
+            project["chapters"].pop(chapter)
+            st.stop()
+
+    new_chapter = st.text_input("New chapter name")
+    if st.button("Add Chapter") and new_chapter:
+        project["chapters"][new_chapter] = ""
+
+    project["chapters"][chapter] = st.text_area(
         "Chapter Text",
-        chapters[chapter],
+        project["chapters"][chapter],
         height=350
     )
 
@@ -154,38 +171,22 @@ with left:
         "Tool",
         ["Grammar & Style", "Expand", "Rewrite", "Describe", "Brainstorm"]
     )
-
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-    run = st.button("Run")
-
-    st.divider()
-    st.subheader("🔁 Synonym Suggestions")
-    synonym_text = st.text_input("Word or phrase")
-    suggest = st.button("Suggest Synonyms")
+    run = st.button("Run AI")
 
 with right:
     st.header("🤖 AI Output")
 
-    if run and chapters[chapter].strip():
+    if run and project["chapters"][chapter].strip():
         system = f"""
 You are Olivetti, a professional editor.
 
 Tense: {project['tense']}
-Genre Style: {GENRE_STYLES[project['genre_style']]}
-Voice Preset: {VOICE_PRESETS[project['voice']]}
+Genre: {GENRE_STYLES[project['genre_style']]}
+Voice: {VOICE_PRESETS[project['voice']]}
 
 Canon:
 {build_bible(project['bible'])}
-"""
-
-        if use_personal_style and project["style_sample"].strip():
-            system += f"""
-
-Match the *writing style only* of this author sample.
-Do NOT copy content.
-
-AUTHOR STYLE SAMPLE:
-{project['style_sample']}
 """
 
         response = client.responses.create(
@@ -195,17 +196,9 @@ AUTHOR STYLE SAMPLE:
                 {"role": "system", "content": system},
                 {
                     "role": "user",
-                    "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapters[chapter]}"
+                    "content": f"{instruction_for(tool)}\n\nTEXT:\n{project['chapters'][chapter]}"
                 }
             ],
         )
 
-        st.text_area("Result", response.output_text, height=320)
-
-    if suggest and synonym_text.strip():
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            temperature=0.4,
-            input=f"Give 10 strong synonym alternatives for: '{synonym_text}'"
-        )
-        st.text_area("Synonyms", response.output_text, height=200)
+        st.text_area("Result", response.output_text, height=420)
