@@ -1,14 +1,17 @@
 import streamlit as st
 import os
+from openai import OpenAI
 
-# Disable file watching (prevents inotify crash)
+# Prevent file watcher crash
 os.environ["STREAMLIT_WATCH_FILES"] = "false"
 
-# ================== APP SETUP ==================
+# ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🫒 Olivetti — Interactive Manuscript Workspace (v4.0)")
+st.title("🫒 Olivetti — Writing Workspace v5.0")
 
-# ================== STATE INIT ==================
+client = OpenAI()
+
+# ================== STATE ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
         "My First Novel": {
@@ -22,6 +25,9 @@ if "active_project" not in st.session_state:
 
 if "active_chapter" not in st.session_state:
     st.session_state.active_chapter = None
+
+if "ai_result" not in st.session_state:
+    st.session_state.ai_result = ""
 
 projects = st.session_state.projects
 project = projects[st.session_state.active_project]
@@ -37,23 +43,37 @@ def split_into_chapters(text):
         order.append(name)
     return chapters, order
 
+def ai_action(text, action, style, tense):
+    prompt = f"""
+You are a professional novelist.
+
+ACTION: {action}
+STYLE: {style}
+TENSE: {tense}
+
+TEXT:
+{text}
+"""
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+        temperature=0.7
+    )
+    return response.output_text
+
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_names = list(projects.keys())
     new_project = st.text_input("New project name")
-
     if st.button("➕ Create Project") and new_project:
         projects[new_project] = {"chapters": {}, "order": []}
         st.session_state.active_project = new_project
         st.session_state.active_chapter = None
 
-    st.divider()
-
     st.selectbox(
         "Active Project",
-        project_names,
+        list(projects.keys()),
         key="active_project"
     )
 
@@ -61,14 +81,13 @@ with st.sidebar:
     st.header("📄 Import Manuscript")
 
     uploaded = st.file_uploader("Upload .txt manuscript", type=["txt"])
-
     if uploaded:
         text = uploaded.read().decode("utf-8")
         chapters, order = split_into_chapters(text)
         project["chapters"] = chapters
         project["order"] = order
-        st.session_state.active_chapter = order[0] if order else None
-        st.success("Manuscript imported and split into chapters.")
+        st.session_state.active_chapter = order[0]
+        st.success("Manuscript imported.")
 
     st.divider()
     st.header("📚 Chapters")
@@ -77,68 +96,73 @@ with st.sidebar:
         if st.button(name, key=f"chap_{name}"):
             st.session_state.active_chapter = name
 
-# ================== MAIN LAYOUT ==================
-left, right = st.columns([1, 3])
+# ================== LAYOUT ==================
+left, center, right = st.columns([1, 3, 2])
 
-# ================== CHAPTER NAV ==================
+# ================== NAV ==================
 with left:
-    st.subheader("🧭 Chapter Navigator")
+    st.subheader("🧭 Navigator")
+    for i, name in enumerate(project["order"]):
+        st.write(f"{i+1}. {name}")
 
-    if project["order"]:
-        for idx, name in enumerate(project["order"]):
-            st.write(f"{idx+1}. {name}")
-
-        st.divider()
-
-        if st.session_state.active_chapter:
-            new_name = st.text_input(
-                "Rename chapter",
-                value=st.session_state.active_chapter
-            )
-
-            if st.button("✏️ Rename"):
-                if new_name not in project["chapters"]:
-                    content = project["chapters"].pop(st.session_state.active_chapter)
-                    project["chapters"][new_name] = content
-                    index = project["order"].index(st.session_state.active_chapter)
-                    project["order"][index] = new_name
-                    st.session_state.active_chapter = new_name
-
-        st.divider()
-
-        move_up = st.button("⬆ Move Up")
-        move_down = st.button("⬇ Move Down")
-
-        if st.session_state.active_chapter:
-            idx = project["order"].index(st.session_state.active_chapter)
-            if move_up and idx > 0:
-                project["order"][idx], project["order"][idx-1] = (
-                    project["order"][idx-1],
-                    project["order"][idx]
-                )
-            if move_down and idx < len(project["order"]) - 1:
-                project["order"][idx], project["order"][idx+1] = (
-                    project["order"][idx+1],
-                    project["order"][idx]
-                )
-
-# ================== CHAPTER EDITOR ==================
-with right:
-    st.subheader("✍️ Chapter Editor")
+# ================== EDITOR ==================
+with center:
+    st.subheader("✍️ Writing")
 
     if st.session_state.active_chapter:
-        chapter = st.session_state.active_chapter
-
-        content = st.text_area(
-            label=f"Editing: {chapter}",
-            value=project["chapters"].get(chapter, ""),
+        chap = st.session_state.active_chapter
+        text = st.text_area(
+            chap,
+            value=project["chapters"].get(chap, ""),
             height=600
         )
-
-        # Autosave
-        project["chapters"][chapter] = content
-
+        project["chapters"][chap] = text  # autosave
         st.caption("✔ Autosaved")
 
     else:
-        st.info("Import a manuscript or select a chapter to begin.")
+        st.info("Select or import a chapter.")
+
+# ================== AI PANEL ==================
+with right:
+    st.subheader("🤖 AI Tools")
+
+    action = st.selectbox(
+        "Action",
+        ["Rewrite", "Expand", "Tighten", "Change Tense"]
+    )
+
+    style = st.selectbox(
+        "Style",
+        ["Neutral", "Noir", "Lyrical", "Comedy", "Thriller", "Ironic"]
+    )
+
+    tense = st.selectbox(
+        "Tense",
+        ["Preserve", "Past", "Present"]
+    )
+
+    use_selection = st.checkbox("Use selected text (manual paste)")
+
+    source_text = ""
+    if use_selection:
+        source_text = st.text_area("Paste selection here", height=150)
+    elif st.session_state.active_chapter:
+        source_text = project["chapters"][st.session_state.active_chapter]
+
+    if st.button("✨ Run AI") and source_text.strip():
+        with st.spinner("Working..."):
+            st.session_state.ai_result = ai_action(
+                source_text, action, style, tense
+            )
+
+    if st.session_state.ai_result:
+        st.text_area(
+            "AI Output (review before applying)",
+            st.session_state.ai_result,
+            height=300
+        )
+
+        if st.button("⬅ Replace Chapter Text"):
+            if st.session_state.active_chapter:
+                project["chapters"][st.session_state.active_chapter] = st.session_state.ai_result
+                st.session_state.ai_result = ""
