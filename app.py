@@ -2,7 +2,7 @@ import streamlit as st
 import re
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="Olivetti v5.0")
+st.set_page_config(layout="wide", page_title="Olivetti v6.0")
 client = OpenAI()
 
 # =========================
@@ -17,9 +17,6 @@ if "current_project" not in st.session_state:
 if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
 
-if "style_sample" not in st.session_state:
-    st.session_state.style_sample = ""
-
 # =========================
 # HELPERS
 # =========================
@@ -29,10 +26,11 @@ def split_into_chapters(text):
     for i in range(1, len(parts), 2):
         chapters.append({
             "title": parts[i].title(),
-            "text": parts[i+1].strip()
+            "text": parts[i+1].strip(),
+            "outline": ""
         })
     if not chapters:
-        chapters.append({"title": "Chapter 1", "text": text})
+        chapters.append({"title": "Chapter 1", "text": text, "outline": ""})
     return chapters
 
 def move_chapter(project, idx, direction):
@@ -42,32 +40,23 @@ def move_chapter(project, idx, direction):
         chapters[idx], chapters[new] = chapters[new], chapters[idx]
         st.session_state.current_chapter = new
 
-def ai_rewrite(text, style, tense, sample):
-    system = "You are a professional novelist and editor."
-
-    if sample:
-        system += "\nMatch the user's writing style sample."
-
+def generate_outline(text):
     prompt = f"""
-Rewrite the following chapter.
-Style: {style}
-Tense: {tense}
+Create a concise outline of this chapter.
+- Bullet points
+- Major beats only
+- No rewriting
 
 {text}
 """
-
-    if sample:
-        prompt = f"STYLE SAMPLE:\n{sample}\n\n{prompt}"
-
     r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
-            {"role": "system", "content": system},
+            {"role": "system", "content": "You are a professional story editor."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.7
+        temperature=0.3
     )
-
     return r.output_text
 
 # =========================
@@ -115,10 +104,13 @@ if not chapters:
 idx = st.session_state.current_chapter
 chapter = chapters[idx]
 
-left, right = st.columns([2, 3])
+# =========================
+# LAYOUT
+# =========================
+left, center, right = st.columns([1.2, 2.5, 1.8])
 
 # =========================
-# LEFT — STRUCTURE
+# LEFT — CHAPTERS
 # =========================
 with left:
     st.subheader("🧭 Chapters")
@@ -136,35 +128,26 @@ with left:
         move_chapter(st.session_state.current_project, idx, 1)
 
 # =========================
-# RIGHT — WRITING + AI
+# CENTER — WRITING
+# =========================
+with center:
+    st.subheader("✍️ Chapter Text")
+    chapter["text"] = st.text_area("", chapter["text"], height=520)
+
+# =========================
+# RIGHT — OUTLINE
 # =========================
 with right:
-    st.subheader("✍️ Chapter Text")
-    chapter["text"] = st.text_area("", chapter["text"], height=420)
+    st.subheader("📑 Chapter Outline")
 
-    st.divider()
-    st.subheader("🤖 AI Tools")
+    if st.button("Generate / Update Outline"):
+        with st.spinner("Analyzing chapter…"):
+            chapter["outline"] = generate_outline(chapter["text"])
 
-    style = st.selectbox(
-        "Genre / Voice",
-        ["Literary", "Noir", "Lyrical", "Ironic", "Thriller"]
+    chapter["outline"] = st.text_area(
+        "Outline",
+        chapter["outline"],
+        height=420
     )
 
-    tense = st.radio("Tense", ["Past", "Present"], horizontal=True)
-
-    st.session_state.style_sample = st.text_area(
-        "Match My Writing Style (optional)",
-        st.session_state.style_sample,
-        height=120
-    )
-
-    if st.button("✨ Rewrite Chapter"):
-        with st.spinner("Rewriting…"):
-            chapter["text"] = ai_rewrite(
-                chapter["text"],
-                style,
-                tense,
-                st.session_state.style_sample
-            )
-
-st.caption("Olivetti v5.0 — AI writing tools integrated")
+st.caption("Olivetti v6.0 — Manuscript outlining & structure")
