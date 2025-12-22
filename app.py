@@ -1,10 +1,11 @@
 import streamlit as st
 from openai import OpenAI
 from datetime import datetime
+from docx import Document
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v6.0")
+st.title("📝 Personal Sudowrite — v7.0")
 
 client = OpenAI()
 
@@ -25,6 +26,7 @@ if "projects" not in st.session_state:
             "chapters": {
                 "Chapter 1": {
                     "text": "",
+                    "locked": False,
                     "versions": []
                 }
             }
@@ -64,16 +66,22 @@ def instruction_for(tool):
         "Describe": "Add vivid sensory detail.",
         "Brainstorm": "Generate plot ideas or options.",
         "Proofread": "Fix grammar, spelling, and punctuation only.",
-        "Diagnostics": (
-            "Analyze pacing, clarity, POV consistency, tension, and continuity. "
-            "Return bullet points."
-        )
+        "Diagnostics": "Analyze pacing, POV, tension, continuity. Bullet points."
     }[tool]
+
+def split_scenes(text):
+    return [s.strip() for s in text.split("\n\n") if s.strip()]
+
+def export_docx(title, text):
+    doc = Document()
+    doc.add_heading(title, 1)
+    for p in text.split("\n\n"):
+        doc.add_paragraph(p)
+    return doc
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
-
     project_name = st.selectbox("Project", list(projects.keys()))
     project = projects[project_name]
 
@@ -85,13 +93,12 @@ with st.sidebar:
             },
             "outline": "",
             "timeline": "",
-            "chapters": {"Chapter 1": {"text": "", "versions": []}}
+            "chapters": {"Chapter 1": {"text": "", "locked": False, "versions": []}}
         }
 
     st.divider()
     st.header("📘 Story Bible")
     sb = project["story_bible"]
-
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
     sb["tone"] = st.text_input("Tone", sb["tone"])
@@ -106,11 +113,8 @@ with st.sidebar:
         sb["characters"].append({"name": cname, "description": cdesc})
 
     st.divider()
-    st.header("🧭 Outline")
-    project["outline"] = st.text_area("Outline / Beats", project["outline"], height=150)
-
-    st.header("⏱️ Timeline")
-    project["timeline"] = st.text_area("Timeline Notes", project["timeline"], height=120)
+    project["outline"] = st.text_area("🧭 Outline", project["outline"], height=120)
+    project["timeline"] = st.text_area("⏱ Timeline", project["timeline"], height=120)
 
 # ================== MAIN ==================
 left, right = st.columns(2)
@@ -123,76 +127,80 @@ with left:
     chapter = chapters[chapter_name]
 
     if st.button("➕ New Chapter"):
-        chapters[f"Chapter {len(chapters)+1}"] = {
-            "text": "",
-            "versions": []
-        }
+        chapters[f"Chapter {len(chapters)+1}"] = {"text": "", "locked": False, "versions": []}
+
+    chapter["locked"] = st.checkbox("🔒 Lock Chapter (Canon)", chapter["locked"])
 
     chapter_text = st.text_area(
         "Chapter Text",
         chapter["text"],
-        height=350
+        height=320,
+        disabled=chapter["locked"]
     )
 
-    # AUTOSAVE
-    chapter["text"] = chapter_text
+    if not chapter["locked"]:
+        chapter["text"] = chapter_text
 
-    pov = st.selectbox(
-        "POV Lock",
-        ["None"] + [c["name"] for c in sb["characters"]]
-    )
+    pov = st.selectbox("POV Lock", ["None"] + [c["name"] for c in sb["characters"]])
+    focus = st.selectbox("Character Focus", ["None"] + [c["name"] for c in sb["characters"]])
 
-    tool = st.selectbox(
-        "Tool",
+    tense = st.selectbox("Narrative Tense", ["Keep Original", "Past", "Present", "Future"])
+    tool = st.selectbox("Tool", list(instruction_for.__annotations__) if False else
         ["Expand", "Rewrite", "Describe", "Brainstorm", "Proofread", "Diagnostics"]
     )
 
     voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-
     run = st.button("Run")
 
 with right:
     st.header("🤖 AI Output")
 
     if run and chapter_text.strip():
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        chapter["versions"].append({"time": timestamp, "text": chapter_text})
+        chapter["versions"].append({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "text": chapter_text
+        })
 
         system_prompt = (
             "You are a professional creative writing assistant.\n"
-            "Story bible and timeline are canon.\n\n"
+            "Story bible, timeline, and locked chapters are canon.\n\n"
             f"STORY BIBLE:\n{build_story_bible(sb)}\n\n"
             f"TIMELINE:\n{project['timeline']}"
         )
 
         if pov != "None":
             system_prompt += f"\n\nStrict POV: {pov}"
+        if focus != "None":
+            system_prompt += f"\n\nEmphasize emotional and narrative focus on {focus}."
+        if tense != "Keep Original":
+            system_prompt += f"\n\nAll output must be strictly {tense.lower()} tense."
 
         if VOICE_PROFILES[voice]:
             system_prompt += f"\n\nSTYLE GUIDE:\n{VOICE_PROFILES[voice]}"
 
-        with st.spinner("Processing…"):
-            response = client.responses.create(
-                model="gpt-4.1-mini",
-                temperature=creativity,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapter_text}"
-                    }
-                ],
-            )
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            temperature=creativity,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{instruction_for(tool)}\n\nTEXT:\n{chapter_text}"}
+            ],
+        )
 
         output = response.output_text
+        st.text_area("Result", output, height=280)
 
-        st.text_area("Result", output, height=300)
+        # Scene Cards
+        with st.expander("🧩 Scene Cards"):
+            for i, s in enumerate(split_scenes(output), 1):
+                st.markdown(f"**Scene {i}**")
+                st.text(s[:500])
 
-        with st.expander("🔍 Before / After"):
-            st.markdown("### BEFORE")
-            st.text(chapter_text)
-            st.markdown("### AFTER")
-            st.text(output)
-
-        with st
+        # Export
+        doc = export_docx(chapter_name, output)
+        st.download_button(
+            "⬇ Export DOCX",
+            doc._body._element.xml,
+            file_name=f"{chapter_name}.docx"
+        )
