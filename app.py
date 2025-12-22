@@ -11,7 +11,7 @@ except:
 
 # ================= CONFIG =================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v12.0 (Intelligence + Voices)")
+st.title("📝 Pro Writer Suite — v12.1 (Chapters Reorderable)")
 
 client = OpenAI()
 
@@ -30,6 +30,7 @@ if "projects" not in st.session_state:
             "outline": "",
             "chapter_summaries": {},
             "voices": {},
+            "chapter_order": ["Chapter 1"],
             "chapters": {"Chapter 1": ""}
         }
     }
@@ -40,14 +41,14 @@ if "current_project" not in st.session_state:
 projects = st.session_state.projects
 project = projects[st.session_state.current_project]
 
-# ================= VOICE PRESETS =================
+# ================= VOICES =================
 GENRE_VOICES = {
     "Neutral": "",
-    "Comedy": "Light, timing-aware, playful phrasing. Humor through contrast and surprise.",
-    "Noir": "Hard-boiled voice. Short sentences. Cynical tone. Concrete imagery.",
-    "Lyrical": "Musical language. Metaphor-rich. Emotional interiority.",
-    "Thriller": "Tight pacing. Suspense-forward. Controlled urgency.",
-    "Ironic": "Detached but sharp. Observational humor. Subtext-driven."
+    "Comedy": "Light, timing-aware, playful phrasing.",
+    "Noir": "Hard-boiled, clipped sentences, cynical tone.",
+    "Lyrical": "Musical language, metaphor-rich.",
+    "Thriller": "Fast pacing, suspense-forward.",
+    "Ironic": "Detached, observational, sharp."
 }
 
 # ================= HELPERS =================
@@ -85,26 +86,19 @@ def plagiarism_check(text):
         return "MEDIUM", hits
     return "LOW", hits
 
-def auto_outline(text):
-    return client.responses.create(
-        model="gpt-4.1-mini",
-        input=f"Create a concise story outline from this chapter:\n\n{text}"
-    ).output_text
-
-def chapter_summary(text):
-    return client.responses.create(
-        model="gpt-4.1-mini",
-        input=f"Summarize this chapter in 3–4 sentences:\n\n{text}"
-    ).output_text
-
 def instruction(tool):
     return {
-        "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite for clarity, flow, and quality.",
-        "Describe": "Add vivid sensory detail and emotion.",
-        "Brainstorm": "Generate ideas, beats, or directions.",
-        "Grammar": "Fix grammar, spelling, and punctuation only."
+        "Expand": "Continue the text naturally.",
+        "Rewrite": "Rewrite for clarity and quality.",
+        "Describe": "Add vivid sensory detail.",
+        "Brainstorm": "Generate ideas or beats.",
+        "Grammar": "Fix grammar only."
     }[tool]
+
+def move_item(lst, index, direction):
+    new = index + direction
+    if 0 <= new < len(lst):
+        lst[index], lst[new] = lst[new], lst[index]
 
 # ================= SIDEBAR =================
 with st.sidebar:
@@ -129,6 +123,7 @@ with st.sidebar:
             "outline": "",
             "chapter_summaries": {},
             "voices": {},
+            "chapter_order": ["Chapter 1"],
             "chapters": {"Chapter 1": ""}
         }
         st.session_state.current_project = new_project
@@ -143,121 +138,79 @@ with st.sidebar:
     sb["themes"] = st.text_area("Themes", sb["themes"])
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
-    st.subheader("🧍 Characters")
-    cname = st.text_input("Character name")
-    cdesc = st.text_area("Character description")
-    if st.button("Add Character") and cname:
-        sb["characters"].append({"name": cname, "description": cdesc})
-
-    st.divider()
-    st.header("🎭 Voices")
-
-    voice_name = st.text_input("New voice name")
-    sample = st.text_area("Paste writing sample")
-    if st.button("Save Voice") and voice_name and sample:
-        project["voices"][voice_name] = sample
-
-    if project["voices"]:
-        st.caption("Saved voices:")
-        for v in project["voices"]:
-            st.write(f"• {v}")
-
 # ================= MAIN ====================
 left, right = st.columns(2)
 
 with left:
-    st.header("✍️ Writing")
+    st.header("📑 Chapters")
 
-    chapters = project["chapters"]
-    chap = st.selectbox("Chapter", list(chapters.keys()))
+    order = project["chapter_order"]
+
+    for i, name in enumerate(order):
+        c1, c2, c3 = st.columns([6,1,1])
+        with c1:
+            if st.button(name, key=f"select_{name}"):
+                st.session_state.current_chapter = name
+        with c2:
+            if st.button("↑", key=f"up_{name}"):
+                move_item(order, i, -1)
+        with c3:
+            if st.button("↓", key=f"down_{name}"):
+                move_item(order, i, 1)
 
     new_chap = st.text_input("New chapter name")
-    if st.button("Add Chapter") and new_chap:
-        chapters[new_chap] = ""
-        chap = new_chap
+    if st.button("➕ Add Chapter") and new_chap:
+        project["chapters"][new_chap] = ""
+        project["chapter_order"].append(new_chap)
 
-    text = st.text_area("Chapter Text", chapters[chap], height=300)
-    chapters[chap] = text
+    chap = st.session_state.get("current_chapter", order[0])
 
-    upload = st.file_uploader("Import TXT / DOCX", type=["txt", "docx"])
+    st.divider()
+    st.header("✍️ Writing")
+
+    text = st.text_area(
+        "Chapter Text",
+        project["chapters"].get(chap, ""),
+        height=300
+    )
+    project["chapters"][chap] = text
+
+    upload = st.file_uploader("Import TXT / DOCX", type=["txt","docx"])
     if upload:
         imported = extract_text(upload)
         if imported:
-            chapters[chap] = imported
+            project["chapters"][chap] = imported
+
+with right:
+    st.header("🤖 AI Tools")
 
     tool = st.selectbox(
         "Tool",
-        ["Expand", "Rewrite", "Describe", "Brainstorm", "Grammar"]
+        ["Expand","Rewrite","Describe","Brainstorm","Grammar"]
     )
-
-    tense = st.selectbox("Tense", ["Past", "Present"])
+    tense = st.selectbox("Tense", ["Past","Present"])
     genre_style = st.selectbox("Genre Style", list(GENRE_VOICES.keys()))
-
-    custom_voice = st.selectbox(
-        "Custom Voice",
-        ["None"] + list(project["voices"].keys())
-    )
-
-    blend = st.slider("Custom Voice Blend", 0.0, 1.0, 0.5)
-
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-    run = st.button("Run AI")
 
-with right:
-    st.header("🧭 Outline & Intelligence")
-
-    if st.button("🧠 Auto-Generate Outline") and text.strip():
-        project["outline"] = auto_outline(text)
-
-    project["outline"] = st.text_area(
-        "Outline / Beats",
-        project["outline"],
-        height=200
-    )
-
-    if st.button("📌 Update Chapter Summary") and text.strip():
-        project["chapter_summaries"][chap] = chapter_summary(text)
-
-    if project["chapter_summaries"].get(chap):
-        st.caption("Chapter summary:")
-        st.write(project["chapter_summaries"][chap])
-
-    if run and text.strip():
-        bible = build_story_bible(project["story_bible"])
-
-        voice_text = ""
-        if custom_voice != "None":
-            voice_text = project["voices"][custom_voice]
-
+    if st.button("Run AI") and text.strip():
         system_prompt = f"""
 You are a professional novelist.
 Write in {tense} tense.
 Genre style: {genre_style}.
-Blend custom voice at {int(blend*100)}%.
-
-STORY BIBLE:
-{bible}
-
-GENRE STYLE GUIDE:
-{GENRE_VOICES[genre_style]}
-
-CUSTOM VOICE SAMPLE:
-{voice_text}
 """
 
         response = client.responses.create(
             model="gpt-4.1-mini",
             temperature=creativity,
             input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{instruction(tool)}\n\n{text}"}
-            ],
+                {"role":"system","content":system_prompt},
+                {"role":"user","content":f"{instruction(tool)}\n\n{text}"}
+            ]
         )
 
         output = response.output_text
-
-        st.subheader("🤖 AI Output")
+        st.subheader("AI Output")
         st.text_area("Result", value=output, height=300)
 
         risk, hits = plagiarism_check(output)
-        st.caption(f"🕵️ Plagiarism signal: {risk} ({hits} repeats)")
+        st.caption(f"Plagiarism signal: {risk} ({hits} repeats)")
