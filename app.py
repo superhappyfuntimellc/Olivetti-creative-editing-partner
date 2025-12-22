@@ -4,7 +4,7 @@ import difflib
 
 # ================== CONFIG ==================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v10.0")
+st.title("📝 Pro Writer Suite — v10.1")
 
 client = OpenAI()
 
@@ -127,9 +127,17 @@ with left:
     text = st.text_area(
         "Chapter Text",
         value=chapters[chapter_name],
-        height=350
+        height=300
     )
     chapters[chapter_name] = text
+
+    st.subheader("🔍 Find & Replace")
+    find_text = st.text_input("Find")
+    replace_text = st.text_input("Replace with")
+
+    if st.button("Replace All") and find_text:
+        chapters[chapter_name] = chapters[chapter_name].replace(find_text, replace_text)
+        st.success("Replaced successfully.")
 
     tool = st.selectbox(
         "Tool",
@@ -175,7 +183,7 @@ STORY BIBLE:
         )
 
         output = response.output_text
-        st.text_area("Result", value=output, height=350)
+        st.text_area("Result", value=output, height=300)
 
         st.divider()
         st.subheader("🕵️ Plagiarism Check")
