@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v14.0")
+st.title("🖋️ Olivetti — Writer OS v15.0")
 
 client = OpenAI()
 
@@ -36,9 +36,7 @@ if "projects" not in st.session_state:
                 "characters": []
             },
             "outline": "",
-            "chapters": {
-                "Chapter 1": ""
-            },
+            "chapters": {"Chapter 1": ""},
             "genre_style": "Literary",
             "voice": "Default",
             "tense": "Past",
@@ -67,31 +65,27 @@ def instruction_for(tool):
         "Rewrite": "Rewrite with better clarity and flow.",
         "Describe": "Add sensory detail and emotion.",
         "Brainstorm": "Generate ideas or next beats.",
-        "Grammar & Style": "Correct grammar, improve style, preserve voice."
+        "Grammar & Style": "Correct grammar and improve style without changing voice."
     }[tool]
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_names = list(projects.keys())
-    current_name = st.selectbox("Project", project_names)
-    project = projects[current_name]
+    names = list(projects.keys())
+    current = st.selectbox("Project", names)
+    project = projects[current]
 
-    new_name = st.text_input("Rename project", current_name)
-    if new_name and new_name != current_name:
-        projects[new_name] = projects.pop(current_name)
-        st.session_state["__rename__"] = True
+    rename = st.text_input("Rename project", current)
+    if rename and rename != current:
+        projects[rename] = projects.pop(current)
+        st.stop()
 
     if st.button("➕ New Project"):
         projects[f"Project {len(projects)+1}"] = {
             "bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
+                "title": "", "genre": "", "tone": "",
+                "themes": "", "world_rules": "", "characters": []
             },
             "outline": "",
             "chapters": {"Chapter 1": ""},
@@ -100,6 +94,7 @@ with st.sidebar:
             "tense": "Past",
             "style_sample": ""
         }
+        st.stop()
 
     st.divider()
     st.header("📘 Story Bible")
@@ -148,8 +143,7 @@ with left:
     st.header("✍️ Writing")
 
     chapters = project["chapters"]
-    chapter_names = list(chapters.keys())
-    chapter = st.selectbox("Chapter", chapter_names)
+    chapter = st.selectbox("Chapter", list(chapters.keys()))
     chapters[chapter] = st.text_area(
         "Chapter Text",
         chapters[chapter],
@@ -163,6 +157,11 @@ with left:
 
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
     run = st.button("Run")
+
+    st.divider()
+    st.subheader("🔁 Synonym Suggestions")
+    synonym_text = st.text_input("Word or phrase")
+    suggest = st.button("Suggest Synonyms")
 
 with right:
     st.header("🤖 AI Output")
@@ -201,4 +200,12 @@ AUTHOR STYLE SAMPLE:
             ],
         )
 
-        st.text_area("Result", response.output_text, height=400)
+        st.text_area("Result", response.output_text, height=320)
+
+    if suggest and synonym_text.strip():
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            temperature=0.4,
+            input=f"Give 10 strong synonym alternatives for: '{synonym_text}'"
+        )
+        st.text_area("Synonyms", response.output_text, height=200)
