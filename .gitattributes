@@ -1,2 +1,209 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+import streamlit as st
+from openai import OpenAI
+from datetime import datetime
+
+# ================== CONFIG ==================
+st.set_page_config(layout="wide")
+st.title("📝 Personal Sudowrite v11.0")
+
+client = OpenAI()
+
+# ================== SESSION STATE ==================
+if "projects" not in st.session_state:
+    st.session_state.projects = {
+        "New Project": {
+            "story_bible": {
+                "title": "",
+                "genre": "",
+                "tone": "",
+                "themes": "",
+                "world_rules": "",
+                "characters": []
+            },
+            "outline": "",
+            "beats": [],
+            "chapters": {
+                "Chapter 1": {
+                    "text": "",
+                    "locked": False,
+                    "versions": []
+                }
+            }
+        }
+    }
+
+projects = st.session_state.projects
+
+# ================== HELPERS ==================
+def build_story_bible(sb):
+    out = []
+    for k, v in sb.items():
+        if not v:
+            continue
+        if isinstance(v, list):
+            out.append("Characters:")
+            for c in v:
+                out.append(f"- {c['name']}: {c['description']}")
+        else:
+            out.append(f"{k.replace('_',' ').title()}: {v}")
+    return "\n".join(out)
+
+def build_instruction(tool, tense):
+    tool_map = {
+        "Expand": "Continue the text naturally.",
+        "Rewrite": "Rewrite with better clarity and flow.",
+        "Describe": "Add richer sensory detail and emotion.",
+        "Brainstorm": "Generate creative ideas or next plot beats.",
+        "Polish": "Fix grammar, spelling, and improve prose quality."
+    }
+    return f"""{tool_map[tool]}
+Write strictly in {tense.lower()} tense.
+Do not explain your changes.
+"""
+
+VOICE_PROFILES = {
+    "Default": "",
+    "Literary": "Long sentences, interiority, metaphor, controlled pacing.",
+    "Minimal": "Short sentences. Subtext. Clean and restrained.",
+    "Noir": "Hard edges, concrete imagery, cynical tone.",
+    "Epic": "Elevated language, mythic tone, grand scope."
+}
+
+# ================== SIDEBAR ==================
+with st.sidebar:
+    st.header("📁 Projects")
+    project_name = st.selectbox("Project", list(projects.keys()))
+    project = projects[project_name]
+
+    if st.button("➕ New Project"):
+        projects[f"Project {len(projects)+1}"] = {
+            "story_bible": {
+                "title": "", "genre": "", "tone": "",
+                "themes": "", "world_rules": "", "characters": []
+            },
+            "outline": "",
+            "beats": [],
+            "chapters": {
+                "Chapter 1": {"text": "", "locked": False, "versions": []}
+            }
+        }
+
+    st.divider()
+    st.header("📘 Story Bible")
+    sb = project["story_bible"]
+    sb["title"] = st.text_input("Title", sb["title"])
+    sb["genre"] = st.text_input("Genre", sb["genre"])
+    sb["tone"] = st.text_input("Tone", sb["tone"])
+    sb["themes"] = st.text_area("Themes", sb["themes"])
+    sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
+
+    st.subheader("Characters")
+    cname = st.text_input("Character Name")
+    cdesc = st.text_area("Character Description")
+    if st.button("Add / Update Character") and cname:
+        sb["characters"] = [c for c in sb["characters"] if c["name"] != cname]
+        sb["characters"].append({"name": cname, "description": cdesc})
+
+    st.divider()
+    st.header("🧠 Story Beats")
+    beat = st.text_input("New Beat")
+    if st.button("Add Beat") and beat:
+        project["beats"].append(beat)
+
+    for i, b in enumerate(project["beats"]):
+        st.markdown(f"{i+1}. {b}")
+
+    st.divider()
+    st.header("🧭 Outline")
+    project["outline"] = st.text_area("Outline", project["outline"], height=200)
+
+# ================== MAIN ==================
+left, right = st.columns(2)
+
+with left:
+    st.header("✍️ Writing")
+
+    chapters = project["chapters"]
+    chapter_name = st.selectbox("Chapter", list(chapters.keys()))
+    chapter = chapters[chapter_name]
+
+    if chapter["locked"]:
+        st.warning("🔒 Chapter is locked")
+    else:
+        chapter["text"] = st.text_area(
+            "Chapter Text",
+            chapter["text"],
+            height=350
+        )
+
+    if st.button("💾 Save Version"):
+        chapter["versions"].append({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "text": chapter["text"]
+        })
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔒 Lock / Unlock"):
+            chapter["locked"] = not chapter["locked"]
+    with col2:
+        st.download_button(
+            "📤 Export TXT",
+            chapter["text"],
+            file_name=f"{chapter_name}.txt"
+        )
+
+    new_chapter = st.text_input("New Chapter Name")
+    if st.button("➕ Add Chapter") and new_chapter:
+        chapters[new_chapter] = {"text": "", "locked": False, "versions": []}
+
+    tool = st.selectbox(
+        "Tool",
+        ["Expand", "Rewrite", "Describe", "Brainstorm", "Polish"]
+    )
+
+    tense = st.radio("Tense", ["Past", "Present"], horizontal=True)
+    voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+
+    run = st.button("🚀 Run AI")
+
+with right:
+    st.header("🤖 AI Output")
+
+    if run and chapter["text"].strip():
+        instruction = build_instruction(tool, tense)
+        story_bible_text = build_story_bible(sb)
+        voice_sample = VOICE_PROFILES[voice]
+
+        system_prompt = (
+            "You are a professional fiction writing assistant.\n"
+            "Follow the story bible exactly.\n\n"
+            f"STORY BIBLE:\n{story_bible_text}"
+        )
+
+        if voice_sample:
+            system_prompt += f"\n\nSTYLE GUIDE:\n{voice_sample}"
+
+        with st.spinner("Writing…"):
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                temperature=creativity,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f"{instruction}\n\nTEXT:\n{chapter['text']}"
+                    }
+                ],
+            )
+
+        st.text_area(
+            "Result",
+            response.output_text,
+            height=400
+        )
+
+    st.subheader("🕓 Versions")
+    for v in reversed(chapter["versions"][-5:]):
+        st.caption(v["time"])
