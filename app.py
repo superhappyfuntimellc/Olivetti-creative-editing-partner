@@ -3,11 +3,11 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v19.0")
+st.title("🖋️ Olivetti — Writer OS v20.0")
 
 client = OpenAI()
 
-# ================== STYLES ==================
+# ================== STYLE DATA ==================
 GENRE_STYLES = {
     "Comedy": "Witty, playful, timing-focused.",
     "Noir": "Hard-edged, cynical, moody.",
@@ -36,7 +36,8 @@ if "projects" not in st.session_state:
                 "characters": []
             },
             "outline": "",
-            "chapters": {"Chapter 1": ""},
+            "chapters": ["Chapter 1"],
+            "chapter_text": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
             "tense": "Past",
@@ -66,16 +67,8 @@ def instruction_for(tool):
         "Expand": "Continue naturally without summarizing.",
         "Describe": "Add sensory detail and emotion.",
         "Brainstorm": "Generate ideas or next beats.",
-        "Editorial Report": "Do NOT rewrite. Provide editorial feedback only.",
-        "Style Analysis": "Analyze the author's writing style only."
+        "Editorial Report": "Provide editorial feedback only."
     }[tool]
-
-def export_project_text(project):
-    lines = []
-    lines.append(project["bible"].get("title", "").upper())
-    for name, text in project["chapters"].items():
-        lines.append(f"\n\n### {name}\n\n{text}")
-    return "\n".join(lines)
 
 # ================== SIDEBAR ==================
 with st.sidebar:
@@ -97,7 +90,8 @@ with st.sidebar:
                 "themes": "", "world_rules": "", "characters": []
             },
             "outline": "",
-            "chapters": {"Chapter 1": ""},
+            "chapters": ["Chapter 1"],
+            "chapter_text": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
             "tense": "Past",
@@ -108,94 +102,123 @@ with st.sidebar:
 
     st.divider()
     st.header("🎭 Style Controls")
-    project["genre_style"] = st.selectbox(
-        "Genre Style", list(GENRE_STYLES.keys()),
-        index=list(GENRE_STYLES.keys()).index(project["genre_style"])
-    )
-    project["voice"] = st.selectbox(
-        "Voice Preset", list(VOICE_PRESETS.keys()),
-        index=list(VOICE_PRESETS.keys()).index(project["voice"])
-    )
-    project["tense"] = st.selectbox(
-        "Tense", ["Past", "Present"],
-        index=["Past","Present"].index(project["tense"])
-    )
+    project["genre_style"] = st.selectbox("Genre", GENRE_STYLES.keys(),
+        index=list(GENRE_STYLES.keys()).index(project["genre_style"]))
+    project["voice"] = st.selectbox("Voice", VOICE_PRESETS.keys(),
+        index=list(VOICE_PRESETS.keys()).index(project["voice"]))
+    project["tense"] = st.selectbox("Tense", ["Past","Present"],
+        index=["Past","Present"].index(project["tense"]))
 
     st.divider()
     st.header("🧬 Match My Writing Style")
     project["style_sample"] = st.text_area(
-        "Paste a sample of YOUR writing",
+        "Paste your writing",
         project["style_sample"],
-        height=200
+        height=150
     )
 
-    if st.button("Analyze My Style") and project["style_sample"].strip():
+    if st.button("Analyze Style") and project["style_sample"].strip():
         response = client.responses.create(
             model="gpt-4.1-mini",
             temperature=0.3,
-            input=f"""
-Analyze the author's writing style.
-Describe sentence length, rhythm, tone, figurative density,
-dialogue usage, and narrative distance.
-Return a concise style profile.
-
-TEXT:
-{project['style_sample']}
-"""
+            input=f"Analyze this author's writing style:\n{project['style_sample']}"
         )
         project["style_profile"] = response.output_text
-        st.success("Style profile saved to project.")
-
-    if project["style_profile"]:
-        st.caption("Saved Style Profile:")
-        st.text(project["style_profile"])
+        st.success("Style profile saved.")
 
     st.divider()
-    st.header("📤 Export")
-    st.download_button(
-        "Download Project (.txt)",
-        export_project_text(project),
-        file_name=f"{current}.txt"
-    )
+    st.header("📥 Import Chapter (.txt)")
+    upload = st.file_uploader("Upload text", type=["txt"])
+    if upload:
+        text = upload.read().decode("utf-8")
+        new_name = f"Imported {len(project['chapters'])+1}"
+        project["chapters"].append(new_name)
+        project["chapter_text"][new_name] = text
+        st.success(f"{new_name} added.")
 
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
 with left:
     st.header("📖 Chapters")
-    chapter_names = list(project["chapters"].keys())
-    chapter = st.selectbox("Chapter", chapter_names)
 
-    project["chapters"][chapter] = st.text_area(
+    chapter = st.selectbox("Chapter", project["chapters"])
+    project["chapter_text"][chapter] = st.text_area(
         "Chapter Text",
-        project["chapters"][chapter],
-        height=380
+        project["chapter_text"][chapter],
+        height=320
     )
 
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬆ Move Up"):
+            i = project["chapters"].index(chapter)
+            if i > 0:
+                project["chapters"][i], project["chapters"][i-1] = \
+                    project["chapters"][i-1], project["chapters"][i]
+                st.stop()
+    with col2:
+        if st.button("⬇ Move Down"):
+            i = project["chapters"].index(chapter)
+            if i < len(project["chapters"])-1:
+                project["chapters"][i], project["chapters"][i+1] = \
+                    project["chapters"][i+1], project["chapters"][i]
+                st.stop()
+
+    st.divider()
+    st.subheader("🔁 Find & Replace")
+    find = st.text_input("Find")
+    replace = st.text_input("Replace")
+    scope = st.radio("Scope", ["This Chapter", "All Chapters"])
+
+    if st.button("Apply Replace") and find:
+        if scope == "This Chapter":
+            project["chapter_text"][chapter] = project["chapter_text"][chapter].replace(find, replace)
+        else:
+            for c in project["chapters"]:
+                project["chapter_text"][c] = project["chapter_text"][c].replace(find, replace)
+        st.success("Replacement complete.")
+
+    st.divider()
+    st.subheader("🔍 Synonym Suggestions")
+    word = st.text_input("Word to improve")
+
+    if st.button("Suggest Synonyms") and word:
+        context = project["chapter_text"][chapter]
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            temperature=0.4,
+            input=f"""
+Suggest better alternatives for the word "{word}".
+Respect author style, genre, and tone.
+
+Context:
+{context}
+"""
+        )
+        st.text_area("Suggestions", response.output_text, height=150)
+
     tool = st.selectbox(
-        "Tool",
-        ["Rewrite", "Expand", "Describe", "Brainstorm", "Editorial Report"]
+        "AI Tool",
+        ["Rewrite","Expand","Describe","Brainstorm","Editorial Report"]
     )
     creativity = st.slider("Creativity", 0.0, 1.0, 0.6)
     run = st.button("Run AI")
 
 with right:
-    st.header("🧠 AI & Editorial Output")
+    st.header("🧠 AI Output")
 
-    if run and project["chapters"][chapter].strip():
+    if run and project["chapter_text"][chapter].strip():
         system_prompt = f"""
-You are Olivetti, a professional literary editor.
+You are Olivetti, a professional editor.
 
-Primary rule:
-Match the author's unique writing style as closely as possible.
-
-Author Style Profile:
+Author Style:
 {project['style_profile']}
 
-Genre Style:
+Genre:
 {GENRE_STYLES[project['genre_style']]}
 
-Voice Preset:
+Voice:
 {VOICE_PRESETS[project['voice']]}
 
 Tense:
@@ -208,17 +231,8 @@ Canon:
         user_prompt = f"""
 TASK: {instruction_for(tool)}
 
-If TASK is Editorial Report:
-- Do NOT rewrite text
-- Provide bullet-point feedback under:
-  • Style Fidelity
-  • Repetition & Echoes
-  • POV & Tense Consistency
-  • Plagiarism / Familiarity Risk
-  • Craft Notes
-
 TEXT:
-{project['chapters'][chapter]}
+{project['chapter_text'][chapter]}
 """
 
         response = client.responses.create(
@@ -230,4 +244,4 @@ TEXT:
             ],
         )
 
-        st.text_area("Result", response.output_text, height=440)
+        st.text_area("Result", response.output_text, height=420)
