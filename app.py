@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v4.0 (Voices & AI Tools)")
+st.title("📝 Pro Writer Suite — v5.0 (Voices + Genres)")
 
 client = OpenAI()
 
@@ -27,7 +27,25 @@ if "projects" not in st.session_state:
 
 projects = st.session_state.projects
 
-# ================== HELPERS ==================
+# ================== STYLE SYSTEM ==================
+VOICE_PROFILES = {
+    "Default": "",
+    "Comedy": "Witty, playful, sharp humor, strong timing.",
+    "Noir": "Hard-boiled, cynical, spare prose, concrete imagery.",
+    "Lyrical": "Poetic rhythm, metaphor, flowing sentences.",
+    "Thriller": "Urgent pacing, tension, vivid action.",
+    "Ironic": "Detached, clever, understated humor."
+}
+
+GENRE_STYLES = {
+    "None": "",
+    "Comedy": "Focus on humor, exaggeration, and comedic beats.",
+    "Noir": "Emphasize moral ambiguity, shadows, and cynicism.",
+    "Lyrical": "Lean into beauty of language and emotional resonance.",
+    "Thriller": "Heighten suspense, danger, and momentum.",
+    "Ironic": "Use contrast between tone and events."
+}
+
 def build_story_bible(sb):
     out = []
     for k, v in sb.items():
@@ -47,15 +65,6 @@ def instruction_for(tool):
         "Describe": "Add richer sensory detail and emotion.",
         "Brainstorm": "Generate creative ideas or next plot beats."
     }[tool]
-
-VOICE_PROFILES = {
-    "Default": "",
-    "Comedy": "Witty, playful, humorous tone with timing and surprise.",
-    "Noir": "Hard-boiled, cynical, sharp imagery, restrained emotion.",
-    "Lyrical": "Musical language, metaphor, flowing sentences.",
-    "Thriller": "Tight pacing, tension, urgency, vivid action.",
-    "Ironic": "Detached, clever, subtle humor, knowing voice."
-}
 
 # ================== SIDEBAR ==================
 with st.sidebar:
@@ -115,6 +124,7 @@ with left:
 
     tool = st.selectbox("Tool", ["Expand", "Rewrite", "Describe", "Brainstorm"])
     voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
+    genre_style = st.selectbox("Genre Style", list(GENRE_STYLES.keys()))
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
 
     run = st.button("Run AI")
@@ -130,7 +140,10 @@ with right:
         )
 
         if VOICE_PROFILES[voice]:
-            system_prompt += f"\n\nSTYLE:\n{VOICE_PROFILES[voice]}"
+            system_prompt += f"\n\nVOICE STYLE:\n{VOICE_PROFILES[voice]}"
+
+        if GENRE_STYLES[genre_style]:
+            system_prompt += f"\n\nGENRE STYLE:\n{GENRE_STYLES[genre_style]}"
 
         response = client.responses.create(
             model="gpt-4.1-mini",
