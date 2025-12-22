@@ -3,22 +3,22 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v18.0")
+st.title("🖋️ Olivetti — Writer OS v19.0")
 
 client = OpenAI()
 
 # ================== STYLES ==================
 GENRE_STYLES = {
-    "Comedy": "Witty, playful, sharp timing.",
+    "Comedy": "Witty, playful, timing-focused.",
     "Noir": "Hard-edged, cynical, moody.",
-    "Lyrical": "Poetic, flowing, emotional.",
+    "Lyrical": "Poetic, flowing, image-rich.",
     "Ironic": "Detached, clever, understated.",
     "Thriller": "Fast-paced, tense, urgent."
 }
 
 VOICE_PRESETS = {
     "Default": "Neutral, clear.",
-    "Literary": "Elegant prose, metaphor-rich.",
+    "Literary": "Elegant, metaphor-rich.",
     "Minimal": "Lean, restrained.",
     "Noir": "Dry, blunt."
 }
@@ -39,7 +39,9 @@ if "projects" not in st.session_state:
             "chapters": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
-            "tense": "Past"
+            "tense": "Past",
+            "style_sample": "",
+            "style_profile": ""
         }
     }
 
@@ -64,7 +66,8 @@ def instruction_for(tool):
         "Expand": "Continue naturally without summarizing.",
         "Describe": "Add sensory detail and emotion.",
         "Brainstorm": "Generate ideas or next beats.",
-        "Editorial Report": "Do NOT rewrite. Provide editorial feedback only."
+        "Editorial Report": "Do NOT rewrite. Provide editorial feedback only.",
+        "Style Analysis": "Analyze the author's writing style only."
     }[tool]
 
 def export_project_text(project):
@@ -78,8 +81,8 @@ def export_project_text(project):
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_names = list(projects.keys())
-    current = st.selectbox("Project", project_names)
+    names = list(projects.keys())
+    current = st.selectbox("Project", names)
     project = projects[current]
 
     rename = st.text_input("Rename project", current)
@@ -97,18 +100,55 @@ with st.sidebar:
             "chapters": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
-            "tense": "Past"
+            "tense": "Past",
+            "style_sample": "",
+            "style_profile": ""
         }
         st.stop()
 
     st.divider()
-    st.header("📘 Story Bible")
-    sb = project["bible"]
-    sb["title"] = st.text_input("Title", sb["title"])
-    sb["genre"] = st.text_input("Genre", sb["genre"])
-    sb["tone"] = st.text_input("Tone", sb["tone"])
-    sb["themes"] = st.text_area("Themes", sb["themes"])
-    sb["world_rules"] = st.text_area("World Rules", sb["world_rules"])
+    st.header("🎭 Style Controls")
+    project["genre_style"] = st.selectbox(
+        "Genre Style", list(GENRE_STYLES.keys()),
+        index=list(GENRE_STYLES.keys()).index(project["genre_style"])
+    )
+    project["voice"] = st.selectbox(
+        "Voice Preset", list(VOICE_PRESETS.keys()),
+        index=list(VOICE_PRESETS.keys()).index(project["voice"])
+    )
+    project["tense"] = st.selectbox(
+        "Tense", ["Past", "Present"],
+        index=["Past","Present"].index(project["tense"])
+    )
+
+    st.divider()
+    st.header("🧬 Match My Writing Style")
+    project["style_sample"] = st.text_area(
+        "Paste a sample of YOUR writing",
+        project["style_sample"],
+        height=200
+    )
+
+    if st.button("Analyze My Style") and project["style_sample"].strip():
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            temperature=0.3,
+            input=f"""
+Analyze the author's writing style.
+Describe sentence length, rhythm, tone, figurative density,
+dialogue usage, and narrative distance.
+Return a concise style profile.
+
+TEXT:
+{project['style_sample']}
+"""
+        )
+        project["style_profile"] = response.output_text
+        st.success("Style profile saved to project.")
+
+    if project["style_profile"]:
+        st.caption("Saved Style Profile:")
+        st.text(project["style_profile"])
 
     st.divider()
     st.header("📤 Export")
@@ -123,7 +163,6 @@ left, right = st.columns(2)
 
 with left:
     st.header("📖 Chapters")
-
     chapter_names = list(project["chapters"].keys())
     chapter = st.selectbox("Chapter", chapter_names)
 
@@ -141,21 +180,26 @@ with left:
     run = st.button("Run AI")
 
 with right:
-    st.header("🧠 Editorial & AI Output")
+    st.header("🧠 AI & Editorial Output")
 
     if run and project["chapters"][chapter].strip():
         system_prompt = f"""
 You are Olivetti, a professional literary editor.
 
-Your job:
-1. Detect plagiarism risk (generic phrasing, clichés, overfamiliar constructions)
-2. Detect repetition and phrasing echoes
-3. Detect POV and tense drift
-4. Respect the selected tool behavior
+Primary rule:
+Match the author's unique writing style as closely as possible.
 
-Tense: {project['tense']}
-Genre: {GENRE_STYLES[project['genre_style']]}
-Voice: {VOICE_PRESETS[project['voice']]}
+Author Style Profile:
+{project['style_profile']}
+
+Genre Style:
+{GENRE_STYLES[project['genre_style']]}
+
+Voice Preset:
+{VOICE_PRESETS[project['voice']]}
+
+Tense:
+{project['tense']}
 
 Canon:
 {build_bible(project['bible'])}
@@ -166,11 +210,12 @@ TASK: {instruction_for(tool)}
 
 If TASK is Editorial Report:
 - Do NOT rewrite text
-- Provide bullet-point feedback under these headers:
-  • Similarity & Plagiarism Risk
+- Provide bullet-point feedback under:
+  • Style Fidelity
   • Repetition & Echoes
   • POV & Tense Consistency
-  • Overall Craft Notes
+  • Plagiarism / Familiarity Risk
+  • Craft Notes
 
 TEXT:
 {project['chapters'][chapter]}
