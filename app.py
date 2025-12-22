@@ -1,77 +1,55 @@
 import streamlit as st
 from openai import OpenAI
-from datetime import datetime
 
 # ================== SETUP ==================
 client = OpenAI()
-st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — Story Bible Edition")
 
-# ================== DATA MODEL ==================
-if "projects" not in st.session_state:
-    st.session_state.projects = {
-        "New Novel": {
-            "story_bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
-            },
-            "outline": "",
-            "chapters": {
-                "Chapter 1": {
-                    "text": "",
-                    "locked": False
-                }
-            }
-        }
+st.set_page_config(layout="wide")
+st.title("📝 Personal Sudowrite — v1.0")
+
+# ================== STORY BIBLE ==================
+if "story_bible" not in st.session_state:
+    st.session_state.story_bible = {
+        "title": "",
+        "genre": "",
+        "tone": "",
+        "themes": "",
+        "world_rules": "",
+        "characters": []
     }
 
-projects = st.session_state.projects
-
-# ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
-    for k, v in sb.items():
-        if v:
-            if isinstance(v, list):
-                out.append("Characters:")
-                for c in v:
-                    out.append(f"- {c['name']}: {c['description']}")
-            else:
-                out.append(f"{k.replace('_',' ').title()}: {v}")
+    if sb["title"]:
+        out.append(f"Title: {sb['title']}")
+    if sb["genre"]:
+        out.append(f"Genre: {sb['genre']}")
+    if sb["tone"]:
+        out.append(f"Tone: {sb['tone']}")
+    if sb["themes"]:
+        out.append(f"Themes: {sb['themes']}")
+    if sb["world_rules"]:
+        out.append("World Rules:")
+        out.append(sb["world_rules"])
+    if sb["characters"]:
+        out.append("Characters:")
+        for c in sb["characters"]:
+            out.append(f"- {c['name']}: {c['description']}")
     return "\n".join(out)
 
-def instruction_for(tool):
-    return {
-        "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite with better clarity and flow.",
-        "Describe": "Add richer sensory detail and emotion.",
-        "Brainstorm": "Generate ideas, plot beats, or options."
-    }[tool]
+# ================== VOICES ==================
+VOICE_PROFILES = {
+    "Default": "",
+    "Literary": "Long sentences. Interior monologue. Metaphor. Controlled pacing.",
+    "Minimal": "Short sentences. Subtext. Restraint.",
+    "Noir": "Hard edges. Dry voice. Concrete imagery."
+}
 
 # ================== SIDEBAR ==================
 with st.sidebar:
-    st.header("📚 Projects")
-    project_name = st.selectbox("Project", list(projects.keys()))
-    project = projects[project_name]
-
-    if st.button("➕ New Project"):
-        projects[f"Novel {len(projects)+1}"] = {
-            "story_bible": {
-                "title": "", "genre": "", "tone": "",
-                "themes": "", "world_rules": "", "characters": []
-            },
-            "outline": "",
-            "chapters": {"Chapter 1": {"text": "", "locked": False}}
-        }
-        st.experimental_rerun()
-
-    st.divider()
     st.header("📘 Story Bible")
-    sb = project["story_bible"]
+    sb = st.session_state.story_bible
+
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
     sb["tone"] = st.text_input("Tone", sb["tone"])
@@ -79,77 +57,68 @@ with st.sidebar:
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
     st.subheader("Characters")
-    cname = st.text_input("Name")
-    cdesc = st.text_area("Description")
-    if st.button("Add Character") and cname:
-        sb["characters"].append({"name": cname, "description": cdesc})
+    name = st.text_input("Name")
+    desc = st.text_area("Description")
 
-    st.divider()
-    st.header("🧭 Outline / Beats")
-    project["outline"] = st.text_area("Outline", project["outline"], height=200)
+    if st.button("Add Character") and name:
+        sb["characters"].append({"name": name, "description": desc})
+
+    for c in sb["characters"]:
+        st.markdown(f"**{c['name']}** — {c['description']}")
 
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
 with left:
-    st.header("✍️ Writing")
+    st.subheader("Your Writing")
+    user_text = st.text_area("Write here", height=350)
 
-    chapters = project["chapters"]
-    chapter_name =
-    chapter_name = st.selectbox("Chapter", list(chapters.keys()))
-    chapter = chapters[chapter_name]
-
-    chapter["locked"] = st.checkbox("🔒 Lock this chapter", value=chapter["locked"])
-
-    chapter["text"] = st.text_area(
-        "Chapter Text",
-        chapter["text"],
-        height=300,
-        disabled=chapter["locked"]
+    tool = st.selectbox(
+        "Tool",
+        ["Expand", "Rewrite", "Describe", "Brainstorm"]
     )
 
-    tool = st.selectbox("Tool", ["Expand", "Rewrite", "Describe", "Brainstorm"])
+    voice = st.selectbox("Voice", list(VOICE_PROFILES.keys()))
     creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+
     run = st.button("Run")
+
+def instruction(tool):
+    return {
+        "Expand": "Continue the text naturally. Do not summarize.",
+        "Rewrite": "Rewrite with improved clarity and flow.",
+        "Describe": "Add richer sensory detail and emotion.",
+        "Brainstorm": "Generate ideas or possible next plot beats."
+    }[tool]
 
 # ================== OUTPUT ==================
 with right:
-    st.header("🤖 AI Output")
+    st.subheader("AI Output")
 
-    if run and chapter["text"].strip():
+    if run and user_text.strip():
+        story_bible = build_story_bible(sb)
+        style = VOICE_PROFILES[voice]
+
         system_prompt = (
             "You are a professional creative writing assistant.\n"
-            "You MUST follow the story bible exactly.\n"
-            "Do NOT modify locked text.\n\n"
-            f"STORY BIBLE:\n{build_story_bible(project['story_bible'])}\n\n"
-            f"OUTLINE:\n{project['outline']}"
+            "You MUST follow the story bible exactly.\n\n"
+            f"STORY BIBLE:\n{story_bible}"
         )
 
-        user_prompt = (
-            f"{instruction_for(tool)}\n\n"
-            f"TEXT:\n{chapter['text']}"
-        )
+        if style:
+            system_prompt += f"\n\nSTYLE GUIDE:\n{style}"
 
         with st.spinner("Writing…"):
-            try:
-                response = client.responses.create(
-                    model="gpt-4.1-mini",
-                    temperature=creativity,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                )
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                temperature=creativity,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f"{instruction(tool)}\n\nTEXT:\n{user_text}"
+                    }
+                ],
+            )
 
-                st.text_area(
-                    "Result",
-                    response.output_text,
-                    height=400
-                )
-
-            except Exception:
-                st.error(
-                    "⚠️ Temporary connection issue.\n\n"
-                    "Please wait a moment and click **Run** again."
-                )
-
+        st.text_area("Result", response.output_text, height=400)
