@@ -1,11 +1,11 @@
 import streamlit as st
 from openai import OpenAI
-import json
 
 # ================== SETUP ==================
 client = OpenAI()
+
 st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v2.1 (Canon, Save & Lock)")
+st.title("📝 Personal Sudowrite — v2.1 (Projects, Chapters, Autosave)")
 
 # ================== DATA MODEL ==================
 if "projects" not in st.session_state:
@@ -34,59 +34,65 @@ projects = st.session_state.projects
 # ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
-    for k, v in sb.items():
-        if not v:
-            continue
-        if isinstance(v, list):
-            out.append("Characters:")
-            for c in v:
-                out.append(f"- {c['name']}: {c['description']}")
-        else:
-            out.append(f"{k.replace('_',' ').title()}: {v}")
+    if sb["title"]:
+        out.append(f"Title: {sb['title']}")
+    if sb["genre"]:
+        out.append(f"Genre: {sb['genre']}")
+    if sb["tone"]:
+        out.append(f"Tone: {sb['tone']}")
+    if sb["themes"]:
+        out.append(f"Themes: {sb['themes']}")
+    if sb["world_rules"]:
+        out.append("World Rules / Canon:")
+        out.append(sb["world_rules"])
+    if sb["characters"]:
+        out.append("Characters:")
+        for c in sb["characters"]:
+            out.append(f"- {c['name']}: {c['description']}")
     return "\n".join(out)
-
-def build_locked_chapters(chapters):
-    out = []
-    for name, ch in chapters.items():
-        if ch["locked"] and ch["text"].strip():
-            out.append(f"{name} (LOCKED):\n{ch['text']}")
-    return "\n\n".join(out)
 
 def instruction_for(tool):
     return {
-        "Expand": "Continue the text naturally. Do NOT modify locked canon.",
-        "Rewrite": "Rewrite the text for clarity. Do NOT contradict locked canon.",
-        "Describe": "Add sensory detail without contradicting canon.",
-        "Brainstorm": "Generate ideas that respect locked canon."
+        "Expand": "Continue the text naturally. Do not summarize.",
+        "Rewrite": "Rewrite with improved clarity and flow.",
+        "Describe": "Rewrite with richer sensory detail and emotion.",
+        "Brainstorm": "Generate ideas, plot beats, or options."
     }[tool]
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
 
-    project_name = st.radio(
-        "Projects",
-        list(projects.keys()),
-        label_visibility="collapsed"
+    project_name = st.selectbox(
+        "Project",
+        list(projects.keys())
     )
-    project = projects[project_name]
 
     if st.button("➕ New Project"):
         projects[f"Project {len(projects)+1}"] = {
             "story_bible": {
-                "title": "", "genre": "", "tone": "",
-                "themes": "", "world_rules": "", "characters": []
+                "title": "",
+                "genre": "",
+                "tone": "",
+                "themes": "",
+                "world_rules": "",
+                "characters": []
             },
             "outline": "",
             "chapters": {
-                "Chapter 1": {"text": "", "locked": False}
+                "Chapter 1": {
+                    "text": "",
+                    "locked": False
+                }
             }
         }
-        st.experimental_rerun()
+        st.rerun()
+
+    project = projects[project_name]
+    sb = project["story_bible"]
 
     st.divider()
     st.header("📘 Story Bible")
-    sb = project["story_bible"]
 
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
@@ -98,9 +104,10 @@ with st.sidebar:
     cname = st.text_input("Character name")
     cdesc = st.text_area("Character description")
 
-    if st.button("Add / Update Character") and cname:
+    if st.button("Add / Update Character") and cname.strip():
         sb["characters"] = [c for c in sb["characters"] if c["name"] != cname]
         sb["characters"].append({"name": cname, "description": cdesc})
+        st.rerun()
 
     for c in sb["characters"]:
         st.markdown(f"**{c['name']}** — {c['description']}")
@@ -113,21 +120,6 @@ with st.sidebar:
         height=200
     )
 
-    st.divider()
-    st.header("💾 Save / Load")
-
-    export_data = json.dumps(project, indent=2)
-    st.download_button(
-        "⬇️ Export Project",
-        export_data,
-        file_name=f"{project_name}.json"
-    )
-
-    uploaded = st.file_uploader("⬆️ Import Project", type="json")
-    if uploaded:
-        projects[project_name] = json.load(uploaded)
-        st.experimental_rerun()
-
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
@@ -138,7 +130,66 @@ with left:
     chapter_name = st.selectbox("Chapter", list(chapters.keys()))
     chapter = chapters[chapter_name]
 
-    chapter["text"] = st.text_area(
+    if st.button("➕ New Chapter"):
+        chapters[f"Chapter {len(chapters)+1}"] = {
+            "text": "",
+            "locked": False
+        }
+        st.rerun()
+
+    new_name = st.text_input("Rename chapter", chapter_name)
+    if new_name and new_name != chapter_name:
+        chapters[new_name] = chapters.pop(chapter_name)
+        st.rerun()
+
+    chapter["locked"] = st.checkbox(
+        "🔒 Lock chapter",
+        chapter["locked"]
+    )
+
+    user_text = st.text_area(
         "Chapter Text",
         chapter["text"],
-        he
+        height=350,
+        disabled=chapter["locked"]
+    )
+
+    chapter["text"] = user_text  # autosave
+
+    tool = st.selectbox(
+        "Tool",
+        ["Expand", "Rewrite", "Describe", "Brainstorm"]
+    )
+
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+
+    run = st.button("Run AI")
+
+with right:
+    st.header("🤖 AI Output")
+
+    if run and user_text.strip() and not chapter["locked"]:
+        system_prompt = (
+            "You are a professional creative writing assistant.\n"
+            "You MUST follow the story bible exactly.\n\n"
+            f"STORY BIBLE:\n{build_story_bible(sb)}"
+        )
+
+        with st.spinner("Writing…"):
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                temperature=creativity,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f"{instruction_for(tool)}\n\nTEXT:\n{user_text}"
+                    }
+                ],
+            )
+
+        st.text_area(
+            "Result",
+            value=response.output_text,
+            height=400
+        )
