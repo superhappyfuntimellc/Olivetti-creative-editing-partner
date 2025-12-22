@@ -1,13 +1,11 @@
 import streamlit as st
-st.write("🚨 LOADED FILE: v2.0 PROJECTS TEST")
 from openai import OpenAI
-
-from openai import OpenAI
+import json
 
 # ================== SETUP ==================
 client = OpenAI()
 st.set_page_config(layout="wide")
-st.title("📝 Personal Sudowrite — v2.0 (Projects & Chapters)")
+st.title("📝 Personal Sudowrite — v2.1 (Canon, Save & Lock)")
 
 # ================== DATA MODEL ==================
 if "projects" not in st.session_state:
@@ -23,7 +21,10 @@ if "projects" not in st.session_state:
             },
             "outline": "",
             "chapters": {
-                "Chapter 1": ""
+                "Chapter 1": {
+                    "text": "",
+                    "locked": False
+                }
             }
         }
     }
@@ -33,29 +34,30 @@ projects = st.session_state.projects
 # ================== HELPERS ==================
 def build_story_bible(sb):
     out = []
-    if sb["title"]:
-        out.append(f"Title: {sb['title']}")
-    if sb["genre"]:
-        out.append(f"Genre: {sb['genre']}")
-    if sb["tone"]:
-        out.append(f"Tone: {sb['tone']}")
-    if sb["themes"]:
-        out.append(f"Themes: {sb['themes']}")
-    if sb["world_rules"]:
-        out.append("World Rules / Canon:")
-        out.append(sb["world_rules"])
-    if sb["characters"]:
-        out.append("Characters:")
-        for c in sb["characters"]:
-            out.append(f"- {c['name']}: {c['description']}")
+    for k, v in sb.items():
+        if not v:
+            continue
+        if isinstance(v, list):
+            out.append("Characters:")
+            for c in v:
+                out.append(f"- {c['name']}: {c['description']}")
+        else:
+            out.append(f"{k.replace('_',' ').title()}: {v}")
     return "\n".join(out)
+
+def build_locked_chapters(chapters):
+    out = []
+    for name, ch in chapters.items():
+        if ch["locked"] and ch["text"].strip():
+            out.append(f"{name} (LOCKED):\n{ch['text']}")
+    return "\n\n".join(out)
 
 def instruction_for(tool):
     return {
-        "Expand": "Continue the text naturally. Do not summarize.",
-        "Rewrite": "Rewrite with improved clarity and flow.",
-        "Describe": "Add richer sensory detail and emotion.",
-        "Brainstorm": "Generate ideas, metaphors, or next plot beats."
+        "Expand": "Continue the text naturally. Do NOT modify locked canon.",
+        "Rewrite": "Rewrite the text for clarity. Do NOT contradict locked canon.",
+        "Describe": "Add sensory detail without contradicting canon.",
+        "Brainstorm": "Generate ideas that respect locked canon."
     }[tool]
 
 # ================== SIDEBAR ==================
@@ -70,22 +72,19 @@ with st.sidebar:
     project = projects[project_name]
 
     if st.button("➕ New Project"):
-        projects[f"Project {len(projects) + 1}"] = {
+        projects[f"Project {len(projects)+1}"] = {
             "story_bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
+                "title": "", "genre": "", "tone": "",
+                "themes": "", "world_rules": "", "characters": []
             },
             "outline": "",
-            "chapters": {"Chapter 1": ""}
+            "chapters": {
+                "Chapter 1": {"text": "", "locked": False}
+            }
         }
         st.experimental_rerun()
 
     st.divider()
-
     st.header("📘 Story Bible")
     sb = project["story_bible"]
 
@@ -114,6 +113,21 @@ with st.sidebar:
         height=200
     )
 
+    st.divider()
+    st.header("💾 Save / Load")
+
+    export_data = json.dumps(project, indent=2)
+    st.download_button(
+        "⬇️ Export Project",
+        export_data,
+        file_name=f"{project_name}.json"
+    )
+
+    uploaded = st.file_uploader("⬆️ Import Project", type="json")
+    if uploaded:
+        projects[project_name] = json.load(uploaded)
+        st.experimental_rerun()
+
 # ================== MAIN UI ==================
 left, right = st.columns(2)
 
@@ -122,65 +136,9 @@ with left:
 
     chapters = project["chapters"]
     chapter_name = st.selectbox("Chapter", list(chapters.keys()))
-    chapter_text = chapters[chapter_name]
+    chapter = chapters[chapter_name]
 
-    chapter_text = st.text_area(
+    chapter["text"] = st.text_area(
         "Chapter Text",
-        chapter_text,
-        height=350
-    )
-    chapters[chapter_name] = chapter_text
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("➕ Add Chapter"):
-            chapters[f"Chapter {len(chapters) + 1}"] = ""
-            st.experimental_rerun()
-
-    with col2:
-        new_name = st.text_input("Rename chapter")
-        if new_name and new_name not in chapters:
-            chapters[new_name] = chapters.pop(chapter_name)
-            st.experimental_rerun()
-
-    tool = st.selectbox(
-        "Tool",
-        ["Expand", "Rewrite", "Describe", "Brainstorm"]
-    )
-    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
-    run = st.button("Run")
-
-# ================== OUTPUT ==================
-with right:
-    st.header("🤖 AI Output")
-
-    if run and chapter_text.strip():
-        story_context = build_story_bible(sb)
-        instruction = instruction_for(tool)
-
-        system_prompt = (
-            "You are a professional creative writing assistant.\n"
-            "You MUST follow the story bible and outline.\n\n"
-            f"STORY BIBLE:\n{story_context}\n\n"
-            f"OUTLINE:\n{project['outline']}"
-        )
-
-        with st.spinner("Writing…"):
-            response = client.responses.create(
-                model="gpt-4.1-mini",
-                temperature=creativity,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": f"{instruction}\n\nTEXT:\n{chapter_text}"
-                    }
-                ],
-            )
-
-        st.text_area(
-            "Result",
-            value=response.output_text,
-            height=400
-        )
-
+        chapter["text"],
+        he
