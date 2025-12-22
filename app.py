@@ -2,7 +2,7 @@ import streamlit as st
 
 # ================== PAGE SETUP ==================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v6.2 (Stable Foundation)")
+st.title("📝 Pro Writer Suite — v7.0 (Voices & Tense)")
 
 # ================== SESSION STATE ==================
 if "projects" not in st.session_state:
@@ -17,6 +17,10 @@ if "projects" not in st.session_state:
                 "characters": []
             },
             "outline": "",
+            "settings": {
+                "voice": "Neutral",
+                "tense": "Past"
+            },
             "chapters": {
                 "Chapter 1": ""
             }
@@ -38,23 +42,22 @@ with st.sidebar:
         project_names,
         index=project_names.index(st.session_state.active_project)
     )
-
     st.session_state.active_project = active
     project = projects[active]
 
-    # --- Rename project ---
-    new_name = st.text_input("Rename project", value=active)
-    if new_name and new_name != active and new_name not in projects:
-        projects[new_name] = projects.pop(active)
-        st.session_state.active_project = new_name
+    # Rename project
+    rename = st.text_input("Rename project", value=active)
+    if rename and rename != active and rename not in projects:
+        projects[rename] = projects.pop(active)
+        st.session_state.active_project = rename
         st.rerun()
 
-    # --- Create project ---
+    # Create project
     st.divider()
-    create_name = st.text_input("New project name")
+    new_project = st.text_input("New project name")
     if st.button("➕ Create Project"):
-        if create_name and create_name not in projects:
-            projects[create_name] = {
+        if new_project and new_project not in projects:
+            projects[new_project] = {
                 "story_bible": {
                     "title": "",
                     "genre": "",
@@ -64,9 +67,13 @@ with st.sidebar:
                     "characters": []
                 },
                 "outline": "",
+                "settings": {
+                    "voice": "Neutral",
+                    "tense": "Past"
+                },
                 "chapters": {"Chapter 1": ""}
             }
-            st.session_state.active_project = create_name
+            st.session_state.active_project = new_project
             st.rerun()
 
     # ================= STORY BIBLE =================
@@ -110,14 +117,15 @@ left, right = st.columns(2)
 with left:
     st.header("✍️ Writing")
 
+    # Chapter system
     chapters = project["chapters"]
     chapter_names = list(chapters.keys())
-
     chapter = st.selectbox("Chapter", chapter_names)
+
     chapters[chapter] = st.text_area(
         "Chapter Text",
         chapters[chapter],
-        height=400
+        height=420
     )
 
     if st.button("➕ Add Chapter"):
@@ -125,5 +133,31 @@ with left:
         st.rerun()
 
 with right:
+    st.header("🎭 Style Controls")
+
+    settings = project["settings"]
+
+    settings["voice"] = st.selectbox(
+        "Voice / Style",
+        ["Neutral", "Comedy", "Noir", "Lyrical", "Ironic", "Thriller"],
+        index=["Neutral", "Comedy", "Noir", "Lyrical", "Ironic", "Thriller"].index(settings["voice"])
+    )
+
+    settings["tense"] = st.radio(
+        "Narrative Tense",
+        ["Past", "Present", "Future"],
+        index=["Past", "Present", "Future"].index(settings["tense"])
+    )
+
+    st.divider()
     st.header("🤖 AI Output")
-    st.info("v6.2 foundation locked.\n\nAI, voices, tense, styles coming next.")
+    st.info(
+        f"""
+**v7.0 ready**
+
+Voice: **{settings['voice']}**  
+Tense: **{settings['tense']}**
+
+AI generation, spellcheck, grammar, and exports come next.
+"""
+    )
