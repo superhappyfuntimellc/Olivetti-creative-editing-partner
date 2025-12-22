@@ -1,14 +1,21 @@
 import streamlit as st
 from openai import OpenAI
+from io import StringIO
 import difflib
 
-# ================== CONFIG ==================
+try:
+    from docx import Document
+    DOCX_OK = True
+except:
+    DOCX_OK = False
+
+# ================= CONFIG =================
 st.set_page_config(layout="wide")
-st.title("📝 Pro Writer Suite — v10.1")
+st.title("📝 Pro Writer Suite — v10.2")
 
 client = OpenAI()
 
-# ================== STATE ==================
+# ================= STATE ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
         "New Project": {
@@ -20,68 +27,77 @@ if "projects" not in st.session_state:
                 "world_rules": "",
                 "characters": []
             },
-            "chapters": {"Chapter 1": ""},
+            "outline": "",
+            "chapters": {"Chapter 1": ""}
         }
     }
 
 if "current_project" not in st.session_state:
     st.session_state.current_project = "New Project"
 
-# ================== HELPERS ==================
-def build_story_bible(sb):
-    parts = []
-    for k, v in sb.items():
-        if v:
-            if isinstance(v, list):
-                parts.append("Characters:")
-                for c in v:
-                    parts.append(f"- {c['name']}: {c['description']}")
-            else:
-                parts.append(f"{k.replace('_',' ').title()}: {v}")
-    return "\n".join(parts)
+projects = st.session_state.projects
+project = projects[st.session_state.current_project]
 
-def plagiarism_check(text):
-    sentences = [s.strip() for s in text.split(".") if len(s.strip()) > 20]
-    matches = 0
-    for i in range(len(sentences)):
-        for j in range(i + 1, len(sentences)):
-            ratio = difflib.SequenceMatcher(None, sentences[i], sentences[j]).ratio()
-            if ratio > 0.85:
-                matches += 1
-    risk = "LOW"
-    if matches > 3:
-        risk = "MEDIUM"
-    if matches > 7:
-        risk = "HIGH"
-    return risk, matches
+# ================= HELPERS =================
+def build_story_bible(sb):
+    out = []
+    for k, v in sb.items():
+        if not v:
+            continue
+        if isinstance(v, list):
+            out.append("Characters:")
+            for c in v:
+                out.append(f"- {c['name']}: {c['description']}")
+        else:
+            out.append(f"{k.replace('_',' ').title()}: {v}")
+    return "\n".join(out)
 
 def instruction(tool):
     return {
-        "Expand": "Continue the text naturally without summarizing.",
+        "Expand": "Continue the text naturally. Do not summarize.",
         "Rewrite": "Rewrite for clarity, flow, and quality.",
-        "Describe": "Add sensory detail and emotional depth.",
-        "Brainstorm": "Generate ideas, metaphors, or next plot beats.",
+        "Describe": "Add vivid sensory detail and emotion.",
+        "Brainstorm": "Generate ideas, beats, or directions.",
         "Grammar": "Fix grammar, spelling, and punctuation only."
     }[tool]
 
-# ================== SIDEBAR ==================
+def extract_text(upload):
+    if upload.type == "text/plain":
+        return StringIO(upload.getvalue().decode("utf-8")).read()
+    if upload.type.endswith("wordprocessingml.document") and DOCX_OK:
+        doc = Document(upload)
+        return "\n".join(p.text for p in doc.paragraphs)
+    return ""
+
+def plagiarism_check(text):
+    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 25]
+    hits = 0
+    for i in range(len(sents)):
+        for j in range(i+1, len(sents)):
+            if difflib.SequenceMatcher(None, sents[i], sents[j]).ratio() > 0.85:
+                hits += 1
+    if hits > 6:
+        return "HIGH", hits
+    if hits > 3:
+        return "MEDIUM", hits
+    return "LOW", hits
+
+# ================= SIDEBAR =================
 with st.sidebar:
     st.header("📁 Projects")
 
-    projects = st.session_state.projects
-    project_names = list(projects.keys())
-
+    names = list(projects.keys())
     selected = st.selectbox(
         "Select Project",
-        project_names,
-        index=project_names.index(st.session_state.current_project)
+        names,
+        index=names.index(st.session_state.current_project)
     )
     st.session_state.current_project = selected
     project = projects[selected]
 
-    new_project = st.text_input("New project name")
-    if st.button("➕ Add Project") and new_project:
-        projects[new_project] = {
+    new_name = st.text_input("New project name")
+    if st.button("➕ Add Project") and new_name:
+        projects[new_name] = {
             "story_bible": {
                 "title": "",
                 "genre": "",
@@ -90,54 +106,61 @@ with st.sidebar:
                 "world_rules": "",
                 "characters": []
             },
+            "outline": "",
             "chapters": {"Chapter 1": ""}
         }
-        st.session_state.current_project = new_project
+        st.session_state.current_project = new_name
 
     st.divider()
     st.header("📘 Story Bible")
-    sb = project["story_bible"]
 
+    sb = project["story_bible"]
     sb["title"] = st.text_input("Title", sb["title"])
     sb["genre"] = st.text_input("Genre", sb["genre"])
     sb["tone"] = st.text_input("Tone", sb["tone"])
     sb["themes"] = st.text_area("Themes", sb["themes"])
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
-    st.subheader("Characters")
+    st.subheader("🧍 Characters")
     cname = st.text_input("Character name")
     cdesc = st.text_area("Character description")
     if st.button("Add Character") and cname:
         sb["characters"].append({"name": cname, "description": cdesc})
 
-# ================== MAIN ==================
+# ================= MAIN ====================
 left, right = st.columns(2)
 
 with left:
     st.header("✍️ Writing")
 
     chapters = project["chapters"]
-    chapter_name = st.selectbox("Chapter", list(chapters.keys()))
+    chap_name = st.selectbox("Chapter", list(chapters.keys()))
 
-    new_chapter = st.text_input("New chapter name")
-    if st.button("Add Chapter") and new_chapter:
-        chapters[new_chapter] = ""
-        chapter_name = new_chapter
+    new_chap = st.text_input("New chapter name")
+    if st.button("Add Chapter") and new_chap:
+        chapters[new_chap] = ""
+        chap_name = new_chap
 
     text = st.text_area(
         "Chapter Text",
-        value=chapters[chapter_name],
+        value=chapters[chap_name],
         height=300
     )
-    chapters[chapter_name] = text
+    chapters[chap_name] = text
+
+    st.subheader("📥 Import Document")
+    upload = st.file_uploader("Upload TXT or DOCX", type=["txt", "docx"])
+    if upload:
+        imported = extract_text(upload)
+        if imported:
+            chapters[chap_name] = imported
+            st.success("Imported successfully.")
 
     st.subheader("🔍 Find & Replace")
-    find_text = st.text_input("Find")
-    replace_text = st.text_input("Replace with")
-
-    if st.button("Replace All") and find_text:
-        chapters[chapter_name] = chapters[chapter_name].replace(find_text, replace_text)
-        st.success("Replaced successfully.")
+    f = st.text_input("Find")
+    r = st.text_input("Replace with")
+    if st.button("Replace All") and f:
+        chapters[chap_name] = chapters[chap_name].replace(f, r)
 
     tool = st.selectbox(
         "Tool",
@@ -145,7 +168,6 @@ with left:
     )
 
     tense = st.selectbox("Tense", ["Past", "Present"])
-
     style = st.selectbox(
         "Genre Style",
         ["Neutral", "Comedy", "Noir", "Lyrical", "Thriller", "Ironic"]
@@ -155,7 +177,12 @@ with left:
     run = st.button("Run AI")
 
 with right:
-    st.header("🤖 AI Output")
+    st.header("🧭 Outline")
+    project["outline"] = st.text_area(
+        "Outline / Beats (autosaved)",
+        project["outline"],
+        height=200
+    )
 
     if run and text.strip():
         bible = build_story_bible(project["story_bible"])
@@ -175,18 +202,15 @@ STORY BIBLE:
             temperature=creativity,
             input=[
                 {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f"{instruction(tool)}\n\nTEXT:\n{text}"
-                }
+                {"role": "user", "content": f"{instruction(tool)}\n\n{text}"}
             ],
         )
 
         output = response.output_text
+
+        st.subheader("🤖 AI Output")
         st.text_area("Result", value=output, height=300)
 
-        st.divider()
-        st.subheader("🕵️ Plagiarism Check")
-        risk, matches = plagiarism_check(output)
-        st.write(f"**Risk Level:** {risk}")
-        st.write(f"Repeated sentence matches: {matches}")
+        risk, hits = plagiarism_check(output)
+        st.subheader("🕵️ Plagiarism Signal")
+        st.write(f"Risk: **{risk}** | Repeated segments: {hits}")
