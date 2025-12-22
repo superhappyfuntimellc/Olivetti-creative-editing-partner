@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="Olivetti v7.8")
+st.set_page_config(layout="wide", page_title="Olivetti v11.12")
 client = OpenAI()
 
 # =========================
@@ -17,6 +17,26 @@ if "current_project" not in st.session_state:
 
 if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
+
+# =========================
+# STYLE PRESETS
+# =========================
+GENRES = {
+    "Literary": "Elegant prose, interiority, subtle metaphor.",
+    "Noir": "Hard-edged, cynical, concrete imagery.",
+    "Thriller": "Fast pacing, tension, urgency.",
+    "Comedy": "Timing, irony, wit, lightness.",
+    "Lyrical": "Rhythm, imagery, musical language.",
+    "Ironic": "Detached, sharp, understated humor."
+}
+
+VOICES = {
+    "Neutral Editor": "Clear, professional, invisible style.",
+    "Minimal": "Short sentences. Subtext. Restraint.",
+    "Expressive": "Emotion-forward, dynamic voice.",
+    "Hardboiled": "Dry, blunt, unsentimental.",
+    "Poetic": "Figurative, flowing, evocative."
+}
 
 # =========================
 # HELPERS
@@ -42,29 +62,27 @@ def split_into_chapters(text):
         })
     return chapters
 
-def move_chapter(project, idx, direction):
-    chapters = st.session_state.projects[project]["chapters"]
-    new = idx + direction
-    if 0 <= new < len(chapters):
-        chapters[idx], chapters[new] = chapters[new], chapters[idx]
-        st.session_state.current_chapter = new
-
-def save_version(chapter):
-    chapter["versions"].append({
+def save_version(ch):
+    ch["versions"].append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": chapter["text"]
+        "text": ch["text"]
     })
 
-def restore_version(chapter, index):
-    chapter["text"] = chapter["versions"][index]["text"]
+def generate_outline(text, genre, voice, sample):
+    style = f"Genre: {GENRES[genre]}\nVoice: {VOICES[voice]}"
+    if sample:
+        style += f"\nMatch this writing style:\n{sample}"
 
-def generate_outline(text):
     prompt = f"""
 Create a concise chapter outline.
-• Bullet points
-• Major beats only
+• Bullet points only
+• Major story beats
 • No rewriting
 
+STYLE GUIDE:
+{style}
+
+CHAPTER:
 {text}
 """
     r = client.responses.create(
@@ -78,7 +96,7 @@ Create a concise chapter outline.
     return r.output_text
 
 # =========================
-# SIDEBAR — PROJECTS
+# SIDEBAR — PROJECTS + DASHBOARD
 # =========================
 with st.sidebar:
     st.header("📁 Projects")
@@ -104,6 +122,21 @@ with st.sidebar:
             ]["chapters"] = split_into_chapters(text)
             st.session_state.current_chapter = 0
 
+    # DASHBOARD
+    if st.session_state.current_project:
+        st.divider()
+        st.header("📊 Workflow Dashboard")
+        chapters = st.session_state.projects[st.session_state.current_project]["chapters"]
+        stages = ["Draft", "Revise", "Polish", "Final"]
+
+        for s in stages:
+            count = sum(1 for c in chapters if c["workflow"] == s)
+            st.write(f"{s}: {count}")
+
+        for i, c in enumerate(chapters):
+            if st.button(f"{i+1}. {c['title']} ({c['workflow']})", key=f"dash_{i}"):
+                st.session_state.current_chapter = i
+
 # =========================
 # MAIN
 # =========================
@@ -122,30 +155,17 @@ if not chapters:
 idx = st.session_state.current_chapter
 chapter = chapters[idx]
 
-# =========================
-# LAYOUT
-# =========================
-left, center, right = st.columns([1.2, 2.8, 2.0])
+left, center, right = st.columns([1.2, 2.8, 2.2])
 
 # =========================
-# LEFT — CHAPTER LIST
+# LEFT — CHAPTERS
 # =========================
 with left:
     st.subheader("📚 Chapters")
-
     for i, ch in enumerate(chapters):
-        label = f"{i+1}. {ch['title']} ({ch['workflow']})"
-        if st.button(label, key=f"chap_{i}"):
+        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
             st.session_state.current_chapter = i
-
-    st.divider()
     chapter["title"] = st.text_input("Chapter title", chapter["title"])
-
-    col1, col2 = st.columns(2)
-    if col1.button("⬆ Move Up"):
-        move_chapter(st.session_state.current_project, idx, -1)
-    if col2.button("⬇ Move Down"):
-        move_chapter(st.session_state.current_project, idx, 1)
 
 # =========================
 # CENTER — WRITING
@@ -154,36 +174,34 @@ with center:
     st.subheader("✍️ Chapter Text")
     chapter["text"] = st.text_area("", chapter["text"], height=520)
 
-    colA, colB = st.columns(2)
-    if colA.button("💾 Save Version"):
+    col1, col2 = st.columns(2)
+    if col1.button("💾 Save Version"):
         save_version(chapter)
-    chapter["workflow"] = colB.selectbox(
+    chapter["workflow"] = col2.selectbox(
         "Workflow Stage",
         ["Draft", "Revise", "Polish", "Final"],
         index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
     )
 
 # =========================
-# RIGHT — OUTLINE + HISTORY
+# RIGHT — STYLE + OUTLINE
 # =========================
 with right:
+    st.subheader("🎭 Style Controls")
+
+    genre = st.selectbox("Genre Style", list(GENRES.keys()))
+    voice = st.selectbox("Voice", list(VOICES.keys()))
+    sample = st.text_area("Match My Writing Style (optional)", height=120)
+
+    st.divider()
     st.subheader("📑 Outline")
 
     if st.button("Generate / Update Outline"):
         with st.spinner("Analyzing chapter…"):
-            chapter["outline"] = generate_outline(chapter["text"])
+            chapter["outline"] = generate_outline(
+                chapter["text"], genre, voice, sample
+            )
 
-    chapter["outline"] = st.text_area("Outline", chapter["outline"], height=220)
+    chapter["outline"] = st.text_area("", chapter["outline"], height=220)
 
-    st.divider()
-    st.subheader("🧾 Version History")
-
-    if chapter["versions"]:
-        for i, v in enumerate(reversed(chapter["versions"])):
-            idx_restore = len(chapter["versions"]) - 1 - i
-            if st.button(f"Restore {v['time']}", key=f"restore_{i}"):
-                restore_version(chapter, idx_restore)
-    else:
-        st.caption("No saved versions yet.")
-
-st.caption("Olivetti v7.8 — Built for long-form writers")
+st.caption("Olivetti v11.12 — Built for real novels")
