@@ -2,12 +2,12 @@ import streamlit as st
 import os
 from openai import OpenAI
 
-# Prevent file watcher crash
+# Prevent Streamlit watcher crash
 os.environ["STREAMLIT_WATCH_FILES"] = "false"
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🫒 Olivetti — Writing Workspace v5.0")
+st.title("🫒 Olivetti — Writing Workspace v6.0")
 
 client = OpenAI()
 
@@ -16,7 +16,8 @@ if "projects" not in st.session_state:
     st.session_state.projects = {
         "My First Novel": {
             "chapters": {},
-            "order": []
+            "order": [],
+            "style_samples": ""
         }
     }
 
@@ -36,19 +37,31 @@ project = projects[st.session_state.active_project]
 def split_into_chapters(text):
     chapters = {}
     order = []
-    blocks = text.split("\n\n")
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
     for i, block in enumerate(blocks, start=1):
         name = f"Chapter {i}"
-        chapters[name] = block.strip()
+        chapters[name] = block
         order.append(name)
     return chapters, order
 
-def ai_action(text, action, style, tense):
+def ai_action(text, action, style, tense, style_samples):
+    style_block = ""
+    if style == "Match My Writing Style" and style_samples.strip():
+        style_block = f"""
+You must closely match the following author's writing style.
+Analyze sentence length, rhythm, diction, tone, and narrative distance.
+
+AUTHOR STYLE SAMPLES:
+{style_samples}
+"""
+
     prompt = f"""
-You are a professional novelist.
+You are a professional novelist and editor.
+
+{style_block}
 
 ACTION: {action}
-STYLE: {style}
+STYLE MODE: {style}
 TENSE: {tense}
 
 TEXT:
@@ -67,7 +80,11 @@ with st.sidebar:
 
     new_project = st.text_input("New project name")
     if st.button("➕ Create Project") and new_project:
-        projects[new_project] = {"chapters": {}, "order": []}
+        projects[new_project] = {
+            "chapters": {},
+            "order": [],
+            "style_samples": ""
+        }
         st.session_state.active_project = new_project
         st.session_state.active_chapter = None
 
@@ -76,6 +93,19 @@ with st.sidebar:
         list(projects.keys()),
         key="active_project"
     )
+
+    st.divider()
+    st.header("🧬 Writing Style Training")
+
+    st.caption("Paste 1–3 samples of *your own writing*")
+    project["style_samples"] = st.text_area(
+        "Style Samples (saved automatically)",
+        value=project.get("style_samples", ""),
+        height=200
+    )
+
+    if project["style_samples"].strip():
+        st.success("Style locked for this project")
 
     st.divider()
     st.header("📄 Import Manuscript")
@@ -87,7 +117,7 @@ with st.sidebar:
         project["chapters"] = chapters
         project["order"] = order
         st.session_state.active_chapter = order[0]
-        st.success("Manuscript imported.")
+        st.success("Manuscript imported and split.")
 
     st.divider()
     st.header("📚 Chapters")
@@ -116,7 +146,7 @@ with center:
             value=project["chapters"].get(chap, ""),
             height=600
         )
-        project["chapters"][chap] = text  # autosave
+        project["chapters"][chap] = text
         st.caption("✔ Autosaved")
 
     else:
@@ -133,7 +163,15 @@ with right:
 
     style = st.selectbox(
         "Style",
-        ["Neutral", "Noir", "Lyrical", "Comedy", "Thriller", "Ironic"]
+        [
+            "Neutral",
+            "Noir",
+            "Lyrical",
+            "Comedy",
+            "Thriller",
+            "Ironic",
+            "Match My Writing Style"
+        ]
     )
 
     tense = st.selectbox(
@@ -150,9 +188,13 @@ with right:
         source_text = project["chapters"][st.session_state.active_chapter]
 
     if st.button("✨ Run AI") and source_text.strip():
-        with st.spinner("Working..."):
+        with st.spinner("Writing in your voice…"):
             st.session_state.ai_result = ai_action(
-                source_text, action, style, tense
+                source_text,
+                action,
+                style,
+                tense,
+                project.get("style_samples", "")
             )
 
     if st.session_state.ai_result:
