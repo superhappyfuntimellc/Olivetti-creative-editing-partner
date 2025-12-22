@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v17.0")
+st.title("🖋️ Olivetti — Writer OS v18.0")
 
 client = OpenAI()
 
@@ -60,17 +60,16 @@ def build_bible(sb):
 
 def instruction_for(tool):
     return {
-        "Grammar & Style": "Correct grammar and polish style.",
-        "Expand": "Continue naturally without summarizing.",
         "Rewrite": "Rewrite with better flow and clarity.",
+        "Expand": "Continue naturally without summarizing.",
         "Describe": "Add sensory detail and emotion.",
-        "Brainstorm": "Generate ideas or next beats."
+        "Brainstorm": "Generate ideas or next beats.",
+        "Editorial Report": "Do NOT rewrite. Provide editorial feedback only."
     }[tool]
 
 def export_project_text(project):
     lines = []
     lines.append(project["bible"].get("title", "").upper())
-    lines.append("\n")
     for name, text in project["chapters"].items():
         lines.append(f"\n\n### {name}\n\n{text}")
     return "\n".join(lines)
@@ -103,32 +102,6 @@ with st.sidebar:
         st.stop()
 
     st.divider()
-    st.header("📥 Import")
-
-    upload = st.file_uploader("Import TXT", type=["txt"])
-    import_mode = st.radio("Import as", ["New Project", "New Chapter"])
-
-    if upload:
-        content = upload.read().decode("utf-8")
-        if st.button("Import"):
-            if import_mode == "New Project":
-                projects[upload.name] = {
-                    "bible": {
-                        "title": upload.name.replace(".txt",""),
-                        "genre": "", "tone": "",
-                        "themes": "", "world_rules": "", "characters": []
-                    },
-                    "outline": "",
-                    "chapters": {"Chapter 1": content},
-                    "genre_style": "Lyrical",
-                    "voice": "Default",
-                    "tense": "Past"
-                }
-            else:
-                project["chapters"][upload.name] = content
-            st.stop()
-
-    st.divider()
     st.header("📘 Story Bible")
     sb = project["bible"]
     sb["title"] = st.text_input("Title", sb["title"])
@@ -139,10 +112,9 @@ with st.sidebar:
 
     st.divider()
     st.header("📤 Export")
-    export_text = export_project_text(project)
     st.download_button(
         "Download Project (.txt)",
-        export_text,
+        export_project_text(project),
         file_name=f"{current}.txt"
     )
 
@@ -155,26 +127,6 @@ with left:
     chapter_names = list(project["chapters"].keys())
     chapter = st.selectbox("Chapter", chapter_names)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("⬆ Move Up"):
-            i = chapter_names.index(chapter)
-            if i > 0:
-                chapter_names[i-1], chapter_names[i] = chapter_names[i], chapter_names[i-1]
-                project["chapters"] = {k: project["chapters"][k] for k in chapter_names}
-                st.stop()
-    with col2:
-        if st.button("⬇ Move Down"):
-            i = chapter_names.index(chapter)
-            if i < len(chapter_names)-1:
-                chapter_names[i+1], chapter_names[i] = chapter_names[i], chapter_names[i+1]
-                project["chapters"] = {k: project["chapters"][k] for k in chapter_names}
-                st.stop()
-    with col3:
-        if st.button("❌ Delete"):
-            project["chapters"].pop(chapter)
-            st.stop()
-
     project["chapters"][chapter] = st.text_area(
         "Chapter Text",
         project["chapters"][chapter],
@@ -183,17 +135,23 @@ with left:
 
     tool = st.selectbox(
         "Tool",
-        ["Grammar & Style", "Expand", "Rewrite", "Describe", "Brainstorm"]
+        ["Rewrite", "Expand", "Describe", "Brainstorm", "Editorial Report"]
     )
-    creativity = st.slider("Creativity", 0.0, 1.0, 0.7)
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.6)
     run = st.button("Run AI")
 
 with right:
-    st.header("🤖 AI Output")
+    st.header("🧠 Editorial & AI Output")
 
     if run and project["chapters"][chapter].strip():
-        system = f"""
-You are Olivetti, a professional editor.
+        system_prompt = f"""
+You are Olivetti, a professional literary editor.
+
+Your job:
+1. Detect plagiarism risk (generic phrasing, clichés, overfamiliar constructions)
+2. Detect repetition and phrasing echoes
+3. Detect POV and tense drift
+4. Respect the selected tool behavior
 
 Tense: {project['tense']}
 Genre: {GENRE_STYLES[project['genre_style']]}
@@ -203,16 +161,28 @@ Canon:
 {build_bible(project['bible'])}
 """
 
+        user_prompt = f"""
+TASK: {instruction_for(tool)}
+
+If TASK is Editorial Report:
+- Do NOT rewrite text
+- Provide bullet-point feedback under these headers:
+  • Similarity & Plagiarism Risk
+  • Repetition & Echoes
+  • POV & Tense Consistency
+  • Overall Craft Notes
+
+TEXT:
+{project['chapters'][chapter]}
+"""
+
         response = client.responses.create(
             model="gpt-4.1-mini",
             temperature=creativity,
             input=[
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": f"{instruction_for(tool)}\n\nTEXT:\n{project['chapters'][chapter]}"
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
         )
 
-        st.text_area("Result", response.output_text, height=420)
+        st.text_area("Result", response.output_text, height=440)
