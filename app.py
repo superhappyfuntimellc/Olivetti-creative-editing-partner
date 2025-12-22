@@ -1,4 +1,7 @@
 import streamlit as st
+st.write("🚨 LOADED FILE: v2.0 PROJECTS TEST")
+from openai import OpenAI
+
 from openai import OpenAI
 
 # ================== SETUP ==================
@@ -180,3 +183,4 @@ with right:
             value=response.output_text,
             height=400
         )
+
