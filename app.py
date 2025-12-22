@@ -1,16 +1,13 @@
 import streamlit as st
-from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writing Studio")
+st.title("Olivetti — Manuscript Studio (Workflow Edition)")
 
-client = OpenAI()
-
-# ================== STATE ==================
+# ================== SESSION STATE ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
-        "My First Project": {
+        "New Project": {
             "story_bible": {
                 "title": "",
                 "genre": "",
@@ -20,53 +17,52 @@ if "projects" not in st.session_state:
                 "characters": []
             },
             "outline": "",
-            "chapters": ["Chapter 1"],
-            "chapter_texts": {"Chapter 1": ""},
-            "style_sample": ""
+            "chapters": {
+                "Chapter 1": {
+                    "text": "",
+                    "status": "Draft"
+                }
+            }
         }
     }
 
 if "current_project" not in st.session_state:
-    st.session_state.current_project = "My First Project"
+    st.session_state.current_project = "New Project"
 
 projects = st.session_state.projects
 project = projects[st.session_state.current_project]
 
-# ================== HELPERS ==================
-def story_bible_text(sb):
-    out = []
-    for k, v in sb.items():
-        if isinstance(v, list):
-            if v:
-                out.append("Characters:")
-                for c in v:
-                    out.append(f"- {c['name']}: {c['description']}")
-        elif v:
-            out.append(f"{k.replace('_',' ').title()}: {v}")
-    return "\n".join(out)
+WORKFLOW_STAGES = ["Draft", "Revise", "Polish", "Final"]
 
-def ai_call(system, user, temp=0.6):
-    r = client.responses.create(
-        model="gpt-4.1-mini",
-        temperature=temp,
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ]
-    )
-    return r.output_text
+# ================== HELPERS ==================
+def import_manuscript(text):
+    chapters = {}
+    current = "Chapter 1"
+    chapters[current] = {"text": "", "status": "Draft"}
+
+    for line in text.splitlines():
+        if line.strip().lower().startswith("chapter"):
+            current = line.strip()
+            chapters[current] = {"text": "", "status": "Draft"}
+        else:
+            chapters[current]["text"] += line + "\n"
+
+    return chapters
 
 # ================== SIDEBAR ==================
 with st.sidebar:
-    st.header("📁 Projects")
+    st.header("Projects")
 
-    st.session_state.current_project = st.selectbox(
-        "Select Project",
-        list(projects.keys()),
-        index=list(projects.keys()).index(st.session_state.current_project)
+    project_names = list(projects.keys())
+    selected = st.selectbox(
+        "Select project",
+        project_names,
+        index=project_names.index(st.session_state.current_project),
     )
+    st.session_state.current_project = selected
+    project = projects[selected]
 
-    new_project = st.text_input("New Project Name")
+    new_project = st.text_input("New project name")
     if st.button("Add Project") and new_project:
         projects[new_project] = {
             "story_bible": {
@@ -78,107 +74,85 @@ with st.sidebar:
                 "characters": []
             },
             "outline": "",
-            "chapters": ["Chapter 1"],
-            "chapter_texts": {"Chapter 1": ""},
-            "style_sample": ""
+            "chapters": {
+                "Chapter 1": {"text": "", "status": "Draft"}
+            }
         }
         st.session_state.current_project = new_project
 
     st.divider()
+    st.header("Story Bible")
 
-    st.header("📘 Story Bible")
     sb = project["story_bible"]
     sb["title"] = st.text_input("Title", sb["title"])
-    sb["genre"] = st.selectbox(
-        "Genre",
-        ["", "Comedy", "Noir", "Thriller", "Lyrical", "Ironic"],
-        index=0
-    )
+    sb["genre"] = st.text_input("Genre", sb["genre"])
     sb["tone"] = st.text_input("Tone", sb["tone"])
     sb["themes"] = st.text_area("Themes", sb["themes"])
     sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
 
     st.subheader("Characters")
-    cname = st.text_input("Name")
-    cdesc = st.text_area("Description")
+    cname = st.text_input("Character name")
+    cdesc = st.text_area("Character description")
     if st.button("Add Character") and cname:
         sb["characters"].append({"name": cname, "description": cdesc})
 
     st.divider()
-    st.header("🧭 Outline")
+    st.header("Outline")
     project["outline"] = st.text_area("Outline / Beats", project["outline"], height=200)
 
-# ================== MAIN ==================
+    st.divider()
+    st.header("Import Manuscript")
+    uploaded = st.file_uploader("Upload .txt manuscript", type=["txt"])
+    if uploaded:
+        raw = uploaded.read().decode("utf-8")
+        project["chapters"] = import_manuscript(raw)
+        st.success("Manuscript imported and split into chapters")
+
+# ================== MAIN UI ==================
 left, right = st.columns(2)
 
 with left:
-    st.header("✍️ Writing")
+    st.header("Writing")
 
-    chapter = st.selectbox("Chapter", project["chapters"])
+    filter_stage = st.selectbox("Filter by workflow stage", ["All"] + WORKFLOW_STAGES)
 
-    project["chapter_texts"][chapter] = st.text_area(
+    chapter_names = list(project["chapters"].keys())
+    if filter_stage != "All":
+        chapter_names = [
+            c for c in chapter_names
+            if project["chapters"][c]["status"] == filter_stage
+        ]
+
+    chapter = st.selectbox("Chapter", chapter_names)
+
+    chapter_data = project["chapters"][chapter]
+
+    chapter_data["status"] = st.selectbox(
+        "Workflow status",
+        WORKFLOW_STAGES,
+        index=WORKFLOW_STAGES.index(chapter_data["status"])
+    )
+
+    chapter_data["text"] = st.text_area(
         "Chapter Text",
-        project["chapter_texts"][chapter],
-        height=350
+        chapter_data["text"],
+        height=420
     )
 
-    st.subheader("Chapter Tools")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("➕ Add Chapter"):
-            new_ch = f"Chapter {len(project['chapters']) + 1}"
-            project["chapters"].append(new_ch)
-            project["chapter_texts"][new_ch] = ""
-
-    with col2:
-        rename = st.text_input("Rename Chapter")
-        if st.button("Rename") and rename:
-            idx = project["chapters"].index(chapter)
-            project["chapters"][idx] = rename
-            project["chapter_texts"][rename] = project["chapter_texts"].pop(chapter)
-
-    st.subheader("Find & Replace")
-    find = st.text_input("Find")
-    replace = st.text_input("Replace")
-    if st.button("Replace All") and find:
-        project["chapter_texts"][chapter] = project["chapter_texts"][chapter].replace(find, replace)
-
-    st.subheader("Match My Writing Style")
-    project["style_sample"] = st.text_area(
-        "Paste your writing here",
-        project["style_sample"],
-        height=120
-    )
-
-    tense = st.selectbox("Tense", ["Keep", "Past", "Present"])
-
-    tool = st.selectbox(
-        "Tool",
-        ["Expand", "Rewrite", "Polish (Grammar)", "Brainstorm"]
-    )
-
-    run = st.button("Run AI")
+    new_chapter = st.text_input("New chapter name")
+    if st.button("Add Chapter") and new_chapter:
+        project["chapters"][new_chapter] = {
+            "text": "",
+            "status": "Draft"
+        }
 
 with right:
-    st.header("🤖 AI Output")
+    st.header("Workflow Overview")
 
-    if run and project["chapter_texts"][chapter]:
-        system = "You are a professional novelist assistant.\n"
-        system += "Follow the story bible exactly.\n\n"
-        system += story_bible_text(project["story_bible"])
+    for stage in WORKFLOW_STAGES:
+        st.subheader(stage)
+        for name, data in project["chapters"].items():
+            if data["status"] == stage:
+                st.markdown(f"- {name}")
 
-        if project["style_sample"]:
-            system += "\n\nMatch this writing style:\n" + project["style_sample"]
-
-        user = f"{tool} this text.\n"
-        if tense != "Keep":
-            user += f"Convert to {tense.lower()} tense.\n"
-        user += "\nTEXT:\n" + project["chapter_texts"][chapter]
-
-        with st.spinner("Writing…"):
-            result = ai_call(system, user)
-
-        st.text_area("Result", result, height=400)
-
+    st.info("AI tools will be added after workflow validation.")
