@@ -1,162 +1,144 @@
+import streamlit as st
 import os
+
+# Disable file watching (prevents inotify crash)
 os.environ["STREAMLIT_WATCH_FILES"] = "false"
 
-import streamlit as st
-
-# ================== SETUP ==================
+# ================== APP SETUP ==================
 st.set_page_config(layout="wide")
-st.title("Olivetti — Manuscript Studio (Workflow Edition)")
+st.title("🫒 Olivetti — Interactive Manuscript Workspace (v4.0)")
 
-# ================== SESSION STATE ==================
+# ================== STATE INIT ==================
 if "projects" not in st.session_state:
     st.session_state.projects = {
-        "New Project": {
-            "story_bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
-            },
-            "outline": "",
-            "chapters": {
-                "Chapter 1": {
-                    "text": "",
-                    "status": "Draft"
-                }
-            }
+        "My First Novel": {
+            "chapters": {},
+            "order": []
         }
     }
 
-if "current_project" not in st.session_state:
-    st.session_state.current_project = "New Project"
+if "active_project" not in st.session_state:
+    st.session_state.active_project = "My First Novel"
+
+if "active_chapter" not in st.session_state:
+    st.session_state.active_chapter = None
 
 projects = st.session_state.projects
-project = projects[st.session_state.current_project]
-
-WORKFLOW_STAGES = ["Draft", "Revise", "Polish", "Final"]
+project = projects[st.session_state.active_project]
 
 # ================== HELPERS ==================
-def import_manuscript(text):
+def split_into_chapters(text):
     chapters = {}
-    current = "Chapter 1"
-    chapters[current] = {"text": "", "status": "Draft"}
-
-    for line in text.splitlines():
-        if line.strip().lower().startswith("chapter"):
-            current = line.strip()
-            chapters[current] = {"text": "", "status": "Draft"}
-        else:
-            chapters[current]["text"] += line + "\n"
-
-    return chapters
+    order = []
+    blocks = text.split("\n\n")
+    for i, block in enumerate(blocks, start=1):
+        name = f"Chapter {i}"
+        chapters[name] = block.strip()
+        order.append(name)
+    return chapters, order
 
 # ================== SIDEBAR ==================
 with st.sidebar:
-    st.header("Projects")
+    st.header("📁 Projects")
 
     project_names = list(projects.keys())
-    selected = st.selectbox(
-        "Select project",
-        project_names,
-        index=project_names.index(st.session_state.current_project),
-    )
-    st.session_state.current_project = selected
-    project = projects[selected]
-
     new_project = st.text_input("New project name")
-    if st.button("Add Project") and new_project:
-        projects[new_project] = {
-            "story_bible": {
-                "title": "",
-                "genre": "",
-                "tone": "",
-                "themes": "",
-                "world_rules": "",
-                "characters": []
-            },
-            "outline": "",
-            "chapters": {
-                "Chapter 1": {"text": "", "status": "Draft"}
-            }
-        }
-        st.session_state.current_project = new_project
+
+    if st.button("➕ Create Project") and new_project:
+        projects[new_project] = {"chapters": {}, "order": []}
+        st.session_state.active_project = new_project
+        st.session_state.active_chapter = None
 
     st.divider()
-    st.header("Story Bible")
 
-    sb = project["story_bible"]
-    sb["title"] = st.text_input("Title", sb["title"])
-    sb["genre"] = st.text_input("Genre", sb["genre"])
-    sb["tone"] = st.text_input("Tone", sb["tone"])
-    sb["themes"] = st.text_area("Themes", sb["themes"])
-    sb["world_rules"] = st.text_area("World Rules / Canon", sb["world_rules"])
-
-    st.subheader("Characters")
-    cname = st.text_input("Character name")
-    cdesc = st.text_area("Character description")
-    if st.button("Add Character") and cname:
-        sb["characters"].append({"name": cname, "description": cdesc})
+    st.selectbox(
+        "Active Project",
+        project_names,
+        key="active_project"
+    )
 
     st.divider()
-    st.header("Outline")
-    project["outline"] = st.text_area("Outline / Beats", project["outline"], height=200)
+    st.header("📄 Import Manuscript")
 
-    st.divider()
-    st.header("Import Manuscript")
     uploaded = st.file_uploader("Upload .txt manuscript", type=["txt"])
+
     if uploaded:
-        raw = uploaded.read().decode("utf-8")
-        project["chapters"] = import_manuscript(raw)
-        st.success("Manuscript imported and split into chapters")
+        text = uploaded.read().decode("utf-8")
+        chapters, order = split_into_chapters(text)
+        project["chapters"] = chapters
+        project["order"] = order
+        st.session_state.active_chapter = order[0] if order else None
+        st.success("Manuscript imported and split into chapters.")
 
-# ================== MAIN UI ==================
-left, right = st.columns(2)
+    st.divider()
+    st.header("📚 Chapters")
 
+    for name in project["order"]:
+        if st.button(name, key=f"chap_{name}"):
+            st.session_state.active_chapter = name
+
+# ================== MAIN LAYOUT ==================
+left, right = st.columns([1, 3])
+
+# ================== CHAPTER NAV ==================
 with left:
-    st.header("Writing")
+    st.subheader("🧭 Chapter Navigator")
 
-    filter_stage = st.selectbox("Filter by workflow stage", ["All"] + WORKFLOW_STAGES)
+    if project["order"]:
+        for idx, name in enumerate(project["order"]):
+            st.write(f"{idx+1}. {name}")
 
-    chapter_names = list(project["chapters"].keys())
-    if filter_stage != "All":
-        chapter_names = [
-            c for c in chapter_names
-            if project["chapters"][c]["status"] == filter_stage
-        ]
+        st.divider()
 
-    chapter = st.selectbox("Chapter", chapter_names)
+        if st.session_state.active_chapter:
+            new_name = st.text_input(
+                "Rename chapter",
+                value=st.session_state.active_chapter
+            )
 
-    chapter_data = project["chapters"][chapter]
+            if st.button("✏️ Rename"):
+                if new_name not in project["chapters"]:
+                    content = project["chapters"].pop(st.session_state.active_chapter)
+                    project["chapters"][new_name] = content
+                    index = project["order"].index(st.session_state.active_chapter)
+                    project["order"][index] = new_name
+                    st.session_state.active_chapter = new_name
 
-    chapter_data["status"] = st.selectbox(
-        "Workflow status",
-        WORKFLOW_STAGES,
-        index=WORKFLOW_STAGES.index(chapter_data["status"])
-    )
+        st.divider()
 
-    chapter_data["text"] = st.text_area(
-        "Chapter Text",
-        chapter_data["text"],
-        height=420
-    )
+        move_up = st.button("⬆ Move Up")
+        move_down = st.button("⬇ Move Down")
 
-    new_chapter = st.text_input("New chapter name")
-    if st.button("Add Chapter") and new_chapter:
-        project["chapters"][new_chapter] = {
-            "text": "",
-            "status": "Draft"
-        }
+        if st.session_state.active_chapter:
+            idx = project["order"].index(st.session_state.active_chapter)
+            if move_up and idx > 0:
+                project["order"][idx], project["order"][idx-1] = (
+                    project["order"][idx-1],
+                    project["order"][idx]
+                )
+            if move_down and idx < len(project["order"]) - 1:
+                project["order"][idx], project["order"][idx+1] = (
+                    project["order"][idx+1],
+                    project["order"][idx]
+                )
 
+# ================== CHAPTER EDITOR ==================
 with right:
-    st.header("Workflow Overview")
+    st.subheader("✍️ Chapter Editor")
 
-    for stage in WORKFLOW_STAGES:
-        st.subheader(stage)
-        for name, data in project["chapters"].items():
-            if data["status"] == stage:
-                st.markdown(f"- {name}")
+    if st.session_state.active_chapter:
+        chapter = st.session_state.active_chapter
 
-    st.info("AI tools will be added after workflow validation.")
+        content = st.text_area(
+            label=f"Editing: {chapter}",
+            value=project["chapters"].get(chapter, ""),
+            height=600
+        )
 
+        # Autosave
+        project["chapters"][chapter] = content
+
+        st.caption("✔ Autosaved")
+
+    else:
+        st.info("Import a manuscript or select a chapter to begin.")
