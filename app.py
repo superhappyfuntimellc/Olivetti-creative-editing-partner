@@ -3,11 +3,11 @@ from openai import OpenAI
 
 # ================== SETUP ==================
 st.set_page_config(layout="wide")
-st.title("🖋️ Olivetti — Writer OS v16.0")
+st.title("🖋️ Olivetti — Writer OS v17.0")
 
 client = OpenAI()
 
-# ================== CONSTANTS ==================
+# ================== STYLES ==================
 GENRE_STYLES = {
     "Comedy": "Witty, playful, sharp timing.",
     "Noir": "Hard-edged, cynical, moody.",
@@ -18,7 +18,7 @@ GENRE_STYLES = {
 
 VOICE_PRESETS = {
     "Default": "Neutral, clear.",
-    "Literary": "Elegant prose, metaphor.",
+    "Literary": "Elegant prose, metaphor-rich.",
     "Minimal": "Lean, restrained.",
     "Noir": "Dry, blunt."
 }
@@ -39,8 +39,7 @@ if "projects" not in st.session_state:
             "chapters": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
-            "tense": "Past",
-            "style_sample": ""
+            "tense": "Past"
         }
     }
 
@@ -68,6 +67,14 @@ def instruction_for(tool):
         "Brainstorm": "Generate ideas or next beats."
     }[tool]
 
+def export_project_text(project):
+    lines = []
+    lines.append(project["bible"].get("title", "").upper())
+    lines.append("\n")
+    for name, text in project["chapters"].items():
+        lines.append(f"\n\n### {name}\n\n{text}")
+    return "\n".join(lines)
+
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.header("📁 Projects")
@@ -91,10 +98,35 @@ with st.sidebar:
             "chapters": {"Chapter 1": ""},
             "genre_style": "Lyrical",
             "voice": "Default",
-            "tense": "Past",
-            "style_sample": ""
+            "tense": "Past"
         }
         st.stop()
+
+    st.divider()
+    st.header("📥 Import")
+
+    upload = st.file_uploader("Import TXT", type=["txt"])
+    import_mode = st.radio("Import as", ["New Project", "New Chapter"])
+
+    if upload:
+        content = upload.read().decode("utf-8")
+        if st.button("Import"):
+            if import_mode == "New Project":
+                projects[upload.name] = {
+                    "bible": {
+                        "title": upload.name.replace(".txt",""),
+                        "genre": "", "tone": "",
+                        "themes": "", "world_rules": "", "characters": []
+                    },
+                    "outline": "",
+                    "chapters": {"Chapter 1": content},
+                    "genre_style": "Lyrical",
+                    "voice": "Default",
+                    "tense": "Past"
+                }
+            else:
+                project["chapters"][upload.name] = content
+            st.stop()
 
     st.divider()
     st.header("📘 Story Bible")
@@ -105,28 +137,14 @@ with st.sidebar:
     sb["themes"] = st.text_area("Themes", sb["themes"])
     sb["world_rules"] = st.text_area("World Rules", sb["world_rules"])
 
-    st.subheader("Characters")
-    cname = st.text_input("Character name")
-    cdesc = st.text_area("Character description")
-    if st.button("Add Character") and cname:
-        sb["characters"].append({"name": cname, "description": cdesc})
-
     st.divider()
-    st.header("🧭 Outline")
-    project["outline"] = st.text_area("Outline / Beats", project["outline"], height=200)
-
-    if st.button("Generate Chapters from Outline"):
-        beats = [b.strip() for b in project["outline"].split("\n") if b.strip()]
-        project["chapters"] = {f"Chapter {i+1}": beat for i, beat in enumerate(beats)}
-        st.stop()
-
-    st.divider()
-    st.header("🔍 Find & Replace")
-    find = st.text_input("Find")
-    replace = st.text_input("Replace")
-    if st.button("Replace All") and find:
-        for k in project["chapters"]:
-            project["chapters"][k] = project["chapters"][k].replace(find, replace)
+    st.header("📤 Export")
+    export_text = export_project_text(project)
+    st.download_button(
+        "Download Project (.txt)",
+        export_text,
+        file_name=f"{current}.txt"
+    )
 
 # ================== MAIN UI ==================
 left, right = st.columns(2)
@@ -153,18 +171,14 @@ with left:
                 project["chapters"] = {k: project["chapters"][k] for k in chapter_names}
                 st.stop()
     with col3:
-        if st.button("❌ Delete Chapter"):
+        if st.button("❌ Delete"):
             project["chapters"].pop(chapter)
             st.stop()
-
-    new_chapter = st.text_input("New chapter name")
-    if st.button("Add Chapter") and new_chapter:
-        project["chapters"][new_chapter] = ""
 
     project["chapters"][chapter] = st.text_area(
         "Chapter Text",
         project["chapters"][chapter],
-        height=350
+        height=380
     )
 
     tool = st.selectbox(
