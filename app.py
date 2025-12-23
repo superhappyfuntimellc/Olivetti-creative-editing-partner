@@ -6,21 +6,18 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="Olivetti 21.0")
+st.set_page_config(layout="wide", page_title="Olivetti 21.2")
 client = OpenAI()
 
 # ============================================================
 # SESSION STATE
 # ============================================================
-defaults = {
-    "projects": {},
-    "current_project": None,
-    "current_chapter": 0,
-    "mode": "Writing"
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+if "projects" not in st.session_state:
+    st.session_state.projects = {}
+if "current_project" not in st.session_state:
+    st.session_state.current_project = None
+if "current_chapter" not in st.session_state:
+    st.session_state.current_chapter = 0
 
 # ============================================================
 # HELPERS
@@ -42,17 +39,17 @@ def make_story_bible():
         "world": "",
         "timeline": "",
         "themes": "",
-        "voice": ""
+        "voice": "",
+        "pov": "Close Third",
+        "tense": "Past"
     }
 
 def make_chapter(title, text):
     return {
         "title": title,
         "text": text,
-        "workflow": "Draft",
-        "status": "Needs Work",
+        "outline": "",
         "notes": "",
-        "snapshot": None,
         "versions": []
     }
 
@@ -65,71 +62,93 @@ def split_into_chapters(text):
         chapters.append(make_chapter("Chapter 1", text))
     return chapters
 
-def save_snapshot(ch):
-    ch["snapshot"] = ch["text"]
-    ch["versions"].append({
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": ch["text"]
-    })
-
 def build_story_bible(text):
     prompt = f"""
-Analyze the manuscript and extract a STORY BIBLE.
+Extract a STORY BIBLE.
 
-Return clearly labeled sections:
-
-CHARACTERS:
-- Name, role, traits, voice notes
-
-WORLD / LORE:
-- Setting rules, constraints
-
-TIMELINE:
-- Major events in order
-
-THEMES:
-- Core themes and motifs
-
-VOICE:
-- POV, tense, cadence, diction notes
-
-Do not summarize the plot.
-Do not rewrite prose.
+Return labeled sections only:
+CHARACTERS
+WORLD
+TIMELINE
+THEMES
+VOICE
+POV
+TENSE
 
 MANUSCRIPT:
 {text}
 """
     raw = llm(
-        "You are a senior developmental editor building a canonical story bible.",
+        "You are a senior developmental editor.",
         prompt,
         0.3
     )
 
-    sections = {
-        "characters": "",
-        "world": "",
-        "timeline": "",
-        "themes": "",
-        "voice": ""
-    }
-
+    bible = make_story_bible()
     current = None
     for line in raw.splitlines():
-        key = line.strip().lower()
-        if key.startswith("characters"):
+        l = line.lower()
+        if l.startswith("characters"):
             current = "characters"
-        elif key.startswith("world"):
+        elif l.startswith("world"):
             current = "world"
-        elif key.startswith("timeline"):
+        elif l.startswith("timeline"):
             current = "timeline"
-        elif key.startswith("themes"):
+        elif l.startswith("themes"):
             current = "themes"
-        elif key.startswith("voice"):
+        elif l.startswith("voice"):
             current = "voice"
+        elif l.startswith("pov"):
+            current = "pov"
+        elif l.startswith("tense"):
+            current = "tense"
         elif current:
-            sections[current] += line + "\n"
+            bible[current] += line + "\n"
 
-    return sections
+    return bible
+
+def update_chapters_outlines_pov_tense(full_text, bible, chapters):
+    prompt = f"""
+Using the STORY BIBLE as canon, update chapter titles
+and generate outlines.
+
+Also:
+- Enforce POV: {bible['pov']}
+- Enforce TENSE: {bible['tense']}
+- Flag any POV or tense drift in outlines (do not rewrite prose)
+
+Rules:
+- Do NOT rewrite prose
+- Do NOT delete chapters
+- One outline per chapter
+
+Return format:
+CHAPTER 1 TITLE:
+OUTLINE:
+
+CHAPTER 2 TITLE:
+OUTLINE:
+
+STORY BIBLE:
+{bible}
+
+MANUSCRIPT:
+{full_text}
+"""
+    raw = llm(
+        "You are a developmental editor maintaining technical consistency.",
+        prompt,
+        0.3
+    )
+
+    blocks = re.split(r"CHAPTER\s+\d+ TITLE:", raw)[1:]
+    for i, block in enumerate(blocks):
+        if i >= len(chapters):
+            break
+        lines = block.strip().splitlines()
+        if lines:
+            chapters[i]["title"] = lines[0].strip()
+            chapters[i]["outline"] = "\n".join(lines[1:]).strip()
 
 # ============================================================
 # SIDEBAR
@@ -160,23 +179,14 @@ with st.sidebar:
                 st.session_state.current_project
             ]
             project["chapters"] = split_into_chapters(text)
-
             with st.spinner("Building Story Bible…"):
                 project["bible"] = build_story_bible(text)
-
-    st.divider()
-    st.radio(
-        "Mode",
-        ["Writing", "Editorial"],
-        horizontal=True,
-        key="mode"
-    )
 
 # ============================================================
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("Olivetti 21.0")
+    st.title("Olivetti 21.2")
     st.write("Create or select a project to begin.")
     st.stop()
 
@@ -184,16 +194,12 @@ project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
 bible = project["bible"]
 
-if not chapters:
-    st.write("Import a manuscript to begin.")
-    st.stop()
-
-ch = chapters[st.session_state.current_chapter]
+full_text = "\n\n".join(ch["text"] for ch in chapters)
 
 left, center, right = st.columns([1.1, 3.4, 2.5])
 
 # ============================================================
-# LEFT — NAV
+# LEFT — CHAPTERS
 # ============================================================
 with left:
     st.subheader("Chapters")
@@ -201,27 +207,31 @@ with left:
         if st.button(f"{i+1}. {c['title']}"):
             st.session_state.current_chapter = i
 
-    ch["title"] = st.text_input("Title", ch["title"])
-
 # ============================================================
 # CENTER — WRITING
 # ============================================================
+ch = chapters[st.session_state.current_chapter]
 with center:
-    st.subheader("Chapter Text")
-
-    c1, c2 = st.columns(2)
-    if c1.button("Save Snapshot"):
-        save_snapshot(ch)
-    if c2.button("Undo Snapshot") and ch["snapshot"]:
-        ch["text"] = ch["snapshot"]
-
+    st.subheader(ch["title"])
     ch["text"] = st.text_area("", ch["text"], height=520)
 
 # ============================================================
-# RIGHT — STORY BIBLE (F1)
+# RIGHT — STORY BIBLE + POV/TENSE
 # ============================================================
 with right:
     st.subheader("Story Bible")
+
+    bible["pov"] = st.selectbox(
+        "Point of View (Canonical)",
+        ["First Person", "Close Third", "Distant Third", "Omniscient"],
+        index=["First Person", "Close Third", "Distant Third", "Omniscient"].index(bible["pov"])
+    )
+
+    bible["tense"] = st.selectbox(
+        "Tense (Canonical)",
+        ["Past", "Present"],
+        index=["Past", "Present"].index(bible["tense"])
+    )
 
     tab = st.selectbox(
         "Section",
@@ -236,7 +246,16 @@ with right:
         "Voice": "voice"
     }
 
-    k = key_map[tab]
-    bible[k] = st.text_area(tab, bible[k], height=500)
+    bible[key_map[tab]] = st.text_area(
+        tab, bible[key_map[tab]], height=260
+    )
 
-st.caption("Olivetti 21.0 — Story Bible Engine")
+    st.divider()
+    if st.button("Update Chapters, Outlines, POV & Tense"):
+        with st.spinner("Synchronizing manuscript…"):
+            update_chapters_outlines_pov_tense(
+                full_text, bible, chapters
+            )
+        st.success("Chapters, outlines, POV, and tense synced.")
+
+st.caption("Olivetti 21.2 — Canonical POV & Tense Control")
