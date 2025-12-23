@@ -62,6 +62,41 @@ VOICES = {
 # ============================================================
 # HELPERS
 # ============================================================
+def ai_rewrite_preview(text):
+    vb = st.session_state.voice_bible
+    voice_sample = ""
+
+    if st.session_state.active_voice:
+        voice_sample = st.session_state.trained_voices[
+            st.session_state.active_voice
+        ]["sample"]
+
+    prompt = f"""
+Rewrite the following text.
+
+STYLE CONTROLS:
+Genre: {vb['Genre']}
+POV: {vb['POV']}
+Tense: {vb['Tense']}
+Intensity: {vb['Intensity']}
+
+MATCH THIS VOICE (if provided):
+{voice_sample}
+
+TEXT:
+{text}
+"""
+
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": "You are a professional fiction editor."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=vb["Intensity"]
+    )
+    return r.output_text
+
 def autosave():
     st.session_state.last_autosave = datetime.now().strftime("%H:%M:%S")
 
@@ -261,6 +296,22 @@ with right:
             index=list(VOICES.keys()).index(st.session_state.voice_bible["Voice"]),
             on_change=autosave
         )
+    st.divider()
+    if st.button("✨ Rewrite Preview (AI)"):
+        st.session_state["rewrite_preview"] = ai_rewrite_preview(
+            chapter["text"]
+        )
+
+    if "rewrite_preview" in st.session_state:
+        st.text_area(
+            "Preview",
+            st.session_state["rewrite_preview"],
+            height=220
+        )
+        if st.button("✅ Accept Rewrite"):
+            save_version(chapter)
+            chapter["text"] = st.session_state.pop("rewrite_preview")
+            autosave()
 
     with vtabs[1]:
         st.session_state.voice_bible["POV"] = st.selectbox(
@@ -286,5 +337,6 @@ with right:
         )
 
 st.caption("Olivetti Desk v12.2 — Autosave always on • Nothing is lost")
+
 
 
