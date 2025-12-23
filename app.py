@@ -5,7 +5,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="Olivetti 22.3")
+st.set_page_config(layout="wide", page_title="Olivetti 23.0")
 client = OpenAI()
 
 # ============================================================
@@ -33,26 +33,24 @@ def llm(system, prompt, temp=0.3):
     return r.output_text
 
 # ============================================================
-# DATA
+# DATA STRUCTURES
 # ============================================================
-def make_voice_bible():
+def make_instruction_bible():
     return {
-        "sentence_architecture": "",
-        "rhythm": "",
-        "diction": "",
-        "distance": "",
-        "intensity": "",
-        "forbidden": ""
+        "Default Literary": "Write with restraint, precision, and interiority.",
+        "Hard Edit": "Be blunt. Cut excess. Preserve voice. No mercy.",
+        "Developmental": "Focus on structure, clarity, and narrative intent.",
+        "Experimental": "Take risks. Push language. Surprise the reader."
     }
 
 def make_project():
     return {
         "chapters": [],
-        "voice_bible": make_voice_bible()
+        "instruction_bible": make_instruction_bible()
     }
 
 def make_chapter(title, text):
-    return {"title": title, "text": text, "outline": ""}
+    return {"title": title, "text": text}
 
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
@@ -64,54 +62,40 @@ def split_into_chapters(text):
     return chapters
 
 # ============================================================
-# VOICE BIBLE TRAINER
+# AI ACTIONS
 # ============================================================
-def train_voice_bible(sample):
+def rewrite_with_instructions(text, instructions):
     prompt = f"""
-Analyze this passage and extract a VOICE BIBLE.
+INSTRUCTIONS (MANDATORY):
+{instructions}
 
-Return labeled sections ONLY:
-
-SENTENCE ARCHITECTURE
-RHYTHM & CADENCE
-DICTION RULES
-NARRATIVE DISTANCE
-INTENSITY ENVELOPE
-FORBIDDEN MOVES
-
-Do not rewrite. Do not summarize the passage.
+Rewrite the text accordingly.
+Preserve meaning unless instructed otherwise.
 
 TEXT:
-{sample}
+{text}
 """
-    raw = llm("You are a master literary stylist.", prompt, 0.3)
+    return llm("You are a professional fiction editor.", prompt, 0.4)
 
-    bible = make_voice_bible()
-    current = None
-    for line in raw.splitlines():
-        l = line.lower()
-        if "sentence architecture" in l:
-            current = "sentence_architecture"
-        elif "rhythm" in l:
-            current = "rhythm"
-        elif "diction" in l:
-            current = "diction"
-        elif "distance" in l:
-            current = "distance"
-        elif "intensity" in l:
-            current = "intensity"
-        elif "forbidden" in l:
-            current = "forbidden"
-        elif current:
-            bible[current] += line + "\n"
+def comment_with_instructions(text, instructions):
+    prompt = f"""
+INSTRUCTIONS (MANDATORY):
+{instructions}
 
-    return bible
+Give margin comments only.
+No rewriting.
+
+TEXT:
+{text}
+"""
+    return llm("You are a senior editor.", prompt, 0.3)
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
     st.header("Projects")
+
     projects = list(st.session_state.projects.keys())
     choice = st.selectbox("Project", ["— New —"] + projects)
 
@@ -136,18 +120,18 @@ with st.sidebar:
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("🫒 Olivetti 22.3")
+    st.title("🫒 Olivetti 23.0")
     st.write("Create or select a project.")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
-voice_bible = project["voice_bible"]
+instruction_bible = project["instruction_bible"]
 
 left, center, right = st.columns([1.2, 3.2, 2.6])
 
 # ============================================================
-# LEFT
+# LEFT — CHAPTERS
 # ============================================================
 with left:
     st.subheader("Chapters")
@@ -156,7 +140,7 @@ with left:
             st.session_state.current_chapter = i
 
 # ============================================================
-# CENTER
+# CENTER — TEXT
 # ============================================================
 chapter = chapters[st.session_state.current_chapter]
 with center:
@@ -164,37 +148,48 @@ with center:
     chapter["text"] = st.text_area("Text", chapter["text"], height=540)
 
 # ============================================================
-# RIGHT — VOICE BIBLE
+# RIGHT — INSTRUCTION BIBLE + TOOLS
 # ============================================================
 with right:
-    st.subheader("🎙 Voice Bible")
+    st.subheader("📜 Instruction Bible")
 
-    sample = st.text_area(
-        "Train from your strongest passage",
-        height=140
+    names = list(instruction_bible.keys())
+    selected = st.selectbox("Select Instruction Set", names)
+
+    instruction_bible[selected] = st.text_area(
+        "Instructions",
+        instruction_bible[selected],
+        height=220
     )
 
-    if st.button("Build / Update Voice Bible") and sample:
-        with st.spinner("Extracting voice canon…"):
-            project["voice_bible"] = train_voice_bible(sample)
-        st.success("Voice Bible updated.")
+    new_name = st.text_input("Add New Instruction Set")
+    if st.button("Add Instruction Set") and new_name:
+        instruction_bible[new_name] = "Describe how the AI should behave."
+        st.experimental_rerun()
 
-    tabs = {
-        "Sentence": "sentence_architecture",
-        "Rhythm": "rhythm",
-        "Diction": "diction",
-        "Distance": "distance",
-        "Intensity": "intensity",
-        "Forbidden": "forbidden"
-    }
+    st.divider()
+    st.subheader("AI Actions")
 
-    section = st.selectbox("Section", list(tabs.keys()))
-    key = tabs[section]
+    if st.button("Rewrite Using Selected Instructions"):
+        with st.spinner("Rewriting…"):
+            chapter["preview"] = rewrite_with_instructions(
+                chapter["text"],
+                instruction_bible[selected]
+            )
 
-    voice_bible[key] = st.text_area(
-        section,
-        voice_bible[key],
-        height=260
-    )
+    if st.button("Comment Using Selected Instructions"):
+        with st.spinner("Commenting…"):
+            chapter["comments"] = comment_with_instructions(
+                chapter["text"],
+                instruction_bible[selected]
+            )
 
-st.caption("Olivetti 22.3 — Voice Is Canon")
+    if chapter.get("preview"):
+        st.text_area("Rewrite Preview", chapter["preview"], height=200)
+        if st.button("Accept Rewrite"):
+            chapter["text"] = chapter.pop("preview")
+
+    if chapter.get("comments"):
+        st.text_area("Comments", chapter["comments"], height=200)
+
+st.caption("Olivetti 23.0 — Instructions Are Canon")
