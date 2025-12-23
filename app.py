@@ -52,15 +52,6 @@ TOOLS = [
 # =========================================================
 # HELPERS
 # =========================================================
-def split_into_chapters(text):
-    parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
-    chapters = []
-    for i in range(1, len(parts), 2):
-        chapters.append(new_chapter(parts[i].title(), parts[i+1].strip()))
-    if not chapters:
-        chapters.append(new_chapter("Chapter 1", text))
-    return chapters
-
 def new_chapter(title, text):
     return {
         "title": title,
@@ -69,8 +60,17 @@ def new_chapter(title, text):
         "locked": False,
         "workflow": "Draft",
         "versions": [],
-        "outputs": []
+        "outputs": {tool: [] for tool in TOOLS},
     }
+
+def split_into_chapters(text):
+    parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
+    chapters = []
+    for i in range(1, len(parts), 2):
+        chapters.append(new_chapter(parts[i].title(), parts[i+1].strip()))
+    if not chapters:
+        chapters.append(new_chapter("Chapter 1", text))
+    return chapters
 
 def save_version(ch):
     ch["versions"].append({
@@ -150,7 +150,7 @@ if not chapters:
 idx = st.session_state.current_chapter
 chapter = chapters[idx]
 
-left, center, right = st.columns([1.3, 3.2, 2.5])
+left, center, right = st.columns([1.3, 3.2, 2.7])
 
 # =========================================================
 # LEFT — STRUCTURE
@@ -184,14 +184,14 @@ with center:
     chapter["notes"] = st.text_area("", chapter["notes"], height=120)
 
 # =========================================================
-# RIGHT — TOOLS + OUTPUT
+# RIGHT — TOOLS + OUTPUTS
 # =========================================================
 with right:
     st.subheader("🧰 Tools")
 
     genre = st.selectbox("Genre", list(GENRES.keys()))
     voice = st.selectbox("Voice", list(VOICES.keys()))
-    sample = st.text_area("Style Sample (optional)", height=80)
+    sample = st.text_area("Style Sample (optional)", height=70)
 
     for tool in TOOLS:
         if st.button(tool):
@@ -200,29 +200,30 @@ with right:
             else:
                 with st.spinner(f"{tool}…"):
                     output = run_tool(tool, chapter["text"], genre, voice, sample)
-                    chapter["outputs"].insert(0, {
-                        "tool": tool,
+                    chapter["outputs"][tool].insert(0, {
                         "time": datetime.now().strftime("%H:%M:%S"),
                         "text": output
                     })
 
     st.divider()
-    st.subheader("🪞 Output Preview")
+    st.subheader("🪞 Outputs (by Tool)")
 
-    if chapter["outputs"]:
-        current = chapter["outputs"][0]
-        st.caption(f"{current['tool']} · {current['time']}")
-        st.text_area("", current["text"], height=220)
+    for tool, outputs in chapter["outputs"].items():
+        if outputs:
+            with st.expander(f"{tool} ({len(outputs)})", expanded=False):
+                for i, out in enumerate(outputs):
+                    st.caption(out["time"])
+                    st.text_area("", out["text"], height=160, key=f"{tool}_{i}")
 
-        col1, col2 = st.columns(2)
-        if col1.button("✅ Accept"):
-            save_version(chapter)
-            chapter["text"] = current["text"]
-            chapter["outputs"].clear()
+                    col1, col2 = st.columns(2)
+                    if col1.button("✅ Accept", key=f"acc_{tool}_{i}"):
+                        save_version(chapter)
+                        chapter["text"] = out["text"]
+                        chapter["outputs"] = {t: [] for t in TOOLS}
+                        st.experimental_rerun()
 
-        if col2.button("❌ Reject"):
-            chapter["outputs"].pop(0)
-    else:
-        st.write("No output yet.")
+                    if col2.button("❌ Reject", key=f"rej_{tool}_{i}"):
+                        outputs.pop(i)
+                        st.experimental_rerun()
 
-st.caption("Olivetti Studio — everything visible, nothing lost")
+st.caption("Olivetti Studio — independent tools, deliberate choice")
