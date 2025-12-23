@@ -1,11 +1,13 @@
 import streamlit as st
 import re
 from datetime import datetime
+from openai import OpenAI
 
 # ============================================================
 # CONFIG
 # ============================================================
 st.set_page_config(page_title="Olivetti", layout="wide")
+client = OpenAI()
 
 # ============================================================
 # SESSION STATE
@@ -16,6 +18,7 @@ def init_state():
         "current_project": None,
         "current_chapter": 0,
         "lock_chapter": False,
+        "preview_text": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -74,6 +77,40 @@ def get_current():
     st.session_state.current_chapter = idx
     return project, project["chapters"], project["chapters"][idx]
 
+
+def call_llm(system, prompt, temperature=0.5):
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=temperature,
+    )
+    return r.output_text
+
+
+def ai_rewrite(mode, text):
+    prompts = {
+        "Rewrite": "Rewrite this chapter, preserving voice and intent.",
+        "Tighten": "Tighten prose by removing redundancy and sharpening sentences.",
+        "Tension": "Increase narrative tension and momentum.",
+        "Clarity": "Clarify action, motivation, and cause-effect.",
+        "Dialogue": "Polish dialogue for realism and subtext.",
+        "Compress": "Reduce length by 15% without losing meaning."
+    }
+
+    prompt = f"""{prompts[mode]}
+
+TEXT:
+{text}
+"""
+    return call_llm(
+        "You are a professional fiction editor.",
+        prompt,
+        temperature=0.55
+    )
+
 # ============================================================
 # SIDEBAR — PROJECTS
 # ============================================================
@@ -116,7 +153,7 @@ project, chapters, chapter = get_current()
 # ============================================================
 left, center, right = st.columns([1.2, 3.2, 2])
 
-# ---------------- LEFT — STRUCTURE ----------------
+# ---------------- LEFT ----------------
 with left:
     st.subheader("Chapters")
     for i, ch in enumerate(chapters):
@@ -124,59 +161,59 @@ with left:
             st.session_state.current_chapter = i
 
     chapter["title"] = st.text_input("Chapter title", chapter["title"])
-
-    st.divider()
     st.session_state.lock_chapter = st.checkbox(
         "🔒 Lock Chapter",
         value=st.session_state.lock_chapter
     )
 
-# ---------------- CENTER — WRITING ----------------
+# ---------------- CENTER ----------------
 with center:
     st.subheader("Draft")
 
     chapter["text"] = st.text_area(
         "",
         chapter["text"],
-        height=560,
+        height=520,
         disabled=st.session_state.lock_chapter
     )
 
     if st.button("Save Version"):
         save_version(chapter)
 
-# ---------------- RIGHT — EDITORIAL TOOLS ----------------
+    if st.session_state.preview_text:
+        st.subheader("Preview (Not Applied)")
+        st.text_area(
+            "",
+            st.session_state.preview_text,
+            height=260
+        )
+
+        colA, colB = st.columns(2)
+        if colA.button("Accept Rewrite"):
+            save_version(chapter)
+            chapter["text"] = st.session_state.preview_text
+            st.session_state.preview_text = None
+
+        if colB.button("Discard Preview"):
+            st.session_state.preview_text = None
+
+# ---------------- RIGHT ----------------
 with right:
-    st.subheader("Find & Replace")
+    st.subheader("AI Rewrite Suite")
 
-    find = st.text_input("Find")
-    replace = st.text_input("Replace")
-    case = st.checkbox("Case sensitive")
+    mode = st.selectbox(
+        "Tool",
+        ["Rewrite", "Tighten", "Tension", "Clarity", "Dialogue", "Compress"]
+    )
 
-    if find:
-        flags = 0 if case else re.IGNORECASE
-        matches = re.findall(find, chapter["text"], flags)
-        st.caption(f"{len(matches)} matches found")
+    if st.button(
+        "Run Tool",
+        disabled=st.session_state.lock_chapter
+    ):
+        with st.spinner("Working…"):
+            st.session_state.preview_text = ai_rewrite(
+                mode,
+                chapter["text"]
+            )
 
-        if st.button("Replace All", disabled=st.session_state.lock_chapter):
-            chapter["text"] = re.sub(find, replace, chapter["text"], flags=flags)
-
-    st.divider()
-    st.subheader("Synonyms")
-
-    word = st.text_input("Word")
-    if word:
-        st.write("Suggestions:")
-        st.write([f"{word}_alt1", f"{word}_alt2", f"{word}_alt3"])
-
-    st.divider()
-    st.subheader("Comments")
-
-    comment = st.text_input("Add comment")
-    if st.button("Add Comment"):
-        chapter["comments"].append(comment)
-
-    for c in chapter["comments"]:
-        st.info(c)
-
-st.caption("Olivetti 26.0 — Editorial Tools Locked")
+st.caption("Olivetti 27.0 — AI Rewrite Suite")
