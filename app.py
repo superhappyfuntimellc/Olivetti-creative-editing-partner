@@ -1,207 +1,116 @@
 import streamlit as st
 import re
 from datetime import datetime
-from typing import List, Dict
+from openai import OpenAI
 
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(
-    page_title="Olivetti 24.0",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-# =========================
-# ITALIAN MODERN DESK SKIN
-# =========================
-st.markdown("""
-<style>
-
-/* --- Global --- */
-html, body, [class*="css"] {
-    font-family: "IBM Plex Serif", "Georgia", serif;
-    background-color: #f6f1eb;
-    color: #2b2b2b;
-}
-
-/* --- Main writing surface --- */
-textarea {
-    background-color: #fbf9f6 !important;
-    border: 1px solid #d8d2cb !important;
-    border-radius: 10px !important;
-    padding: 16px !important;
-    font-size: 1.05rem !important;
-    line-height: 1.6 !important;
-}
-
-/* --- Inputs & Selects --- */
-input, select {
-    background-color: #fbf9f6 !important;
-    border-radius: 8px !important;
-    border: 1px solid #d8d2cb !important;
-}
-
-/* --- Buttons --- */
-button {
-    background-color: #ece6df !important;
-    color: #2b2b2b !important;
-    border-radius: 8px !important;
-    border: 1px solid #d0c7bd !important;
-    font-weight: 500 !important;
-}
-
-button:hover {
-    background-color: #e0d7ce !important;
-}
-
-/* --- Accent (Olivetti red) --- */
-div[data-baseweb="slider"] > div {
-    color: #b22222;
-}
-
-/* --- Sidebar --- */
-section[data-testid="stSidebar"] {
-    background-color: #efe9e2;
-    border-right: 1px solid #d6cdc3;
-}
-
-/* --- Headers --- */
-h1, h2, h3 {
-    font-weight: 500;
-    letter-spacing: 0.3px;
-}
-
-/* --- Focus Mode Calm --- */
-body:has(input[type="checkbox"]:checked) textarea {
-    background-color: #fffdfb !important;
-    box-shadow: 0 0 0 1px #e6dfd7;
-}
-
-/* --- Reduce visual noise --- */
-hr {
-    border: none;
-    border-top: 1px solid #ddd4cb;
-}
-
-/* --- Caption --- */
-footer {
-    opacity: 0.6;
-}
-
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(layout="wide", page_title="Olivetti 20.1")
+client = OpenAI()
 
 # =========================
-# OPTIONAL LOCAL DRAG SUPPORT
+# SESSION STATE SAFETY
 # =========================
-DRAG_AVAILABLE = False
-try:
-    from streamlit_sortables import sort_items
-    DRAG_AVAILABLE = True
-except Exception:
-    DRAG_AVAILABLE = False
+st.session_state.setdefault("projects", {})
+st.session_state.setdefault("current_project", None)
+st.session_state.setdefault("current_chapter", 0)
 
 # =========================
-# SESSION STATE INIT
+# STYLE REGISTRIES
 # =========================
-def init_state():
-    defaults = {
-        "projects": {},
-        "current_project": None,
-        "current_chapter": 0,
-        "focus_mode": False,
-        "pov": "Close Third",
-        "tense": "Past",
-        "intensity": 0.5,
-        "voice_bible": "",
-        "voice_locked": False,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+GENRES = {
+    "Literary": "Elegant prose, interiority, subtle metaphor.",
+    "Noir": "Hard-edged, cynical, concrete imagery.",
+    "Thriller": "Fast pacing, tension, urgency.",
+    "Comedy": "Timing, irony, wit.",
+    "Lyrical": "Rhythmic, image-forward language."
+}
 
-init_state()
+VOICES = {
+    "Neutral Editor": "Invisible, professional tone.",
+    "Minimal": "Spare, restrained sentences.",
+    "Expressive": "Emotional, dynamic voice.",
+    "Hardboiled": "Dry, blunt, unsentimental.",
+    "Poetic": "Figurative, flowing prose."
+}
 
-# =========================
-# STYLE PRESETS
-# =========================
-POVS = ["First", "Close Third", "Omniscient"]
+POVS = ["First Person", "Close Third", "Omniscient"]
 TENSES = ["Past", "Present"]
 
 # =========================
 # HELPERS
 # =========================
-def safe_index(lst: list, idx: int):
-    if not lst:
-        return None
-    return lst[min(max(idx, 0), len(lst) - 1)]
-
-def split_into_chapters(text: str) -> List[Dict]:
+def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
     for i in range(1, len(parts), 2):
-        chapters.append({
-            "title": parts[i].title(),
-            "text": parts[i + 1].strip(),
-            "outline": "",
-            "workflow": "Draft",
-            "versions": [],
-        })
+        chapters.append(new_chapter(parts[i], parts[i+1]))
     if not chapters:
-        chapters.append({
-            "title": "Chapter 1",
-            "text": text.strip(),
-            "outline": "",
-            "workflow": "Draft",
-            "versions": [],
-        })
+        chapters.append(new_chapter("Chapter 1", text))
     return chapters
+
+def new_chapter(title, text):
+    return {
+        "title": title.title(),
+        "text": text.strip(),
+        "outline": "",
+        "workflow": "Draft",
+        "versions": []
+    }
 
 def save_version(ch):
     ch["versions"].append({
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": ch["text"],
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "text": ch["text"]
     })
 
-# =========================
-# AI DISPATCHER (MID PROFILE)
-# =========================
-def ai_stub(action: str, text: str) -> str:
-    """
-    Replace internals with OpenAI calls.
-    This stub keeps the app stable.
-    """
-    header = f"[AI: {action} | POV={st.session_state.pov} | Tense={st.session_state.tense} | Intensity={st.session_state.intensity:.2f}]"
-    return f"{header}\n\n{text}"
+def call_llm(system, prompt, temp):
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temp
+    )
+    return r.output_text
+
+def rewrite(text, settings):
+    prompt = f"""
+Rewrite the following text.
+
+GENRE: {settings['genre']}
+VOICE: {settings['voice']}
+POV: {settings['pov']}
+TENSE: {settings['tense']}
+INTENSITY: {settings['intensity']}
+
+TEXT:
+{text}
+"""
+    return call_llm("You are a professional fiction editor.", prompt, settings["intensity"])
+
+def outline(text, settings):
+    prompt = f"""
+Create a bullet-point outline.
+
+GENRE: {settings['genre']}
+VOICE: {settings['voice']}
+
+TEXT:
+{text}
+"""
+    return call_llm("You are a developmental editor.", prompt, 0.3)
 
 # =========================
-# TOP BAR (ALWAYS VISIBLE)
-# =========================
-with st.container():
-    top = st.columns([2, 1, 1, 2, 1, 1])
-    with top[0]:
-        st.markdown("### Olivetti 24.0")
-    with top[1]:
-        st.session_state.pov = st.selectbox("POV", POVS, index=POVS.index(st.session_state.pov))
-    with top[2]:
-        st.session_state.tense = st.selectbox("Tense", TENSES, index=TENSES.index(st.session_state.tense))
-    with top[3]:
-        st.session_state.intensity = st.slider("Intensity", 0.0, 1.0, st.session_state.intensity)
-    with top[4]:
-        st.toggle("Focus", key="focus_mode")
-    with top[5]:
-        st.write(" ")
-
-st.divider()
-
-# =========================
-# SIDEBAR (ALWAYS ACCESSIBLE)
+# SIDEBAR — PROJECTS
 # =========================
 with st.sidebar:
     st.header("Projects")
 
-    projects = list(st.session_state.projects.keys())
-    choice = st.selectbox("Project", ["— New —"] + projects)
+    project_names = list(st.session_state.projects.keys())
+    choice = st.selectbox("Project", ["— New —"] + project_names)
 
     if choice == "— New —":
         name = st.text_input("Project name")
@@ -219,108 +128,87 @@ with st.sidebar:
             st.session_state.projects[st.session_state.current_project]["chapters"] = split_into_chapters(text)
             st.session_state.current_chapter = 0
 
-    st.divider()
-    st.subheader("Voice Bible")
-    st.session_state.voice_bible = st.text_area(
-        "Anchor voice",
-        st.session_state.voice_bible,
-        height=120,
-        disabled=st.session_state.voice_locked,
-    )
-    st.session_state.voice_locked = st.checkbox("Lock Voice Bible")
-
 # =========================
-# MAIN BODY
+# MAIN GUARDS
 # =========================
 if not st.session_state.current_project:
-    st.title("Your digital writing desk")
-    st.write("Create or select a project to begin.")
+    st.title("Olivetti")
+    st.write("Create or select a project.")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
-chapters = project.get("chapters", [])
+chapters = project["chapters"]
 
-chapter = safe_index(chapters, st.session_state.current_chapter)
-if chapter is None:
-    st.write("No chapters yet.")
+if not chapters:
+    st.warning("No chapters yet.")
     st.stop()
+
+if st.session_state.current_chapter >= len(chapters):
+    st.session_state.current_chapter = 0
+
+chapter = chapters[st.session_state.current_chapter]
 
 # =========================
 # LAYOUT
 # =========================
-left, center, right = st.columns([1.1, 3.2, 2.0])
+left, center, right = st.columns([1.2, 2.8, 2.2])
 
-# =========================
-# LEFT — CHAPTERS
-# =========================
+# LEFT — CHAPTER NAV
 with left:
     st.subheader("Chapters")
+    for i, ch in enumerate(chapters):
+        if st.button(f"{i+1}. {ch['title']}", key=f"nav_{i}"):
+            st.session_state.current_chapter = i
 
-    titles = [c["title"] for c in chapters]
-
-    if DRAG_AVAILABLE and not st.session_state.focus_mode:
-        new_order = sort_items(titles)
-        if new_order != titles:
-            reordered = [chapters[titles.index(t)] for t in new_order]
-            project["chapters"] = reordered
-            chapters = reordered
-    else:
-        for i, ch in enumerate(chapters):
-            if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
-                st.session_state.current_chapter = i
-
-# =========================
-# CENTER — WRITING SURFACE
-# =========================
+# CENTER — WRITING
 with center:
-    st.subheader(chapter["title"])
-    chapter["title"] = st.text_input("Title", chapter["title"])
+    st.subheader("Draft")
+    chapter["text"] = st.text_area("", chapter["text"], height=520)
 
-    chapter["text"] = st.text_area(
-        "",
-        chapter["text"],
-        height=600 if st.session_state.focus_mode else 450,
+    col1, col2 = st.columns(2)
+    if col1.button("Save Version"):
+        save_version(chapter)
+    chapter["workflow"] = col2.selectbox(
+        "Workflow",
+        ["Draft", "Revise", "Polish", "Final"],
+        index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
     )
 
-    if not st.session_state.focus_mode:
-        c1, c2 = st.columns(2)
-        if c1.button("Save Version"):
-            save_version(chapter)
-        chapter["workflow"] = c2.selectbox(
-            "Workflow",
-            ["Draft", "Revise", "Polish", "Final"],
-            index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"]),
-        )
-
-# =========================
 # RIGHT — AI TOOLS
-# =========================
 with right:
-    if st.session_state.focus_mode:
-        st.write("Focus mode active.")
-    else:
-        st.subheader("AI Tools")
+    st.subheader("AI Tools")
 
-        if st.button("Rewrite"):
-            chapter["preview"] = ai_stub("Rewrite", chapter["text"])
+    genre = st.selectbox("Genre", list(GENRES.keys()))
+    voice = st.selectbox("Voice", list(VOICES.keys()))
+    pov = st.selectbox("POV", POVS)
+    tense = st.selectbox("Tense", TENSES)
+    intensity = st.slider("Intensity", 0.1, 1.0, 0.5)
 
-        if st.button("Tighten"):
-            chapter["preview"] = ai_stub("Tighten", chapter["text"])
+    settings = {
+        "genre": genre,
+        "voice": voice,
+        "pov": pov,
+        "tense": tense,
+        "intensity": intensity
+    }
 
-        if st.button("Expand"):
-            chapter["preview"] = ai_stub("Expand", chapter["text"])
+    st.divider()
 
-        if st.button("Analyze Scene"):
-            chapter["analysis"] = ai_stub("Analysis", chapter["text"])
+    if st.button("Generate Outline"):
+        chapter["outline"] = outline(chapter["text"], settings)
 
-        if "preview" in chapter:
-            st.text_area("Preview", chapter["preview"], height=200)
-            if st.button("Accept Rewrite"):
-                save_version(chapter)
-                chapter["text"] = chapter.pop("preview")
+    chapter["outline"] = st.text_area("Outline", chapter["outline"], height=160)
 
-        if "analysis" in chapter:
-            st.text_area("Notes", chapter["analysis"], height=160)
+    st.divider()
 
-st.caption("Olivetti 24.0 — Balanced, stable, built to write all day")
+    if st.button("Rewrite (Preview)"):
+        st.session_state.preview = rewrite(chapter["text"], settings)
 
+    if "preview" in st.session_state:
+        st.text_area("Preview", st.session_state.preview, height=200)
+        if st.button("Apply Rewrite"):
+            save_version(chapter)
+            chapter["text"] = st.session_state.preview
+            del st.session_state.preview
+
+st.caption("Olivetti 20.1 — Recovery Desk")
