@@ -1,12 +1,21 @@
 import streamlit as st
 from openai import OpenAI
 import time
+import os
 
 # ============================================================
-# CONFIG
+# CONFIG (SAFE)
 # ============================================================
 st.set_page_config(page_title="🫒 Olivetti", layout="wide")
-client = OpenAI()
+
+API_KEY = os.getenv("OPENAI_API_KEY", "")
+client = OpenAI() if API_KEY else None
+
+# ============================================================
+# CONSTANTS (GUARDS)
+# ============================================================
+MAX_TEXT_CHARS = 12000
+AI_COOLDOWN_SEC = 2.0
 
 # ============================================================
 # SAFE SESSION INIT
@@ -32,6 +41,7 @@ DEFAULTS = {
     "voice_lock": False,
     "focus": False,
     "last_save": time.time(),
+    "last_ai_call": 0.0,
 }
 
 for k, v in DEFAULTS.items():
@@ -44,13 +54,13 @@ def autosave():
     st.session_state.last_save = time.time()
 
 # ============================================================
-# VOICE ENGINE
+# VOICE ENGINE (PURE)
 # ============================================================
 def build_voice_block():
     parts = [
         f"Writing Style: {st.session_state.style}",
         f"Genre Voice: {st.session_state.voice}",
-        f"Intensity: {st.session_state.intensity}",
+        f"Intensity: {float(st.session_state.intensity)}",
     ]
 
     if st.session_state.trained_voice != "— None —":
@@ -66,7 +76,7 @@ def build_voice_block():
     return "\n".join(parts)
 
 # ============================================================
-# AI CORE (HARDENED)
+# AI CORE (SECURE + RATE-LIMITED)
 # ============================================================
 PROMPTS = {
     "write": "Continue writing naturally.",
@@ -81,11 +91,25 @@ PROMPTS = {
     "sentence": "Improve sentence flow.",
 }
 
+def can_call_ai():
+    now = time.time()
+    if now - st.session_state.last_ai_call < AI_COOLDOWN_SEC:
+        return False
+    st.session_state.last_ai_call = now
+    return True
+
 def run_ai(action):
-    if action not in PROMPTS:
+    if not client or action not in PROMPTS:
         return
-    text = st.session_state.text.strip()
+
+    text = (st.session_state.text or "").strip()
     if not text:
+        return
+
+    if len(text) > MAX_TEXT_CHARS:
+        text = text[:MAX_TEXT_CHARS]
+
+    if not can_call_ai():
         return
 
     prompt = f"""
@@ -110,13 +134,13 @@ TEXT:
         )
         out = (r.output_text or "").strip()
         if out:
-            st.session_state.text = out
+            st.session_state.text = out[:MAX_TEXT_CHARS]
             autosave()
     except Exception:
         pass
 
 # ============================================================
-# TOP BAR
+# TOP BAR (UNCHANGED)
 # ============================================================
 top = st.columns([2,1,1,1,1])
 top[0].markdown("## 🫒 **Olivetti**")
@@ -128,7 +152,7 @@ top[4].button("Final Draft", key="top_final")
 st.divider()
 
 # ============================================================
-# MAIN LAYOUT
+# MAIN LAYOUT (LOCKED)
 # ============================================================
 left, center, right = st.columns([1.3, 3.4, 1.3], gap="large")
 
@@ -139,11 +163,8 @@ with left:
     with st.expander("📖 Story Bible", expanded=True):
         st.text_area("Junk Drawer", key="junk", height=70, on_change=autosave)
         st.text_area("Synopsis", key="synopsis", height=70, on_change=autosave)
-        st.selectbox(
-            "Genre / Style",
-            ["Literary", "Noir", "Thriller", "Comedy"],
-            key="genre",
-        )
+        st.selectbox("Genre / Style",
+                     ["Literary","Noir","Thriller","Comedy"], key="genre")
         st.text_area("World Elements", key="world", height=70, on_change=autosave)
         st.text_area("Characters", key="characters", height=70, on_change=autosave)
         st.text_area("Outline", key="outline", height=120, on_change=autosave)
@@ -208,4 +229,4 @@ st.divider()
 f = st.columns(2)
 f[0].button("🔒 Focus Mode", key="focus_btn",
             on_click=lambda: st.session_state.update({"focus": True}))
-f[1].caption("Olivetti — All Systems Stable")
+f[1].caption("Olivetti — Secured & Stable")
