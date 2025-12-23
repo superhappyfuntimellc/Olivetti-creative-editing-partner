@@ -1,6 +1,5 @@
 import streamlit as st
 import time
-from streamlit.components.v1 import html
 
 # ============================================================
 # CONFIG
@@ -19,7 +18,6 @@ defaults = {
     "show_voice_bible": True,
     "focus_mode": False,
     "last_save": time.time(),
-    "flash_save": False,
 }
 
 for k, v in defaults.items():
@@ -31,68 +29,6 @@ for k, v in defaults.items():
 # ============================================================
 def autosave():
     st.session_state.last_save = time.time()
-    st.session_state.flash_save = True
-
-# ============================================================
-# KEYBOARD SHORTCUT BRIDGE (JS)
-# ============================================================
-html(
-    """
-    <script>
-    document.addEventListener("keydown", function(e) {
-        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-            window.parent.postMessage("FOCUS", "*");
-        }
-        if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-            e.preventDefault();
-            window.parent.postMessage("SAVE", "*");
-        }
-        if ((e.metaKey || e.ctrlKey) && e.key === "b") {
-            window.parent.postMessage("STORY", "*");
-        }
-        if ((e.metaKey || e.ctrlKey) && e.key === "v") {
-            window.parent.postMessage("VOICE", "*");
-        }
-    });
-    </script>
-    """,
-    height=0,
-)
-
-# ============================================================
-# MESSAGE HANDLER
-# ============================================================
-msg = st.session_state.get("_msg", None)
-
-if msg == "FOCUS":
-    st.session_state.focus_mode = True
-elif msg == "SAVE":
-    autosave()
-elif msg == "STORY":
-    st.session_state.show_story_bible = not st.session_state.show_story_bible
-elif msg == "VOICE":
-    st.session_state.show_voice_bible = not st.session_state.show_voice_bible
-
-st.session_state["_msg"] = None
-
-# ============================================================
-# LISTEN FOR MESSAGES
-# ============================================================
-html(
-    """
-    <script>
-    window.addEventListener("message", (event) => {
-        const streamlitEvent = new CustomEvent("streamlit:setComponentValue", {
-            detail: event.data
-        });
-        window.dispatchEvent(streamlitEvent);
-    });
-    </script>
-    """,
-    height=0,
-)
-
-st.experimental_set_query_params()
 
 # ============================================================
 # TOP BAR
@@ -108,23 +44,19 @@ with top:
     if c[4].button("🎯 Focus"):
         st.session_state.focus_mode = True
 
-    if st.session_state.flash_save:
-        c[5].markdown("💾 **Saved**")
-        st.session_state.flash_save = False
-    else:
-        c[5].markdown("")
+    c[5].markdown("")
 
 st.divider()
 
 # ============================================================
-# FOCUS MODE (HARD LOCK)
+# FOCUS MODE (SAFE VERSION)
 # ============================================================
 if st.session_state.focus_mode:
     st.text_area(
         "",
         key="main_text",
         height=720,
-        placeholder="Focus Mode active. Refresh page to exit.",
+        placeholder="Focus Mode active. Refresh the page to exit.",
         on_change=autosave
     )
     st.caption("Focus Mode — refresh to unlock.")
@@ -152,19 +84,20 @@ with left:
         st.text_input("Genre / Style", key="sb_genre", on_change=autosave)
         st.text_area("World Elements", height=70, key="sb_world", on_change=autosave)
         st.text_area("Characters", height=70, key="sb_characters", on_change=autosave)
+
         st.markdown("**Outline**")
         for i in range(1, 6):
             st.text_input(f"Chapter {i}", key=f"sb_ch_{i}", on_change=autosave)
 
 # ============================================================
-# CENTER — TYPE DESK
+# CENTER — TYPEWRITER DESK (ALWAYS ON)
 # ============================================================
 with center:
     st.text_area(
         "",
         key="main_text",
         height=560,
-        placeholder="Just type.",
+        placeholder="Just type. No project required.",
         on_change=autosave
     )
 
@@ -201,4 +134,4 @@ with right:
 # ============================================================
 # FOOTER
 # ============================================================
-st.caption("Olivetti Desk — Keyboard-driven. Layout locked.")
+st.caption("Olivetti Desk — Stable core. Proven layout.")
