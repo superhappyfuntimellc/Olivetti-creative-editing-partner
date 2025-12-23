@@ -11,11 +11,11 @@ client = OpenAI()
 # ============================================================
 # SAFE SESSION INIT
 # ============================================================
-def init(key, value):
-    if key not in st.session_state:
-        st.session_state[key] = value
+def init(k, v):
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-STATE_DEFAULTS = {
+DEFAULTS = {
     "text": "",
     "junk": "",
     "synopsis": "",
@@ -34,36 +34,36 @@ STATE_DEFAULTS = {
     "last_save": time.time(),
 }
 
-for k, v in STATE_DEFAULTS.items():
+for k, v in DEFAULTS.items():
     init(k, v)
 
 # ============================================================
-# AUTOSAVE (SAFE, SILENT)
+# AUTOSAVE (SILENT)
 # ============================================================
 def autosave():
     st.session_state.last_save = time.time()
 
 # ============================================================
-# VOICE ENGINE (PURE / IMMUTABLE)
+# VOICE ENGINE
 # ============================================================
 def build_voice_block():
-    blocks = [
+    parts = [
         f"Writing Style: {st.session_state.style}",
         f"Genre Voice: {st.session_state.voice}",
         f"Intensity: {st.session_state.intensity}",
     ]
 
     if st.session_state.trained_voice != "— None —":
-        blocks.append(
+        parts.append(
             f"Trained Voice:\n{st.session_state.trained_voices.get(st.session_state.trained_voice,'')}"
         )
     elif st.session_state.sample.strip():
-        blocks.append(f"Match This Style:\n{st.session_state.sample}")
+        parts.append(f"Match This Style:\n{st.session_state.sample}")
 
     if st.session_state.voice_lock:
-        blocks.append("IMPORTANT: Maintain voice exactly.")
+        parts.append("IMPORTANT: Maintain voice exactly.")
 
-    return "\n".join(blocks)
+    return "\n".join(parts)
 
 # ============================================================
 # AI CORE (HARDENED)
@@ -84,7 +84,6 @@ PROMPTS = {
 def run_ai(action):
     if action not in PROMPTS:
         return
-
     text = st.session_state.text.strip()
     if not text:
         return
@@ -109,9 +108,9 @@ TEXT:
             ],
             temperature=float(st.session_state.intensity),
         )
-        output = (r.output_text or "").strip()
-        if output:
-            st.session_state.text = output
+        out = (r.output_text or "").strip()
+        if out:
+            st.session_state.text = out
             autosave()
     except Exception:
         pass
@@ -150,7 +149,7 @@ with left:
         st.text_area("Outline", key="outline", height=120, on_change=autosave)
 
 # ============================================================
-# CENTER — WRITING DESK (LOCKED)
+# CENTER — WRITING DESK (ALWAYS VISIBLE)
 # ============================================================
 with center:
     st.markdown("### ✍️ Writing Desk")
@@ -175,16 +174,8 @@ with center:
 # ============================================================
 with right:
     with st.expander("🎭 Voice Bible", expanded=True):
-        st.selectbox(
-            "Writing Style",
-            ["Neutral", "Minimal", "Expressive"],
-            key="style",
-        )
-        st.selectbox(
-            "Genre Voice",
-            ["Literary", "Hardboiled", "Poetic"],
-            key="voice",
-        )
+        st.selectbox("Writing Style", ["Neutral","Minimal","Expressive"], key="style")
+        st.selectbox("Genre Voice", ["Literary","Hardboiled","Poetic"], key="voice")
 
         voices = ["— None —"] + list(st.session_state.trained_voices.keys())
         st.selectbox("Trained Voices", voices, key="trained_voice")
@@ -205,7 +196,7 @@ with right:
         st.toggle("Voice Lock", key="voice_lock")
 
 # ============================================================
-# FOCUS MODE (HARD SAFE)
+# FOCUS MODE (HARD LOCK)
 # ============================================================
 if st.session_state.focus:
     st.markdown(
@@ -217,4 +208,4 @@ st.divider()
 f = st.columns(2)
 f[0].button("🔒 Focus Mode", key="focus_btn",
             on_click=lambda: st.session_state.update({"focus": True}))
-f[1].caption("Olivetti — Hardened Build")
+f[1].caption("Olivetti — All Systems Stable")
