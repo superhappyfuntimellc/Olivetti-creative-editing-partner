@@ -3,45 +3,40 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-# =========================
+# ============================================================
 # CONFIG
-# =========================
+# ============================================================
 st.set_page_config(
-    page_title="Olivetti 23.9",
+    page_title="Olivetti",
     layout="wide",
 )
 
 client = OpenAI()
 
-# =========================
-# SESSION STATE INIT
-# =========================
-if "projects" not in st.session_state:
-    st.session_state.projects = {}
+# ============================================================
+# SESSION STATE — SINGLE SOURCE OF TRUTH
+# ============================================================
+def init_state():
+    defaults = {
+        "projects": {},
+        "current_project": None,
+        "current_chapter": 0,
+        "author_state": {
+            "genre": "Literary",
+            "pov": "Close Third",
+            "tense": "Past",
+            "intensity": 0.5,
+        }
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-if "current_project" not in st.session_state:
-    st.session_state.current_project = None
+init_state()
 
-if "current_chapter" not in st.session_state:
-    st.session_state.current_chapter = 0
-
-# =========================
-# STYLE PRESETS
-# =========================
-GENRES = {
-    "Literary": "Elegant prose, interiority, subtle metaphor.",
-    "Noir": "Hard-edged, cynical, concrete imagery.",
-    "Thriller": "Fast pacing, tension, urgency.",
-    "Comedy": "Timing, irony, wit.",
-    "Lyrical": "Rhythmic, image-driven, musical language.",
-}
-
-POVS = ["First", "Close Third", "Omniscient"]
-TENSES = ["Past", "Present"]
-
-# =========================
-# HELPERS
-# =========================
+# ============================================================
+# HELPERS — SAFE, BORING, RELIABLE
+# ============================================================
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
@@ -73,7 +68,7 @@ def save_version(chapter):
 
 
 def get_current_chapter():
-    if st.session_state.current_project is None:
+    if not st.session_state.current_project:
         st.stop()
 
     project = st.session_state.projects.get(st.session_state.current_project)
@@ -85,16 +80,16 @@ def get_current_chapter():
         st.warning("No chapters yet. Import a manuscript to begin.")
         st.stop()
 
-    # Clamp index safely
     st.session_state.current_chapter = max(
-        0, min(st.session_state.current_chapter, len(chapters) - 1)
+        0,
+        min(st.session_state.current_chapter, len(chapters) - 1)
     )
 
     return project, chapters, chapters[st.session_state.current_chapter]
 
 
-def call_llm(system, prompt, temperature=0.3):
-    response = client.responses.create(
+def call_llm(system, prompt, temperature):
+    r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
             {"role": "system", "content": system},
@@ -102,23 +97,24 @@ def call_llm(system, prompt, temperature=0.3):
         ],
         temperature=temperature,
     )
-    return response.output_text
+    return r.output_text
 
 
-def generate_outline(text, genre, pov, tense, intensity):
+def generate_outline(text):
+    a = st.session_state.author_state
     prompt = f"""
 Create a concise chapter outline.
 
 Rules:
 - Bullet points only
-- Major story beats
+- Major beats only
 - No rewriting
 
 Style:
-Genre: {genre}
-POV: {pov}
-Tense: {tense}
-Intensity: {intensity}
+Genre: {a['genre']}
+POV: {a['pov']}
+Tense: {a['tense']}
+Intensity: {a['intensity']}
 
 Chapter:
 {text}
@@ -126,18 +122,19 @@ Chapter:
     return call_llm(
         "You are a professional developmental editor.",
         prompt,
+        temperature=0.3,
     )
 
-# =========================
-# SIDEBAR — PROJECTS
-# =========================
+# ============================================================
+# SIDEBAR — PROJECT CONTROL
+# ============================================================
 with st.sidebar:
     st.header("Projects")
 
-    projects = list(st.session_state.projects.keys())
-    selection = st.selectbox("Project", ["— New —"] + projects)
+    names = list(st.session_state.projects.keys())
+    choice = st.selectbox("Project", ["— New —"] + names)
 
-    if selection == "— New —":
+    if choice == "— New —":
         name = st.text_input("Project name")
         if st.button("Create Project") and name:
             st.session_state.projects[name] = {
@@ -147,7 +144,7 @@ with st.sidebar:
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
     else:
-        st.session_state.current_project = selection
+        st.session_state.current_project = choice
 
     if st.session_state.current_project:
         upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
@@ -158,81 +155,92 @@ with st.sidebar:
             ]["chapters"] = split_into_chapters(text)
             st.session_state.current_chapter = 0
 
-# =========================
+# ============================================================
 # MAIN
-# =========================
-if st.session_state.current_project is None:
-    st.title("Olivetti 23.9")
+# ============================================================
+if not st.session_state.current_project:
+    st.title("Olivetti")
     st.write("Create or select a project to begin.")
     st.stop()
 
 project, chapters, chapter = get_current_chapter()
 
-tabs = st.tabs(["Chapter", "Story Bible"])
+# ============================================================
+# TOP BAR — AUTHOR STATE (LINKED EVERYWHERE)
+# ============================================================
+top = st.columns([2, 2, 2, 2])
+top[0].selectbox(
+    "Genre",
+    ["Literary", "Noir", "Thriller", "Comedy", "Lyrical"],
+    key="author_state.genre",
+)
+top[1].selectbox(
+    "POV",
+    ["First", "Close Third", "Omniscient"],
+    key="author_state.pov",
+)
+top[2].selectbox(
+    "Tense",
+    ["Past", "Present"],
+    key="author_state.tense",
+)
+top[3].slider(
+    "Intensity",
+    0.0, 1.0,
+    key="author_state.intensity",
+)
 
-# =========================
-# TAB — CHAPTER
-# =========================
-with tabs[0]:
-    left, center, right = st.columns([1.2, 3, 2])
+st.divider()
 
-    # LEFT — Chapter List
-    with left:
-        st.subheader("Chapters")
-        for i, ch in enumerate(chapters):
-            if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
-                st.session_state.current_chapter = i
+# ============================================================
+# LAYOUT
+# ============================================================
+left, center, right = st.columns([1.2, 3.2, 2])
 
-        chapter["title"] = st.text_input("Chapter title", chapter["title"])
+# ---------------- LEFT — STRUCTURE ----------------
+with left:
+    st.subheader("Chapters")
+    for i, ch in enumerate(chapters):
+        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
+            st.session_state.current_chapter = i
 
-    # CENTER — Writing
-    with center:
-        st.subheader("Draft")
-        chapter["text"] = st.text_area(
-            "",
-            chapter["text"],
-            height=520,
-        )
+    chapter["title"] = st.text_input("Chapter title", chapter["title"])
 
-        if st.button("Save Version"):
-            save_version(chapter)
-
-    # RIGHT — Tools
-    with right:
-        st.subheader("Tools")
-
-        genre = st.selectbox("Genre", list(GENRES.keys()))
-        pov = st.selectbox("POV", POVS)
-        tense = st.selectbox("Tense", TENSES)
-        intensity = st.slider("Intensity", 0.0, 1.0, 0.5)
-
-        st.divider()
-        st.subheader("Outline")
-
-        if st.button("Generate Outline"):
-            chapter["outline"] = generate_outline(
-                chapter["text"],
-                genre,
-                pov,
-                tense,
-                intensity,
-            )
-
-        chapter["outline"] = st.text_area(
-            "",
-            chapter.get("outline", ""),
-            height=220,
-        )
-
-# =========================
-# TAB — STORY BIBLE
-# =========================
-with tabs[1]:
-    st.subheader("Story Bible")
-    project["story_bible"] = st.text_area(
-        "Characters, world, rules, voice notes",
-        project.get("story_bible", ""),
-        height=500,
+# ---------------- CENTER — WRITING ----------------
+with center:
+    st.subheader("Draft")
+    chapter["text"] = st.text_area(
+        "",
+        chapter["text"],
+        height=560,
     )
 
-st.caption("Olivetti 23.9 — Professional Authorial Core")
+    if st.button("Save Version"):
+        save_version(chapter)
+
+# ---------------- RIGHT — EDITORIAL TOOLS ----------------
+with right:
+    st.subheader("Outline")
+
+    if st.button("Generate Outline"):
+        chapter["outline"] = generate_outline(chapter["text"])
+
+    chapter["outline"] = st.text_area(
+        "",
+        chapter.get("outline", ""),
+        height=260,
+    )
+
+# ============================================================
+# STORY BIBLE
+# ============================================================
+st.divider()
+st.subheader("Story Bible")
+
+project["story_bible"] = st.text_area(
+    "",
+    project.get("story_bible", ""),
+    height=240,
+)
+
+st.caption("Olivetti — Stable Authorial Core")
