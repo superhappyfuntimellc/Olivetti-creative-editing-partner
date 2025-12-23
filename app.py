@@ -3,79 +3,64 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-# =========================================================
+# =========================
 # CONFIG
-# =========================================================
-st.set_page_config(layout="wide", page_title="Olivetti Studio")
+# =========================
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.1")
 client = OpenAI()
 
-# =========================================================
+# =========================
 # SESSION STATE
-# =========================================================
+# =========================
 if "projects" not in st.session_state:
     st.session_state.projects = {}
-
 if "current_project" not in st.session_state:
     st.session_state.current_project = None
-
 if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
 
-# =========================================================
+# =========================
 # STYLE PRESETS
-# =========================================================
+# =========================
 GENRES = {
     "Literary": "Elegant prose, interiority, subtle metaphor.",
     "Noir": "Hard-edged, cynical, concrete imagery.",
     "Thriller": "Fast pacing, tension, urgency.",
-    "Comedy": "Timing, irony, wit.",
-    "Lyrical": "Musical language, imagery, rhythm.",
+    "Comedy": "Timing, irony, wit, lightness.",
+    "Lyrical": "Rhythm, imagery, musical language.",
+    "Ironic": "Detached, sharp, understated humor."
 }
 
 VOICES = {
-    "Neutral Editor": "Clear, professional, invisible.",
-    "Minimal": "Short sentences. Subtext.",
-    "Expressive": "Emotion-forward.",
+    "Neutral Editor": "Clear, professional, invisible style.",
+    "Minimal": "Short sentences. Subtext. Restraint.",
+    "Expressive": "Emotion-forward, dynamic voice.",
     "Hardboiled": "Dry, blunt, unsentimental.",
-    "Poetic": "Figurative, evocative.",
+    "Poetic": "Figurative, flowing, evocative."
 }
 
-TOOLS = [
-    "Rewrite",
-    "Expand",
-    "Compress",
-    "Continue",
-    "Shift POV",
-    "Shift Tense",
-]
-
-# =========================================================
+# =========================
 # HELPERS
-# =========================================================
-def new_project():
-    return {
-        "story_bible": "",
-        "chapters": []
-    }
-
-def new_chapter(title, text):
-    return {
-        "title": title,
-        "text": text,
-        "notes": "",
-        "locked": False,
-        "workflow": "Draft",
-        "versions": [],
-        "outputs": {tool: [] for tool in TOOLS},
-    }
-
+# =========================
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
     for i in range(1, len(parts), 2):
-        chapters.append(new_chapter(parts[i].title(), parts[i+1].strip()))
+        chapters.append({
+            "title": parts[i].title(),
+            "text": parts[i+1].strip(),
+            "outline": "",
+            "workflow": "Draft",
+            "versions": []
+        })
     if not chapters:
-        chapters.append(new_chapter("Chapter 1", text))
+        chapters.append({
+            "title": "Chapter 1",
+            "text": text,
+            "outline": "",
+            "workflow": "Draft",
+            "versions": []
+        })
     return chapters
 
 def save_version(ch):
@@ -95,17 +80,10 @@ def call_llm(system, prompt, temp=0.4):
     )
     return r.output_text
 
-def run_tool(tool, text, genre, voice, sample, bible):
-    style = f"{GENRES[genre]} {VOICES[voice]}"
-    if sample:
-        style += f"\nMatch this style:\n{sample}"
-
+def rewrite(text, style, bible):
     prompt = f"""
 STORY BIBLE:
-{bible if bible else "None provided."}
-
-TOOL:
-{tool}
+{bible}
 
 STYLE:
 {style}
@@ -113,21 +91,27 @@ STYLE:
 TEXT:
 {text}
 """
-    return call_llm("You are a professional fiction editor who must respect the story bible.", prompt)
+    return call_llm(
+        "You are a precise fiction editor. Rewrite only what is provided.",
+        prompt,
+        0.5
+    )
 
-# =========================================================
+# =========================
 # SIDEBAR — PROJECTS
-# =========================================================
+# =========================
 with st.sidebar:
     st.header("📁 Projects")
-
     projects = list(st.session_state.projects.keys())
     choice = st.selectbox("Project", ["— New —"] + projects)
 
     if choice == "— New —":
         name = st.text_input("Project name")
         if st.button("Create Project") and name:
-            st.session_state.projects[name] = new_project()
+            st.session_state.projects[name] = {
+                "chapters": [],
+                "bible": ""
+            }
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
     else:
@@ -142,9 +126,9 @@ with st.sidebar:
             ]["chapters"] = split_into_chapters(text)
             st.session_state.current_chapter = 0
 
-# =========================================================
+# =========================
 # MAIN
-# =========================================================
+# =========================
 if not st.session_state.current_project:
     st.title("🫒 Olivetti Studio")
     st.write("Create or select a project to begin.")
@@ -157,83 +141,61 @@ if not chapters:
     st.write("Import a manuscript to begin.")
     st.stop()
 
-idx = st.session_state.current_chapter
-chapter = chapters[idx]
+chapter = chapters[st.session_state.current_chapter]
 
-left, center, right = st.columns([1.3, 3.2, 3.0])
+left, center, right = st.columns([1.2, 2.6, 2.4])
 
-# =========================================================
-# LEFT — STRUCTURE
-# =========================================================
+# =========================
+# LEFT — CHAPTERS
+# =========================
 with left:
     st.subheader("📚 Chapters")
     for i, ch in enumerate(chapters):
         if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
             st.session_state.current_chapter = i
+    chapter["title"] = st.text_input("Chapter title", chapter["title"])
 
-    chapter["title"] = st.text_input("Title", chapter["title"])
-    chapter["workflow"] = st.selectbox(
+# =========================
+# CENTER — TEXT
+# =========================
+with center:
+    st.subheader("✍️ Chapter Text")
+    chapter["text"] = st.text_area("", chapter["text"], height=520)
+
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Save Version"):
+        save_version(chapter)
+
+    chapter["workflow"] = c2.selectbox(
         "Workflow",
         ["Draft", "Revise", "Polish", "Final"],
         index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
     )
-    chapter["locked"] = st.checkbox("🔒 Lock chapter", value=chapter["locked"])
 
-# =========================================================
-# CENTER — WRITING
-# =========================================================
-with center:
-    st.subheader("✍️ Chapter Text")
-
-    if chapter["locked"]:
-        st.text_area("", chapter["text"], height=420, disabled=True)
-    else:
-        chapter["text"] = st.text_area("", chapter["text"], height=420)
-
-    st.subheader("📝 Chapter Notes")
-    chapter["notes"] = st.text_area("", chapter["notes"], height=120)
-
-# =========================================================
-# RIGHT — STORY BIBLE + TOOLS
-# =========================================================
+# =========================
+# RIGHT — TOOLS
+# =========================
 with right:
-    st.subheader("📖 Story Bible")
-    project["story_bible"] = st.text_area(
-        "",
-        project["story_bible"],
-        height=240,
-        placeholder="World, lore, canon, themes, constraints…"
+    st.subheader("📘 Story Bible")
+    project["bible"] = st.text_area(
+        "Applies to all tools",
+        project.get("bible", ""),
+        height=160
     )
 
     st.divider()
-    st.subheader("🧰 Tools")
+    st.subheader("🎯 Target Text")
+    selection = st.text_area(
+        "Paste a paragraph or sentence to target (leave empty = whole chapter)",
+        height=120
+    )
 
-    genre = st.selectbox("Genre", list(GENRES.keys()))
-    voice = st.selectbox("Voice", list(VOICES.keys()))
-    sample = st.text_area("Style Sample (optional)", height=70)
-
-    for tool in TOOLS:
-        if st.button(tool):
-            if chapter["locked"]:
-                st.warning("Chapter is locked.")
-            else:
-                with st.spinner(f"{tool}…"):
-                    output = run_tool(
-                        tool,
-                        chapter["text"],
-                        genre,
-                        voice,
-                        sample,
-                        project["story_bible"]
-                    )
-                    chapter["outputs"][tool].insert(0, {
-                        "time": datetime.now().strftime("%H:%M:%S"),
-                        "text": output
-                    })
+    st.subheader("🎭 Style")
+    genre = st.selectbox("Genre", GENRES.keys())
+    voice = st.selectbox("Voice", VOICES.keys())
+    style = f"{GENRES[genre]} {VOICES[voice]}"
 
     st.divider()
-    st.subheader("🪞 Outputs (by Tool)")
-
-    for tool, outputs in chapter["outputs"].items():
-        if outputs:
-            with st.expander(f"{tool} ({
+    if st.button("🧪 Rewrite (Preview)"):
+        target = selection.strip() if selection.strip() else chapter["text"]
+        chapter["preview"] = r
