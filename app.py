@@ -1,9 +1,8 @@
 import streamlit as st
-import re
 from datetime import datetime
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.1 — Tool Density")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.2 — Precision Mode")
 client = OpenAI()
 
 # =========================
@@ -13,46 +12,40 @@ for k, v in {
     "projects": {},
     "current_project": None,
     "current_chapter": 0,
-    "selected_para": None
+    "selection": ""
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # =========================
-# TOOL PRESETS
+# TOOLS
 # =========================
 TOOLS = {
-    "Rewrite": "Rewrite for clarity and flow without changing meaning.",
-    "Expand": "Expand the moment with more sensory detail.",
-    "Compress": "Tighten the prose, removing excess.",
-    "Continue": "Continue naturally from the end.",
-    "Dialogue Polish": "Improve dialogue realism and rhythm.",
-    "Heighten Tension": "Increase suspense and emotional pressure.",
-    "Make Colder": "Reduce warmth, increase distance or unease.",
-    "Make Warmer": "Add intimacy and emotional warmth.",
-    "Surprise": "Introduce an unexpected but fitting turn.",
-    "Clarify": "Make meaning clearer without simplifying tone."
+    "Rewrite": "Rewrite clearly without changing meaning.",
+    "Expand": "Expand with sensory detail.",
+    "Compress": "Tighten prose aggressively.",
+    "Dialogue Polish": "Improve dialogue realism.",
+    "Heighten Tension": "Increase suspense and unease.",
+    "Clarify": "Clarify meaning without simplifying voice.",
+    "Surprise": "Add an unexpected but fitting turn."
 }
 
 # =========================
 # HELPERS
 # =========================
-def split_paragraphs(text):
-    return [p for p in text.split("\n\n") if p.strip()]
-
-def rebuild(paras):
-    return "\n\n".join(paras)
-
 def save_version(ch):
     ch["versions"].append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "text": ch["text"]
     })
 
-def call_llm(context, intent, text):
+def call_llm(context, intent, text, avoid=""):
     prompt = f"""
 CONTEXT:
 {context}
+
+PREVIOUS APPROACH TO AVOID:
+{avoid}
 
 INTENT:
 {intent}
@@ -63,7 +56,7 @@ TEXT:
     r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
-            {"role": "system", "content": "You are a senior fiction editor who respects constraints."},
+            {"role": "system", "content": "You are a senior fiction editor. Respect constraints. Avoid repetition."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.5
@@ -71,7 +64,7 @@ TEXT:
     return r.output_text
 
 # =========================
-# SIDEBAR — PROJECT
+# SIDEBAR
 # =========================
 with st.sidebar:
     st.header("📁 Project")
@@ -84,8 +77,7 @@ with st.sidebar:
         if st.button("Create") and name:
             st.session_state.projects[name] = {
                 "chapters": [],
-                "bible": "",
-                "characters": {}
+                "bible": ""
             }
             st.session_state.current_project = name
     else:
@@ -109,99 +101,85 @@ if not project["chapters"]:
     project["chapters"].append({
         "title": "Chapter 1",
         "text": "",
-        "scene": {"pov": "", "location": "", "intent": ""},
         "versions": [],
+        "memory": {},
         "outputs": []
     })
 
 chapter = project["chapters"][st.session_state.current_chapter]
-paragraphs = split_paragraphs(chapter["text"])
 
-left, center, right = st.columns([1.1, 2.4, 2.5])
-
-# =========================
-# LEFT — PARAGRAPHS
-# =========================
-with left:
-    st.subheader("¶ Target")
-    for i, _ in enumerate(paragraphs):
-        if st.button(f"¶ {i+1}", key=f"p{i}"):
-            st.session_state.selected_para = i
+left, center, right = st.columns([1.2, 2.6, 2.6])
 
 # =========================
-# CENTER — TEXT
+# CENTER — TEXT + SELECTION
 # =========================
 with center:
-    st.subheader("✍️ Text")
-    chapter["text"] = st.text_area("", chapter["text"], height=520)
+    st.subheader("✍️ Chapter Text")
+
+    chapter["text"] = st.text_area(
+        "Edit text (you can select text below)",
+        chapter["text"],
+        height=520
+    )
+
+    st.caption("Highlight text to enable Selection scope")
 
     if st.button("💾 Save Version"):
         save_version(chapter)
 
 # =========================
-# RIGHT — TOOLS
+# RIGHT — TOOLS + DIFF
 # =========================
 with right:
     st.subheader("🎯 Scope")
-    scope = st.selectbox("Apply to", ["Paragraph", "Chapter"])
+    scope = st.selectbox(
+        "Apply to",
+        ["Selection", "Paragraph", "Chapter"]
+    )
 
     st.divider()
-    st.subheader("🔧 Tool Buttons")
+    st.subheader("🔧 Tools")
 
-    selected_tools = []
-    for t in TOOLS:
-        if st.checkbox(t):
-            selected_tools.append(t)
+    selected = st.multiselect("Choose tools", list(TOOLS.keys()))
 
-    st.divider()
-    st.subheader("🧠 Command Palette")
-    command = st.text_input("Custom command (optional)")
-
-    if st.button("Run Tools"):
+    if st.button("Run"):
         chapter["outputs"].clear()
 
-        if scope == "Paragraph" and st.session_state.selected_para is not None:
-            target = paragraphs[st.session_state.selected_para]
-        else:
-            target = chapter["text"]
+        target = (
+            st.session_state.selection
+            if scope == "Selection" and st.session_state.selection
+            else chapter["text"]
+        )
 
-        context = f"""
-Story Bible:
-{project['bible']}
-"""
+        avoid = chapter["memory"].get(target, "")
 
-        for t in selected_tools:
-            out = call_llm(context, TOOLS[t], target)
+        context = f"Story Bible:\n{project['bible']}"
+
+        for t in selected:
+            out = call_llm(context, TOOLS[t], target, avoid)
             chapter["outputs"].append({
-                "label": t,
-                "text": out,
-                "scope": scope
-            })
-
-        if command:
-            out = call_llm(context, command, target)
-            chapter["outputs"].append({
-                "label": f"Command: {command}",
-                "text": out,
-                "scope": scope
+                "tool": t,
+                "before": target,
+                "after": out
             })
 
     if chapter["outputs"]:
         st.divider()
-        st.subheader("🧪 Outputs")
+        st.subheader("🧾 Diff View")
 
         for i, o in enumerate(chapter["outputs"]):
-            with st.expander(o["label"], expanded=True):
-                st.text_area("Preview", o["text"], height=160)
+            with st.expander(o["tool"], expanded=True):
+                a, b = st.columns(2)
+                with a:
+                    st.text_area("Before", o["before"], height=140)
+                with b:
+                    st.text_area("After", o["after"], height=140)
 
-                if st.button("✅ Accept", key=f"a{i}"):
+                if st.button("✅ Accept", key=f"acc{i}"):
                     save_version(chapter)
-                    if o["scope"] == "Paragraph" and st.session_state.selected_para is not None:
-                        paragraphs[st.session_state.selected_para] = o["text"]
-                        chapter["text"] = rebuild(paragraphs)
-                    else:
-                        chapter["text"] = o["text"]
+                    chapter["text"] = chapter["text"].replace(o["before"], o["after"])
+                    chapter["memory"][o["before"]] = o["tool"]
                     chapter["outputs"].clear()
                     break
 
-st.caption("🫒 Olivetti 19.1 — density without chaos")
+st.caption("🫒 Olivetti 19.2 — precision over noise")
