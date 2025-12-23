@@ -12,35 +12,33 @@ client = OpenAI()
 # ============================================================
 # SESSION STATE
 # ============================================================
-if "projects" not in st.session_state:
-    st.session_state.projects = {}
-
-if "current_project" not in st.session_state:
-    st.session_state.current_project = None
-
-if "current_chapter" not in st.session_state:
-    st.session_state.current_chapter = 0
-
-if "focus_mode" not in st.session_state:
-    st.session_state.focus_mode = False
-
-if "story_bible" not in st.session_state:
-    st.session_state.story_bible = {
-        "Characters": "",
-        "Locations": "",
-        "Timeline": "",
-        "Notes": ""
+def init_state():
+    defaults = {
+        "projects": {},
+        "current_project": None,
+        "current_chapter": 0,
+        "focus_mode": False,
+        "last_autosave": None,
+        "story_bible": {
+            "Characters": "",
+            "Locations": "",
+            "Timeline": "",
+            "Notes": ""
+        },
+        "voice_bible": {
+            "Genre": "Literary",
+            "Voice": "Neutral Editor",
+            "POV": "Close Third",
+            "Tense": "Past",
+            "Intensity": 0.5,
+            "StyleSample": ""
+        }
     }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-if "voice_bible" not in st.session_state:
-    st.session_state.voice_bible = {
-        "Genre": "Literary",
-        "Voice": "Neutral Editor",
-        "POV": "Close Third",
-        "Tense": "Past",
-        "Intensity": 0.5,
-        "StyleSample": ""
-    }
+init_state()
 
 # ============================================================
 # STYLE PRESETS
@@ -64,6 +62,9 @@ VOICES = {
 # ============================================================
 # HELPERS
 # ============================================================
+def autosave():
+    st.session_state.last_autosave = datetime.now().strftime("%H:%M:%S")
+
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
@@ -111,12 +112,13 @@ if st.session_state.focus_mode:
     chapter = project["chapters"][st.session_state.current_chapter]
 
     st.markdown("## ✍️ Focus Mode")
-    st.caption("Refresh the page to exit")
+    st.caption("Autosaving continuously • Refresh page to exit")
 
     chapter["text"] = st.text_area(
         "",
         chapter["text"],
-        height=800
+        height=800,
+        on_change=autosave
     )
 
     st.stop()
@@ -127,6 +129,8 @@ if st.session_state.focus_mode:
 top_left, top_right = st.columns([4, 1])
 with top_left:
     st.markdown("## 🫒 Olivetti — Digital Writing Desk")
+    if st.session_state.last_autosave:
+        st.caption(f"💾 Autosaved at {st.session_state.last_autosave}")
 with top_right:
     if st.button("🎧 Focus"):
         st.session_state.focus_mode = True
@@ -144,11 +148,12 @@ with st.sidebar:
     choice = st.selectbox("Project", ["— New —"] + projects)
 
     if choice == "— New —":
-        name = st.text_input("Project name")
+        name = st.text_input("Project name", on_change=autosave)
         if st.button("Create Project") and name:
             st.session_state.projects[name] = {"chapters": []}
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
+            autosave()
     else:
         st.session_state.current_project = choice
 
@@ -160,6 +165,7 @@ with st.sidebar:
                 st.session_state.current_project
             ]["chapters"] = split_into_chapters(text)
             st.session_state.current_chapter = 0
+            autosave()
 
 # ============================================================
 # MAIN GUARD
@@ -186,7 +192,7 @@ chapter = chapters[st.session_state.current_chapter]
 left, center, right = st.columns([1.6, 3.2, 1.6])
 
 # ============================================================
-# LEFT — STORY BIBLE
+# LEFT — STORY BIBLE (AUTOSAVE)
 # ============================================================
 with left:
     st.subheader("📘 Story Bible")
@@ -196,11 +202,12 @@ with left:
             st.session_state.story_bible[key] = st.text_area(
                 key,
                 st.session_state.story_bible[key],
-                height=220
+                height=220,
+                on_change=autosave
             )
 
 # ============================================================
-# CENTER — WRITING DESK
+# CENTER — WRITING DESK (AUTOSAVE)
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
@@ -208,38 +215,74 @@ with center:
     for i, ch in enumerate(chapters):
         if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
             st.session_state.current_chapter = i
+            autosave()
             st.rerun()
 
-    chapter["title"] = st.text_input("Chapter title", chapter["title"])
-    chapter["text"] = st.text_area("", chapter["text"], height=520)
+    chapter["title"] = st.text_input(
+        "Chapter title",
+        chapter["title"],
+        on_change=autosave
+    )
+
+    chapter["text"] = st.text_area(
+        "",
+        chapter["text"],
+        height=520,
+        on_change=autosave
+    )
 
     c1, c2 = st.columns(2)
     if c1.button("💾 Save Version"):
         save_version(chapter)
+        autosave()
 
     chapter["workflow"] = c2.selectbox(
         "Workflow",
         ["Draft", "Revise", "Polish", "Final"],
-        index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
+        index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"]),
+        on_change=autosave
     )
 
 # ============================================================
-# RIGHT — VOICE BIBLE
+# RIGHT — VOICE BIBLE (AUTOSAVE)
 # ============================================================
 with right:
     st.subheader("🎛 Voice Bible")
     vtabs = st.tabs(["Core", "Style", "Controls"])
 
     with vtabs[0]:
-        st.selectbox("Genre", list(GENRES.keys()))
-        st.selectbox("Voice", list(VOICES.keys()))
+        st.session_state.voice_bible["Genre"] = st.selectbox(
+            "Genre", list(GENRES.keys()),
+            index=list(GENRES.keys()).index(st.session_state.voice_bible["Genre"]),
+            on_change=autosave
+        )
+        st.session_state.voice_bible["Voice"] = st.selectbox(
+            "Voice", list(VOICES.keys()),
+            index=list(VOICES.keys()).index(st.session_state.voice_bible["Voice"]),
+            on_change=autosave
+        )
 
     with vtabs[1]:
-        st.selectbox("POV", ["First", "Close Third", "Omniscient"])
-        st.selectbox("Tense", ["Past", "Present"])
+        st.session_state.voice_bible["POV"] = st.selectbox(
+            "POV", ["First", "Close Third", "Omniscient"],
+            on_change=autosave
+        )
+        st.session_state.voice_bible["Tense"] = st.selectbox(
+            "Tense", ["Past", "Present"],
+            on_change=autosave
+        )
 
     with vtabs[2]:
-        st.slider("AI Intensity", 0.0, 1.0, 0.5)
-        st.text_area("Match My Style", height=120)
+        st.session_state.voice_bible["Intensity"] = st.slider(
+            "AI Intensity", 0.0, 1.0,
+            st.session_state.voice_bible["Intensity"],
+            on_change=autosave
+        )
+        st.session_state.voice_bible["StyleSample"] = st.text_area(
+            "Match My Style",
+            st.session_state.voice_bible["StyleSample"],
+            height=120,
+            on_change=autosave
+        )
 
-st.caption("Olivetti Desk v12.1 — Focus Mode locked & stable")
+st.caption("Olivetti Desk v12.2 — Autosave always on • Nothing is lost")
