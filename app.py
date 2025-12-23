@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.3")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.4")
 client = OpenAI()
 
 # =========================
@@ -140,7 +140,7 @@ project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
 chapter = chapters[st.session_state.current_chapter]
 
-left, center, right = st.columns([1.1, 2.6, 2.5])
+left, center, right = st.columns([1.1, 2.4, 2.9])
 
 # =========================
 # LEFT
@@ -156,7 +156,7 @@ with left:
 # CENTER
 # =========================
 with center:
-    st.subheader("✍️ Text")
+    st.subheader("✍️ Chapter Text")
     chapter["text"] = st.text_area("", chapter["text"], height=520)
     if st.button("💾 Save Version"):
         save_version(chapter)
@@ -166,52 +166,42 @@ with center:
 # =========================
 with right:
     st.subheader("📘 Story Bible")
-    project["bible"] = st.text_area("", project.get("bible", ""), height=120)
+    project["bible"] = st.text_area("", project.get("bible", ""), height=110)
 
     st.subheader("🎯 Target")
-    selection = st.text_area("Paragraph / sentence (optional)", height=100)
+    selection = st.text_area("Paragraph / sentence (optional)", height=90)
     target = selection.strip() if selection.strip() else chapter["text"]
 
-    st.subheader("🎭 Style Preset")
-    preset_name = st.selectbox(
-        "Preset",
-        ["— Manual —"] + list(project["presets"].keys())
-    )
-
-    if preset_name != "— Manual —":
-        genre, voice = project["presets"][preset_name]
-    else:
-        genre = st.selectbox("Genre", GENRES.keys())
-        voice = st.selectbox("Voice", VOICES.keys())
-
-        if st.button("💾 Save Preset"):
-            pname = st.text_input("Preset name", key="pname")
-            if pname:
-                project["presets"][pname] = (genre, voice)
-
+    st.subheader("🎭 Style")
+    genre = st.selectbox("Genre", GENRES.keys())
+    voice = st.selectbox("Voice", VOICES.keys())
     style = f"{GENRES[genre]} {VOICES[voice]}"
 
     st.divider()
     st.subheader("🧰 Tools")
     for tool, intent in TOOLS.items():
         if st.button(tool):
-            out = call_llm(intent, target, style, project["bible"])
             chapter["outputs"].append({
                 "tool": tool,
                 "target": target,
-                "text": out
+                "text": call_llm(intent, target, style, project["bible"])
             })
 
     if chapter["outputs"]:
         st.divider()
-        st.subheader("🧪 Outputs")
+        st.subheader("🧪 Compare")
         for i, out in enumerate(chapter["outputs"]):
-            st.markdown(f"**{out['tool']}**")
-            st.text_area("", out["text"], height=120, key=f"out_{i}")
-            if st.button("✅ Accept", key=f"acc_{i}"):
+            st.markdown(f"### {out['tool']}")
+            a, b = st.columns(2)
+            with a:
+                st.text_area("Original", out["target"], height=140, key=f"orig_{i}")
+            with b:
+                st.text_area("Proposed", out["text"], height=140, key=f"new_{i}")
+
+            if st.button("✅ Accept Change", key=f"acc_{i}"):
                 save_version(chapter)
                 chapter["history"].append({
-                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "time": datetime.now().strftime("%H:%M"),
                     "tool": out["tool"]
                 })
                 if selection.strip():
@@ -223,8 +213,8 @@ with right:
 
     if chapter["history"]:
         st.divider()
-        st.subheader("🧠 Recent Changes")
+        st.subheader("🧠 Recent")
         for h in reversed(chapter["history"][-5:]):
             st.caption(f"{h['time']} — {h['tool']}")
 
-st.caption("🫒 Olivetti 18.3 — speed + memory unlocked")
+st.caption("🫒 Olivetti 18.4 — see the change before you choose")
