@@ -1,8 +1,9 @@
 import streamlit as st
 from datetime import datetime
 from openai import OpenAI
+import re
 
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.2 — Precision Mode")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.3 — Dialogue & Scene Intelligence")
 client = OpenAI()
 
 # =========================
@@ -12,7 +13,8 @@ for k, v in {
     "projects": {},
     "current_project": None,
     "current_chapter": 0,
-    "selection": ""
+    "selection": "",
+    "stack_base": None
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -21,14 +23,14 @@ for k, v in {
 # TOOLS
 # =========================
 TOOLS = {
-    "Rewrite": "Rewrite clearly without changing meaning.",
-    "Expand": "Expand with sensory detail.",
-    "Compress": "Tighten prose aggressively.",
-    "Dialogue Polish": "Improve dialogue realism.",
-    "Heighten Tension": "Increase suspense and unease.",
-    "Clarify": "Clarify meaning without simplifying voice.",
-    "Surprise": "Add an unexpected but fitting turn."
+    "Dialogue Polish": "Improve dialogue realism, subtext, and rhythm.",
+    "Remove On-the-Nose": "Remove obvious or blunt dialogue lines.",
+    "Heighten Tension": "Increase tension without melodrama.",
+    "Clarify": "Clarify meaning while preserving voice.",
+    "Rewrite": "Rewrite cleanly without changing intent."
 }
+
+BEATS = ["Setup", "Escalation", "Turn", "Aftermath"]
 
 # =========================
 # HELPERS
@@ -39,13 +41,21 @@ def save_version(ch):
         "text": ch["text"]
     })
 
-def call_llm(context, intent, text, avoid=""):
+def is_dialogue(line):
+    return bool(re.search(r'^".*"$', line.strip()))
+
+def filter_text(text, mode):
+    lines = text.split("\n")
+    if mode == "Dialogue only":
+        return "\n".join([l for l in lines if is_dialogue(l)])
+    if mode == "Narration only":
+        return "\n".join([l for l in lines if not is_dialogue(l)])
+    return text
+
+def call_llm(context, intent, text):
     prompt = f"""
 CONTEXT:
 {context}
-
-PREVIOUS APPROACH TO AVOID:
-{avoid}
 
 INTENT:
 {intent}
@@ -56,7 +66,7 @@ TEXT:
     r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
-            {"role": "system", "content": "You are a senior fiction editor. Respect constraints. Avoid repetition."},
+            {"role": "system", "content": "You are a senior fiction editor. Respect voice and constraints."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.5
@@ -102,84 +112,86 @@ if not project["chapters"]:
         "title": "Chapter 1",
         "text": "",
         "versions": [],
-        "memory": {},
+        "beats": {},
         "outputs": []
     })
 
 chapter = project["chapters"][st.session_state.current_chapter]
 
-left, center, right = st.columns([1.2, 2.6, 2.6])
+left, center, right = st.columns([1.1, 2.6, 2.7])
 
 # =========================
-# CENTER — TEXT + SELECTION
+# CENTER — TEXT
 # =========================
 with center:
     st.subheader("✍️ Chapter Text")
-
-    chapter["text"] = st.text_area(
-        "Edit text (you can select text below)",
-        chapter["text"],
-        height=520
-    )
-
-    st.caption("Highlight text to enable Selection scope")
+    chapter["text"] = st.text_area("", chapter["text"], height=520)
 
     if st.button("💾 Save Version"):
         save_version(chapter)
 
 # =========================
-# RIGHT — TOOLS + DIFF
+# RIGHT — INTELLIGENCE
 # =========================
 with right:
     st.subheader("🎯 Scope")
-    scope = st.selectbox(
-        "Apply to",
-        ["Selection", "Paragraph", "Chapter"]
+    scope = st.selectbox("Apply to", ["Selection", "Chapter"])
+
+    st.subheader("🎭 Text Type")
+    text_mode = st.selectbox(
+        "Affect",
+        ["All", "Dialogue only", "Narration only"]
     )
 
     st.divider()
-    st.subheader("🔧 Tools")
+    st.subheader("🎬 Scene Beat")
+    beat = st.selectbox("Current beat", BEATS)
 
-    selected = st.multiselect("Choose tools", list(TOOLS.keys()))
+    st.divider()
+    st.subheader("🔧 Tools")
+    chosen = st.multiselect("Choose tools", list(TOOLS.keys()))
 
     if st.button("Run"):
         chapter["outputs"].clear()
 
-        target = (
-            st.session_state.selection
-            if scope == "Selection" and st.session_state.selection
-            else chapter["text"]
-        )
+        base = st.session_state.stack_base or chapter["text"]
+        filtered = filter_text(base, text_mode)
 
-        avoid = chapter["memory"].get(target, "")
+        context = f"""
+Story Bible:
+{project['bible']}
 
-        context = f"Story Bible:\n{project['bible']}"
+Scene Beat:
+{beat}
+"""
 
-        for t in selected:
-            out = call_llm(context, TOOLS[t], target, avoid)
-            chapter["outputs"].append({
-                "tool": t,
-                "before": target,
-                "after": out
-            })
+        current = filtered
+        for t in chosen:
+            current = call_llm(context, TOOLS[t], current)
+
+        chapter["outputs"].append({
+            "before": filtered,
+            "after": current
+        })
 
     if chapter["outputs"]:
         st.divider()
-        st.subheader("🧾 Diff View")
+        st.subheader("🧾 Compare")
 
-        for i, o in enumerate(chapter["outputs"]):
-            with st.expander(o["tool"], expanded=True):
-                a, b = st.columns(2)
-                with a:
-                    st.text_area("Before", o["before"], height=140)
-                with b:
-                    st.text_area("After", o["after"], height=140)
+        out = chapter["outputs"][0]
+        a, b = st.columns(2)
+        with a:
+            st.text_area("Before", out["before"], height=180)
+        with b:
+            st.text_area("After", out["after"], height=180)
 
-                if st.button("✅ Accept", key=f"acc{i}"):
-                    save_version(chapter)
-                    chapter["text"] = chapter["text"].replace(o["before"], o["after"])
-                    chapter["memory"][o["before"]] = o["tool"]
-                    chapter["outputs"].clear()
-                    break
+        if st.button("➕ Stack Another Tool"):
+            st.session_state.stack_base = out["after"]
 
-st.caption("🫒 Olivetti 19.2 — precision over noise")
+        if st.button("✅ Accept"):
+            save_version(chapter)
+            chapter["text"] = chapter["text"].replace(out["before"], out["after"])
+            chapter["outputs"].clear()
+            st.session_state.stack_base = None
+
+st.caption("🫒 Olivetti 19.3 — dialogue-aware, scene-aware editing")
