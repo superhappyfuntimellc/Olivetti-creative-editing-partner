@@ -5,7 +5,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="Olivetti 23.0")
+st.set_page_config(layout="wide", page_title="Olivetti 23.1")
 client = OpenAI()
 
 # ============================================================
@@ -39,7 +39,7 @@ def make_instruction_bible():
     return {
         "Default Literary": "Write with restraint, precision, and interiority.",
         "Hard Edit": "Be blunt. Cut excess. Preserve voice. No mercy.",
-        "Developmental": "Focus on structure, clarity, and narrative intent.",
+        "Developmental": "Focus on structure, clarity, and intent.",
         "Experimental": "Take risks. Push language. Surprise the reader."
     }
 
@@ -62,25 +62,48 @@ def split_into_chapters(text):
     return chapters
 
 # ============================================================
+# INTENSITY MAPPER
+# ============================================================
+def intensity_guidance(level):
+    return {
+        1: "Very restrained. Minimal changes. Preserve original phrasing.",
+        2: "Light touch. Subtle improvements only.",
+        3: "Moderate revision. Clarify without risk.",
+        4: "Assertive. Improve flow and precision.",
+        5: "Bold. Sharpen language and rhythm.",
+        6: "Aggressive. Cut hard. Elevate voice.",
+        7: "Very aggressive. Transform weak lines.",
+        8: "High risk. Push style and compression.",
+        9: "Extreme. Radical but coherent changes.",
+        10: "Maximum intensity. Only for experiments."
+    }[level]
+
+# ============================================================
 # AI ACTIONS
 # ============================================================
-def rewrite_with_instructions(text, instructions):
+def rewrite_with_controls(text, instructions, intensity):
     prompt = f"""
 INSTRUCTIONS (MANDATORY):
 {instructions}
 
+INTENSITY LEVEL: {intensity}/10
+{intensity_guidance(intensity)}
+
 Rewrite the text accordingly.
-Preserve meaning unless instructed otherwise.
+Preserve meaning unless intensity implies risk.
 
 TEXT:
 {text}
 """
-    return llm("You are a professional fiction editor.", prompt, 0.4)
+    return llm("You are a professional fiction editor.", prompt, 0.5)
 
-def comment_with_instructions(text, instructions):
+def comment_with_controls(text, instructions, intensity):
     prompt = f"""
 INSTRUCTIONS (MANDATORY):
 {instructions}
+
+INTENSITY LEVEL: {intensity}/10
+{intensity_guidance(intensity)}
 
 Give margin comments only.
 No rewriting.
@@ -120,7 +143,7 @@ with st.sidebar:
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("🫒 Olivetti 23.0")
+    st.title("🫒 Olivetti 23.1")
     st.write("Create or select a project.")
     st.stop()
 
@@ -148,40 +171,43 @@ with center:
     chapter["text"] = st.text_area("Text", chapter["text"], height=540)
 
 # ============================================================
-# RIGHT — INSTRUCTION BIBLE + TOOLS
+# RIGHT — CONTROLS
 # ============================================================
 with right:
-    st.subheader("📜 Instruction Bible")
+    st.subheader("📜 Instruction & Intensity")
 
     names = list(instruction_bible.keys())
-    selected = st.selectbox("Select Instruction Set", names)
+    selected = st.selectbox("Instruction Set", names)
 
     instruction_bible[selected] = st.text_area(
         "Instructions",
         instruction_bible[selected],
-        height=220
+        height=180
     )
 
-    new_name = st.text_input("Add New Instruction Set")
-    if st.button("Add Instruction Set") and new_name:
-        instruction_bible[new_name] = "Describe how the AI should behave."
-        st.experimental_rerun()
+    intensity = st.slider(
+        "Intensity",
+        1, 10, 5,
+        help="Controls how hard the AI pushes"
+    )
 
     st.divider()
     st.subheader("AI Actions")
 
-    if st.button("Rewrite Using Selected Instructions"):
+    if st.button("Rewrite (Preview)"):
         with st.spinner("Rewriting…"):
-            chapter["preview"] = rewrite_with_instructions(
+            chapter["preview"] = rewrite_with_controls(
                 chapter["text"],
-                instruction_bible[selected]
+                instruction_bible[selected],
+                intensity
             )
 
-    if st.button("Comment Using Selected Instructions"):
+    if st.button("Comment (Margin Notes)"):
         with st.spinner("Commenting…"):
-            chapter["comments"] = comment_with_instructions(
+            chapter["comments"] = comment_with_controls(
                 chapter["text"],
-                instruction_bible[selected]
+                instruction_bible[selected],
+                intensity
             )
 
     if chapter.get("preview"):
@@ -192,4 +218,4 @@ with right:
     if chapter.get("comments"):
         st.text_area("Comments", chapter["comments"], height=200)
 
-st.caption("Olivetti 23.0 — Instructions Are Canon")
+st.caption("Olivetti 23.1 — Instructions × Intensity")
