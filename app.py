@@ -1,75 +1,86 @@
 import streamlit as st
 from datetime import datetime
 from openai import OpenAI
+import statistics
 import re
 
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.3 — Dialogue & Scene Intelligence")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.5 — Voice Authority")
 client = OpenAI()
 
 # =========================
 # SESSION STATE
 # =========================
-for k, v in {
+defaults = {
     "projects": {},
     "current_project": None,
     "current_chapter": 0,
-    "selection": "",
-    "stack_base": None
-}.items():
+    "strictness": 0.4,  # 0=draft, 1=final
+    "comments": []
+}
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # =========================
-# TOOLS
+# ANALYZER
 # =========================
-TOOLS = {
-    "Dialogue Polish": "Improve dialogue realism, subtext, and rhythm.",
-    "Remove On-the-Nose": "Remove obvious or blunt dialogue lines.",
-    "Heighten Tension": "Increase tension without melodrama.",
-    "Clarify": "Clarify meaning while preserving voice.",
-    "Rewrite": "Rewrite cleanly without changing intent."
-}
+def analyze_text(text):
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    lengths = [len(s.split()) for s in sentences]
 
-BEATS = ["Setup", "Escalation", "Turn", "Aftermath"]
+    return {
+        "sentence_mean": statistics.mean(lengths) if lengths else 0,
+        "sentence_var": statistics.pvariance(lengths) if len(lengths) > 1 else 0,
+        "dialogue_ratio": len(re.findall(r'"', text)) / max(len(text), 1),
+        "metaphor_hits": len(re.findall(r'\blike\b|\bas\b', text.lower())),
+        "length": len(text)
+    }
+
+def score_against_profile(metrics, profile):
+    if not profile:
+        return 1.0, []
+
+    notes = []
+    score = 1.0
+
+    for k in profile:
+        diff = abs(metrics[k] - profile[k])
+        if diff > profile[k] * 0.25:
+            score -= 0.2
+            notes.append(f"{k.replace('_',' ')} drift")
+
+    return max(score, 0), notes
 
 # =========================
-# HELPERS
+# VOICE TRAINING
 # =========================
-def save_version(ch):
-    ch["versions"].append({
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "text": ch["text"]
-    })
+def update_voice_profile(project):
+    strong = project["voice_samples"]
+    if not strong:
+        return
 
-def is_dialogue(line):
-    return bool(re.search(r'^".*"$', line.strip()))
+    agg = {}
+    for s in strong:
+        m = analyze_text(s)
+        for k, v in m.items():
+            agg.setdefault(k, []).append(v)
 
-def filter_text(text, mode):
-    lines = text.split("\n")
-    if mode == "Dialogue only":
-        return "\n".join([l for l in lines if is_dialogue(l)])
-    if mode == "Narration only":
-        return "\n".join([l for l in lines if not is_dialogue(l)])
-    return text
+    project["voice_profile"] = {
+        k: statistics.mean(v) for k, v in agg.items()
+    }
 
-def call_llm(context, intent, text):
-    prompt = f"""
-CONTEXT:
-{context}
-
-INTENT:
-{intent}
-
-TEXT:
-{text}
-"""
+# =========================
+# LLM CALL
+# =========================
+def call_llm(prompt):
     r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
-            {"role": "system", "content": "You are a senior fiction editor. Respect voice and constraints."},
+            {"role": "system", "content": "You are a disciplined literary editor."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.5
+        temperature=0.4
     )
     return r.output_text
 
@@ -85,113 +96,4 @@ with st.sidebar:
     if choice == "— New —":
         name = st.text_input("Project name")
         if st.button("Create") and name:
-            st.session_state.projects[name] = {
-                "chapters": [],
-                "bible": ""
-            }
-            st.session_state.current_project = name
-    else:
-        st.session_state.current_project = choice
-
-    project = st.session_state.projects.get(st.session_state.current_project)
-
-    if project:
-        st.divider()
-        st.subheader("📘 Story Bible")
-        project["bible"] = st.text_area("", project["bible"], height=120)
-
-# =========================
-# MAIN
-# =========================
-if not project:
-    st.title("🫒 Olivetti Studio")
-    st.stop()
-
-if not project["chapters"]:
-    project["chapters"].append({
-        "title": "Chapter 1",
-        "text": "",
-        "versions": [],
-        "beats": {},
-        "outputs": []
-    })
-
-chapter = project["chapters"][st.session_state.current_chapter]
-
-left, center, right = st.columns([1.1, 2.6, 2.7])
-
-# =========================
-# CENTER — TEXT
-# =========================
-with center:
-    st.subheader("✍️ Chapter Text")
-    chapter["text"] = st.text_area("", chapter["text"], height=520)
-
-    if st.button("💾 Save Version"):
-        save_version(chapter)
-
-# =========================
-# RIGHT — INTELLIGENCE
-# =========================
-with right:
-    st.subheader("🎯 Scope")
-    scope = st.selectbox("Apply to", ["Selection", "Chapter"])
-
-    st.subheader("🎭 Text Type")
-    text_mode = st.selectbox(
-        "Affect",
-        ["All", "Dialogue only", "Narration only"]
-    )
-
-    st.divider()
-    st.subheader("🎬 Scene Beat")
-    beat = st.selectbox("Current beat", BEATS)
-
-    st.divider()
-    st.subheader("🔧 Tools")
-    chosen = st.multiselect("Choose tools", list(TOOLS.keys()))
-
-    if st.button("Run"):
-        chapter["outputs"].clear()
-
-        base = st.session_state.stack_base or chapter["text"]
-        filtered = filter_text(base, text_mode)
-
-        context = f"""
-Story Bible:
-{project['bible']}
-
-Scene Beat:
-{beat}
-"""
-
-        current = filtered
-        for t in chosen:
-            current = call_llm(context, TOOLS[t], current)
-
-        chapter["outputs"].append({
-            "before": filtered,
-            "after": current
-        })
-
-    if chapter["outputs"]:
-        st.divider()
-        st.subheader("🧾 Compare")
-
-        out = chapter["outputs"][0]
-        a, b = st.columns(2)
-        with a:
-            st.text_area("Before", out["before"], height=180)
-        with b:
-            st.text_area("After", out["after"], height=180)
-
-        if st.button("➕ Stack Another Tool"):
-            st.session_state.stack_base = out["after"]
-
-        if st.button("✅ Accept"):
-            save_version(chapter)
-            chapter["text"] = chapter["text"].replace(out["before"], out["after"])
-            chapter["outputs"].clear()
-            st.session_state.stack_base = None
-
-st.caption("🫒 Olivetti 19.3 — dialogue-aware, scene-aware editing")
+            st.session_state.p_
