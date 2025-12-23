@@ -8,7 +8,7 @@ from openai import OpenAI
 # CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="Olivetti 23.4",
+    page_title="Olivetti 23.5",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -24,11 +24,16 @@ def init_state():
         "current_project": None,
         "current_chapter": 0,
         "voice_bible": {},
-        "instruction_bible": {},
         "analysis": [],
         "intensity": 0.5,
         "pov": "Close Third",
-        "tense": "Past"
+        "tense": "Past",
+        "instruction_bible": {
+            "Editorial": "Revise for clarity, consistency, and narrative flow without changing voice.",
+            "Minimal": "Make the smallest possible improvement. Preserve original wording.",
+            "Aggressive": "Rewrite boldly for impact, tension, and sharpness.",
+            "Voice Locked": "Rewrite strictly matching the author’s voice profile. Do not drift.",
+        }
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -84,7 +89,7 @@ def save_version(ch):
     })
 
 def call_llm(system, prompt, temperature=0.4):
-    response = client.responses.create(
+    r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
             {"role": "system", "content": system},
@@ -92,7 +97,7 @@ def call_llm(system, prompt, temperature=0.4):
         ],
         temperature=temperature
     )
-    return response.output_text
+    return r.output_text
 
 # ============================================================
 # VOICE TRAINER
@@ -100,7 +105,6 @@ def call_llm(system, prompt, temperature=0.4):
 def train_voice(sample):
     words = sample.split()
     sentences = re.split(r"[.!?]", sample)
-
     return {
         "avg_sentence_length": sum(len(s.split()) for s in sentences if s.strip()) / max(len(sentences), 1),
         "vocab_richness": len(set(words)) / max(len(words), 1),
@@ -109,42 +113,52 @@ def train_voice(sample):
     }
 
 # ============================================================
-# ANALYZER
+# AI ACTION ENGINE (FULLY WIRED)
 # ============================================================
-def analyze_text(text, voice_profile):
-    notes = []
+def ai_action(action_name, text, instruction_key):
+    instruction = st.session_state.instruction_bible[instruction_key]
 
-    avg_len = sum(len(s.split()) for s in re.split(r"[.!?]", text) if s.strip()) / max(len(text.split(".")), 1)
-    if avg_len > voice_profile.get("avg_sentence_length", avg_len) * 1.3:
-        notes.append("Sentence length drifting longer than voice baseline.")
+    voice_rules = ""
+    if st.session_state.voice_bible:
+        voice_rules = f"""
+VOICE PROFILE:
+Average sentence length: {st.session_state.voice_bible['avg_sentence_length']}
+Vocabulary richness: {st.session_state.voice_bible['vocab_richness']}
+"""
 
-    weak_verbs = ["was", "were", "is", "are"]
-    weak_count = sum(text.lower().count(w) for w in weak_verbs)
-    if weak_count > 10:
-        notes.append("High passive / weak verb density.")
+    prompt = f"""
+ACTION: {action_name}
 
-    return notes
+INSTRUCTIONS:
+{instruction}
+
+POV: {st.session_state.pov}
+TENSE: {st.session_state.tense}
+INTENSITY: {st.session_state.intensity}
+
+{voice_rules}
+
+TEXT:
+{text}
+"""
+
+    return call_llm(
+        "You are a professional fiction editor executing a specific revision task.",
+        prompt,
+        temperature=st.session_state.intensity
+    )
 
 # ============================================================
 # TOP BAR
 # ============================================================
 with st.container():
-    cols = st.columns([2,2,2,2,2,2])
-    if cols[0].button("Import TXT"):
-        upload = st.file_uploader("Upload .txt", type=["txt"], label_visibility="collapsed")
-        if upload and st.session_state.current_project:
-            text = upload.read().decode("utf-8")
-            st.session_state.projects[st.session_state.current_project]["chapters"] = split_into_chapters(text)
-
-    if cols[1].button("Export Manuscript"):
-        if st.session_state.current_project:
-            manuscript = "\n\n".join(c["text"] for c in st.session_state.projects[st.session_state.current_project]["chapters"])
-            st.download_button("Download", manuscript, file_name="manuscript.txt")
-
-    cols[2].slider("Intensity", 0.0, 1.0, key="intensity")
-    cols[3].selectbox("POV", POVS, key="pov")
-    cols[4].selectbox("Tense", TENSES, key="tense")
-    cols[5].button("Snapshot")
+    c = st.columns([2,2,2,2,2,2])
+    c[0].slider("Intensity", 0.0, 1.0, key="intensity")
+    c[1].selectbox("POV", POVS, key="pov")
+    c[2].selectbox("Tense", TENSES, key="tense")
+    c[3].button("Snapshot")
+    c[4].button("Export Manuscript")
+    c[5].button("Settings")
 
 st.divider()
 
@@ -153,23 +167,37 @@ st.divider()
 # ============================================================
 with st.sidebar:
     st.header("Projects")
-    project_names = list(st.session_state.projects.keys())
-    choice = st.selectbox("Project", ["— New —"] + project_names)
+    projects = list(st.session_state.projects.keys())
+    choice = st.selectbox("Project", ["— New —"] + projects)
 
     if choice == "— New —":
         name = st.text_input("Project name")
-        if st.button("Create") and name:
+        if st.button("Create Project") and name:
             st.session_state.projects[name] = {"chapters": []}
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
     else:
         st.session_state.current_project = choice
 
+    st.divider()
+    st.subheader("Instruction Bible")
+
+    for k in list(st.session_state.instruction_bible.keys()):
+        st.session_state.instruction_bible[k] = st.text_area(
+            k,
+            st.session_state.instruction_bible[k],
+            height=80
+        )
+
+    new_key = st.text_input("New Instruction Set")
+    if st.button("Add Instruction") and new_key:
+        st.session_state.instruction_bible[new_key] = ""
+
 # ============================================================
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("Olivetti 23.4")
+    st.title("Olivetti 23.5")
     st.write("Create or select a project.")
     st.stop()
 
@@ -186,7 +214,7 @@ chapter = chapters[idx]
 left, center = st.columns([1, 3])
 
 # ============================================================
-# LEFT — STRUCTURE
+# LEFT — CHAPTER NAV
 # ============================================================
 with left:
     st.subheader("Chapters")
@@ -194,48 +222,66 @@ with left:
         if st.button(f"{i+1}. {ch['title']}", key=f"ch_{i}"):
             st.session_state.current_chapter = i
 
-    chapter["title"] = st.text_input("Chapter Title", chapter["title"])
-
 # ============================================================
-# CENTER — EDITOR + TOOLS
+# CENTER — EDITOR + AI TOOLS
 # ============================================================
 with center:
     st.subheader("Chapter Text")
-    chapter["text"] = st.text_area("", chapter["text"], height=500)
+    chapter["text"] = st.text_area("", chapter["text"], height=420)
 
-    c1, c2, c3 = st.columns(3)
-    if c1.button("Save Version"):
+    save_version_btn, workflow = st.columns(2)
+    if save_version_btn.button("Save Version"):
         save_version(chapter)
 
-    chapter["workflow"] = c2.selectbox(
+    chapter["workflow"] = workflow.selectbox(
         "Workflow",
         ["Draft", "Revise", "Polish", "Final"],
         index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
     )
 
-    if c3.button("Analyze"):
-        if st.session_state.voice_bible:
-            st.session_state.analysis = analyze_text(
-                chapter["text"],
-                st.session_state.voice_bible
-            )
+    st.divider()
+    st.subheader("AI Actions")
+
+    instruction_choice = st.selectbox(
+        "Instruction Set",
+        list(st.session_state.instruction_bible.keys())
+    )
+
+    a, b, c, d = st.columns(4)
+
+    if a.button("Rewrite"):
+        chapter["preview"] = ai_action("Rewrite", chapter["text"], instruction_choice)
+
+    if b.button("Tighten"):
+        chapter["preview"] = ai_action("Tighten", chapter["text"], instruction_choice)
+
+    if c.button("Expand"):
+        chapter["preview"] = ai_action("Expand", chapter["text"], instruction_choice)
+
+    if d.button("Clarify"):
+        chapter["preview"] = ai_action("Clarify", chapter["text"], instruction_choice)
+
+    if "preview" in chapter:
+        st.divider()
+        st.subheader("Preview")
+        st.text_area("AI Preview", chapter["preview"], height=240)
+
+        accept, reject = st.columns(2)
+        if accept.button("Accept"):
+            save_version(chapter)
+            chapter["text"] = chapter.pop("preview")
+
+        if reject.button("Reject"):
+            chapter.pop("preview")
 
     st.divider()
-
-    if st.session_state.analysis:
-        st.subheader("Analyzer Notes")
-        for note in st.session_state.analysis:
-            st.warning(note)
-
-    st.divider()
-
     st.subheader("Voice Trainer")
-    sample = st.text_area("Anchor Sample (your best prose)", height=120)
+    sample = st.text_area("Anchor Sample", height=120)
     if st.button("Train Voice"):
         st.session_state.voice_bible = train_voice(sample)
-        st.success("Voice profile updated.")
+        st.success("Voice trained.")
 
     if st.session_state.voice_bible:
         st.json(st.session_state.voice_bible)
 
-st.caption("Olivetti 23.4 — Professional Writing Engine")
+st.caption("Olivetti 23.5 — Instruction-Aware Writing Engine")
