@@ -1,27 +1,41 @@
 import streamlit as st
 import re
 from datetime import datetime
-from openai import OpenAI
-import statistics
+from typing import List, Dict
 
-# ============================================================
+# =========================
 # CONFIG
-# ============================================================
-st.set_page_config(page_title="Olivetti", layout="wide")
-client = OpenAI()
+# =========================
+st.set_page_config(
+    page_title="Olivetti 24.0",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ============================================================
-# SESSION STATE
-# ============================================================
+# =========================
+# OPTIONAL LOCAL DRAG SUPPORT
+# =========================
+DRAG_AVAILABLE = False
+try:
+    from streamlit_sortables import sort_items
+    DRAG_AVAILABLE = True
+except Exception:
+    DRAG_AVAILABLE = False
+
+# =========================
+# SESSION STATE INIT
+# =========================
 def init_state():
     defaults = {
         "projects": {},
         "current_project": None,
         "current_chapter": 0,
-        "lock_chapter": False,
-        "preview_text": None,
         "focus_mode": False,
-        "show_tools": True,
+        "pov": "Close Third",
+        "tense": "Past",
+        "intensity": 0.5,
+        "voice_bible": "",
+        "voice_locked": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -29,172 +43,204 @@ def init_state():
 
 init_state()
 
-# ============================================================
-# ANALYSIS HELPERS
-# ============================================================
-def sentences(text):
-    return [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
+# =========================
+# STYLE PRESETS
+# =========================
+POVS = ["First", "Close Third", "Omniscient"]
+TENSES = ["Past", "Present"]
 
-def words(text):
-    return re.findall(r"\b\w+\b", text.lower())
+# =========================
+# HELPERS
+# =========================
+def safe_index(lst: list, idx: int):
+    if not lst:
+        return None
+    return lst[min(max(idx, 0), len(lst) - 1)]
 
-def dialogue_ratio(text):
-    quoted = re.findall(r"\".*?\"", text, re.DOTALL)
-    return len(" ".join(quoted)) / max(len(text), 1)
-
-def analyze_text(text):
-    sents = sentences(text)
-    lens = [len(words(s)) for s in sents if words(s)]
-
-    return {
-        "sent_len_avg": statistics.mean(lens) if lens else 0,
-        "sent_len_var": statistics.pstdev(lens) if len(lens) > 1 else 0,
-        "dialogue_ratio": dialogue_ratio(text),
-        "paragraphs": text.count("\n\n") + 1,
-        "lexical_density": len(set(words(text))) / max(len(words(text)), 1),
-    }
-
-# ============================================================
-# CORE HELPERS
-# ============================================================
-def split_into_chapters(text):
+def split_into_chapters(text: str) -> List[Dict]:
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
     chapters = []
-
     for i in range(1, len(parts), 2):
         chapters.append({
             "title": parts[i].title(),
             "text": parts[i + 1].strip(),
+            "outline": "",
+            "workflow": "Draft",
             "versions": [],
-            "comments": []
         })
-
     if not chapters:
         chapters.append({
             "title": "Chapter 1",
-            "text": text,
+            "text": text.strip(),
+            "outline": "",
+            "workflow": "Draft",
             "versions": [],
-            "comments": []
         })
-
     return chapters
 
 def save_version(ch):
     ch["versions"].append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": ch["text"]
+        "text": ch["text"],
     })
 
-def get_current():
-    if not st.session_state.current_project:
-        st.stop()
+# =========================
+# AI DISPATCHER (MID PROFILE)
+# =========================
+def ai_stub(action: str, text: str) -> str:
+    """
+    Replace internals with OpenAI calls.
+    This stub keeps the app stable.
+    """
+    header = f"[AI: {action} | POV={st.session_state.pov} | Tense={st.session_state.tense} | Intensity={st.session_state.intensity:.2f}]"
+    return f"{header}\n\n{text}"
 
-    project = st.session_state.projects.get(st.session_state.current_project)
-    if not project or not project["chapters"]:
-        st.warning("Import a manuscript to begin.")
-        st.stop()
+# =========================
+# TOP BAR (ALWAYS VISIBLE)
+# =========================
+with st.container():
+    top = st.columns([2, 1, 1, 2, 1, 1])
+    with top[0]:
+        st.markdown("### Olivetti 24.0")
+    with top[1]:
+        st.session_state.pov = st.selectbox("POV", POVS, index=POVS.index(st.session_state.pov))
+    with top[2]:
+        st.session_state.tense = st.selectbox("Tense", TENSES, index=TENSES.index(st.session_state.tense))
+    with top[3]:
+        st.session_state.intensity = st.slider("Intensity", 0.0, 1.0, st.session_state.intensity)
+    with top[4]:
+        st.toggle("Focus", key="focus_mode")
+    with top[5]:
+        st.write(" ")
 
-    idx = max(0, min(st.session_state.current_chapter, len(project["chapters"]) - 1))
-    st.session_state.current_chapter = idx
-    return project, project["chapters"], project["chapters"][idx]
+st.divider()
 
-# ============================================================
-# SIDEBAR
-# ============================================================
-if not st.session_state.focus_mode:
-    with st.sidebar:
-        st.header("Projects")
+# =========================
+# SIDEBAR (ALWAYS ACCESSIBLE)
+# =========================
+with st.sidebar:
+    st.header("Projects")
 
-        names = list(st.session_state.projects.keys())
-        choice = st.selectbox("Project", ["— New —"] + names)
+    projects = list(st.session_state.projects.keys())
+    choice = st.selectbox("Project", ["— New —"] + projects)
 
-        if choice == "— New —":
-            name = st.text_input("Project name")
-            if st.button("Create Project") and name:
-                st.session_state.projects[name] = {
-                    "chapters": [],
-                    "voice_bible": None
-                }
-                st.session_state.current_project = name
-                st.session_state.current_chapter = 0
-        else:
-            st.session_state.current_project = choice
+    if choice == "— New —":
+        name = st.text_input("Project name")
+        if st.button("Create") and name:
+            st.session_state.projects[name] = {"chapters": []}
+            st.session_state.current_project = name
+            st.session_state.current_chapter = 0
+    else:
+        st.session_state.current_project = choice
 
-        if st.session_state.current_project:
-            upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
-            if upload:
-                text = upload.read().decode("utf-8")
-                st.session_state.projects[
-                    st.session_state.current_project
-                ]["chapters"] = split_into_chapters(text)
-                st.session_state.current_chapter = 0
+    if st.session_state.current_project:
+        upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
+        if upload:
+            text = upload.read().decode("utf-8")
+            st.session_state.projects[st.session_state.current_project]["chapters"] = split_into_chapters(text)
+            st.session_state.current_chapter = 0
 
-        st.divider()
-        st.checkbox("Focus Mode", key="focus_mode")
-        st.checkbox("Show Tools", key="show_tools")
+    st.divider()
+    st.subheader("Voice Bible")
+    st.session_state.voice_bible = st.text_area(
+        "Anchor voice",
+        st.session_state.voice_bible,
+        height=120,
+        disabled=st.session_state.voice_locked,
+    )
+    st.session_state.voice_locked = st.checkbox("Lock Voice Bible")
 
-# ============================================================
-# MAIN
-# ============================================================
+# =========================
+# MAIN BODY
+# =========================
 if not st.session_state.current_project:
-    st.title("Olivetti")
+    st.title("Your digital writing desk")
     st.write("Create or select a project to begin.")
     st.stop()
 
-project, chapters, chapter = get_current()
+project = st.session_state.projects[st.session_state.current_project]
+chapters = project.get("chapters", [])
 
-# ============================================================
+chapter = safe_index(chapters, st.session_state.current_chapter)
+if chapter is None:
+    st.write("No chapters yet.")
+    st.stop()
+
+# =========================
 # LAYOUT
-# ============================================================
-left, center, right = st.columns([1.2, 3.2, 2])
+# =========================
+left, center, right = st.columns([1.1, 3.2, 2.0])
 
-# ---------------- LEFT ----------------
+# =========================
+# LEFT — CHAPTERS
+# =========================
 with left:
     st.subheader("Chapters")
-    for i, ch in enumerate(chapters):
-        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
-            st.session_state.current_chapter = i
 
-    chapter["title"] = st.text_input("Chapter title", chapter["title"])
-    st.checkbox("🔒 Lock Chapter", key="lock_chapter")
+    titles = [c["title"] for c in chapters]
 
-# ---------------- CENTER ----------------
+    if DRAG_AVAILABLE and not st.session_state.focus_mode:
+        new_order = sort_items(titles)
+        if new_order != titles:
+            reordered = [chapters[titles.index(t)] for t in new_order]
+            project["chapters"] = reordered
+            chapters = reordered
+    else:
+        for i, ch in enumerate(chapters):
+            if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
+                st.session_state.current_chapter = i
+
+# =========================
+# CENTER — WRITING SURFACE
+# =========================
 with center:
-    st.subheader("Draft")
+    st.subheader(chapter["title"])
+    chapter["title"] = st.text_input("Title", chapter["title"])
+
     chapter["text"] = st.text_area(
         "",
         chapter["text"],
-        height=560,
-        disabled=st.session_state.lock_chapter
+        height=600 if st.session_state.focus_mode else 450,
     )
 
-    if st.button("Save Version"):
-        save_version(chapter)
+    if not st.session_state.focus_mode:
+        c1, c2 = st.columns(2)
+        if c1.button("Save Version"):
+            save_version(chapter)
+        chapter["workflow"] = c2.selectbox(
+            "Workflow",
+            ["Draft", "Revise", "Polish", "Final"],
+            index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"]),
+        )
 
-# ---------------- RIGHT — VOICE ----------------
+# =========================
+# RIGHT — AI TOOLS
+# =========================
 with right:
-    st.subheader("Voice Trainer")
+    if st.session_state.focus_mode:
+        st.write("Focus mode active.")
+    else:
+        st.subheader("AI Tools")
 
-    sample = st.text_area(
-        "Paste your strongest work",
-        height=180
-    )
+        if st.button("Rewrite"):
+            chapter["preview"] = ai_stub("Rewrite", chapter["text"])
 
-    if st.button("Train Voice"):
-        project["voice_bible"] = analyze_text(sample)
+        if st.button("Tighten"):
+            chapter["preview"] = ai_stub("Tighten", chapter["text"])
 
-    if project.get("voice_bible"):
-        st.divider()
-        st.subheader("Voice Bible")
-        for k, v in project["voice_bible"].items():
-            st.write(f"{k}: {round(v, 3)}")
+        if st.button("Expand"):
+            chapter["preview"] = ai_stub("Expand", chapter["text"])
 
-        st.divider()
-        st.subheader("Chapter Analysis")
-        current = analyze_text(chapter["text"])
+        if st.button("Analyze Scene"):
+            chapter["analysis"] = ai_stub("Analysis", chapter["text"])
 
-        for k in current:
-            delta = current[k] - project["voice_bible"][k]
-            st.write(f"{k}: {round(current[k],3)} (Δ {round(delta,3)})")
+        if "preview" in chapter:
+            st.text_area("Preview", chapter["preview"], height=200)
+            if st.button("Accept Rewrite"):
+                save_version(chapter)
+                chapter["text"] = chapter.pop("preview")
 
-st.caption("Olivetti 30.0 — Voice Authority")
+        if "analysis" in chapter:
+            st.text_area("Notes", chapter["analysis"], height=160)
+
+st.caption("Olivetti 24.0 — Balanced, stable, built to write all day")
