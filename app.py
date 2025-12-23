@@ -6,7 +6,7 @@ from openai import OpenAI
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.1")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.2")
 client = OpenAI()
 
 # =========================
@@ -40,6 +40,18 @@ VOICES = {
 }
 
 # =========================
+# TOOLS
+# =========================
+TOOLS = {
+    "Rewrite": "Rewrite the text while preserving meaning.",
+    "Expand": "Expand the text with richer detail and depth.",
+    "Compress": "Condense the text without losing meaning.",
+    "Clarify": "Make the text clearer and more precise.",
+    "Heighten Tension": "Increase tension, stakes, and urgency.",
+    "Continue": "Continue the text naturally."
+}
+
+# =========================
 # HELPERS
 # =========================
 def split_into_chapters(text):
@@ -49,17 +61,17 @@ def split_into_chapters(text):
         chapters.append({
             "title": parts[i].title(),
             "text": parts[i+1].strip(),
-            "outline": "",
             "workflow": "Draft",
-            "versions": []
+            "versions": [],
+            "outputs": []
         })
     if not chapters:
         chapters.append({
             "title": "Chapter 1",
             "text": text,
-            "outline": "",
             "workflow": "Draft",
-            "versions": []
+            "versions": [],
+            "outputs": []
         })
     return chapters
 
@@ -69,18 +81,7 @@ def save_version(ch):
         "text": ch["text"]
     })
 
-def call_llm(system, prompt, temp=0.4):
-    r = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=temp
-    )
-    return r.output_text
-
-def rewrite(text, style, bible):
+def call_llm(intent, text, style, bible, temp=0.5):
     prompt = f"""
 STORY BIBLE:
 {bible}
@@ -88,17 +89,24 @@ STORY BIBLE:
 STYLE:
 {style}
 
+INTENT:
+{intent}
+
 TEXT:
 {text}
 """
-    return call_llm(
-        "You are a precise fiction editor. Rewrite only what is provided.",
-        prompt,
-        0.5
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": "You are a professional fiction editor."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temp
     )
+    return r.output_text
 
 # =========================
-# SIDEBAR — PROJECTS
+# SIDEBAR
 # =========================
 with st.sidebar:
     st.header("📁 Projects")
@@ -124,7 +132,6 @@ with st.sidebar:
             st.session_state.projects[
                 st.session_state.current_project
             ]["chapters"] = split_into_chapters(text)
-            st.session_state.current_chapter = 0
 
 # =========================
 # MAIN
@@ -143,7 +150,7 @@ if not chapters:
 
 chapter = chapters[st.session_state.current_chapter]
 
-left, center, right = st.columns([1.2, 2.6, 2.4])
+left, center, right = st.columns([1.1, 2.6, 2.5])
 
 # =========================
 # LEFT — CHAPTERS
@@ -177,18 +184,15 @@ with center:
 # =========================
 with right:
     st.subheader("📘 Story Bible")
-    project["bible"] = st.text_area(
-        "Applies to all tools",
-        project.get("bible", ""),
-        height=160
-    )
+    project["bible"] = st.text_area("Global canon", project.get("bible", ""), height=140)
 
     st.divider()
-    st.subheader("🎯 Target Text")
+    st.subheader("🎯 Target")
     selection = st.text_area(
-        "Paste a paragraph or sentence to target (leave empty = whole chapter)",
-        height=120
+        "Paste a paragraph/sentence (empty = whole chapter)",
+        height=110
     )
+    target = selection.strip() if selection.strip() else chapter["text"]
 
     st.subheader("🎭 Style")
     genre = st.selectbox("Genre", GENRES.keys())
@@ -196,6 +200,29 @@ with right:
     style = f"{GENRES[genre]} {VOICES[voice]}"
 
     st.divider()
-    if st.button("🧪 Rewrite (Preview)"):
-        target = selection.strip() if selection.strip() else chapter["text"]
-        chapter["preview"] = r
+    st.subheader("🧰 Tools")
+
+    cols = st.columns(2)
+    for i, tool in enumerate(TOOLS):
+        if cols[i % 2].button(tool):
+            output = call_llm(
+                TOOLS[tool],
+                target,
+                style,
+                project.get("bible", "")
+            )
+            chapter["outputs"].append({
+                "tool": tool,
+                "target": target,
+                "text": output
+            })
+
+    if chapter["outputs"]:
+        st.divider()
+        st.subheader("🧪 Outputs")
+        for idx, out in enumerate(chapter["outputs"]):
+            st.markdown(f"**{out['tool']}**")
+            st.text_area("", out["text"], height=140, key=f"out_{idx}")
+            if st.button(f"✅ Accept {out['tool']}", key=f"acc_{idx}"):
+                save_version(chapter)
+                if selection.strip():
