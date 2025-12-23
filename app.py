@@ -6,7 +6,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="🫒 Olivetti Desk")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti Desk", initial_sidebar_state="expanded")
 client = OpenAI()
 
 # ============================================================
@@ -20,6 +20,9 @@ if "current_project" not in st.session_state:
 
 if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
+
+if "focus_mode" not in st.session_state:
+    st.session_state.focus_mode = False
 
 if "story_bible" not in st.session_state:
     st.session_state.story_bible = {
@@ -52,9 +55,9 @@ GENRES = {
 
 VOICES = {
     "Neutral Editor": "Clear, invisible editorial voice.",
-    "Minimal": "Spare, restrained, subtext-driven.",
-    "Expressive": "Emotion-forward, vivid.",
-    "Hardboiled": "Dry, blunt, unsentimental.",
+    "Minimal": "Spare, restrained.",
+    "Expressive": "Emotion-forward.",
+    "Hardboiled": "Dry, blunt.",
     "Poetic": "Figurative, flowing."
 }
 
@@ -89,10 +92,45 @@ def save_version(ch):
     })
 
 # ============================================================
+# FOCUS MODE — HARD LOCK
+# ============================================================
+if st.session_state.focus_mode:
+    st.markdown(
+        """
+        <style>
+        header, footer, aside, .stButton, .stTabs, .stSidebar {display:none !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    project = st.session_state.projects.get(st.session_state.current_project)
+    if not project or not project["chapters"]:
+        st.stop()
+
+    chapter = project["chapters"][st.session_state.current_chapter]
+
+    st.markdown("## ✍️ Focus Mode")
+    st.caption("Refresh the page to exit")
+
+    chapter["text"] = st.text_area(
+        "",
+        chapter["text"],
+        height=800
+    )
+
+    st.stop()
+
+# ============================================================
 # TOP BAR
 # ============================================================
-st.markdown("## 🫒 Olivetti — Your Digital Writing Desk")
-st.caption("A focused, trainable authorial engine")
+top_left, top_right = st.columns([4, 1])
+with top_left:
+    st.markdown("## 🫒 Olivetti — Digital Writing Desk")
+with top_right:
+    if st.button("🎧 Focus"):
+        st.session_state.focus_mode = True
+        st.rerun()
 
 st.divider()
 
@@ -137,7 +175,6 @@ if not chapters:
     st.write("Import a manuscript to begin.")
     st.stop()
 
-# Safety clamp
 if st.session_state.current_chapter >= len(chapters):
     st.session_state.current_chapter = 0
 
@@ -149,12 +186,11 @@ chapter = chapters[st.session_state.current_chapter]
 left, center, right = st.columns([1.6, 3.2, 1.6])
 
 # ============================================================
-# LEFT — STORY BIBLE (TABS)
+# LEFT — STORY BIBLE
 # ============================================================
 with left:
     st.subheader("📘 Story Bible")
     tabs = st.tabs(list(st.session_state.story_bible.keys()))
-
     for tab, key in zip(tabs, st.session_state.story_bible.keys()):
         with tab:
             st.session_state.story_bible[key] = st.text_area(
@@ -188,38 +224,22 @@ with center:
     )
 
 # ============================================================
-# RIGHT — VOICE BIBLE (TABS)
+# RIGHT — VOICE BIBLE
 # ============================================================
 with right:
     st.subheader("🎛 Voice Bible")
     vtabs = st.tabs(["Core", "Style", "Controls"])
 
     with vtabs[0]:
-        st.session_state.voice_bible["Genre"] = st.selectbox(
-            "Genre", list(GENRES.keys())
-        )
-        st.session_state.voice_bible["Voice"] = st.selectbox(
-            "Voice", list(VOICES.keys())
-        )
+        st.selectbox("Genre", list(GENRES.keys()))
+        st.selectbox("Voice", list(VOICES.keys()))
 
     with vtabs[1]:
-        st.session_state.voice_bible["POV"] = st.selectbox(
-            "POV", ["First", "Close Third", "Omniscient"]
-        )
-        st.session_state.voice_bible["Tense"] = st.selectbox(
-            "Tense", ["Past", "Present"]
-        )
+        st.selectbox("POV", ["First", "Close Third", "Omniscient"])
+        st.selectbox("Tense", ["Past", "Present"])
 
     with vtabs[2]:
-        st.session_state.voice_bible["Intensity"] = st.slider(
-            "AI Intensity",
-            0.0, 1.0,
-            st.session_state.voice_bible["Intensity"]
-        )
-        st.session_state.voice_bible["StyleSample"] = st.text_area(
-            "Match My Style",
-            st.session_state.voice_bible["StyleSample"],
-            height=120
-        )
+        st.slider("AI Intensity", 0.0, 1.0, 0.5)
+        st.text_area("Match My Style", height=120)
 
-st.caption("Olivetti Desk v12 — stable UI restoration complete")
+st.caption("Olivetti Desk v12.1 — Focus Mode locked & stable")
