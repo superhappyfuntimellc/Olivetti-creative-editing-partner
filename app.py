@@ -3,10 +3,7 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.2")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 18.3")
 client = OpenAI()
 
 # =========================
@@ -20,7 +17,7 @@ if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
 
 # =========================
-# STYLE PRESETS
+# PRESETS / TOOLS
 # =========================
 GENRES = {
     "Literary": "Elegant prose, interiority, subtle metaphor.",
@@ -39,15 +36,12 @@ VOICES = {
     "Poetic": "Figurative, flowing, evocative."
 }
 
-# =========================
-# TOOLS
-# =========================
 TOOLS = {
     "Rewrite": "Rewrite the text while preserving meaning.",
-    "Expand": "Expand the text with richer detail and depth.",
+    "Expand": "Expand the text with richer detail.",
     "Compress": "Condense the text without losing meaning.",
     "Clarify": "Make the text clearer and more precise.",
-    "Heighten Tension": "Increase tension, stakes, and urgency.",
+    "Heighten Tension": "Increase stakes and urgency.",
     "Continue": "Continue the text naturally."
 }
 
@@ -63,7 +57,8 @@ def split_into_chapters(text):
             "text": parts[i+1].strip(),
             "workflow": "Draft",
             "versions": [],
-            "outputs": []
+            "outputs": [],
+            "history": []
         })
     if not chapters:
         chapters.append({
@@ -71,7 +66,8 @@ def split_into_chapters(text):
             "text": text,
             "workflow": "Draft",
             "versions": [],
-            "outputs": []
+            "outputs": [],
+            "history": []
         })
     return chapters
 
@@ -81,7 +77,7 @@ def save_version(ch):
         "text": ch["text"]
     })
 
-def call_llm(intent, text, style, bible, temp=0.5):
+def call_llm(intent, text, style, bible):
     prompt = f"""
 STORY BIBLE:
 {bible}
@@ -101,7 +97,7 @@ TEXT:
             {"role": "system", "content": "You are a professional fiction editor."},
             {"role": "user", "content": prompt}
         ],
-        temperature=temp
+        temperature=0.5
     )
     return r.output_text
 
@@ -118,10 +114,10 @@ with st.sidebar:
         if st.button("Create Project") and name:
             st.session_state.projects[name] = {
                 "chapters": [],
-                "bible": ""
+                "bible": "",
+                "presets": {}
             }
             st.session_state.current_project = name
-            st.session_state.current_chapter = 0
     else:
         st.session_state.current_project = choice
 
@@ -138,91 +134,97 @@ with st.sidebar:
 # =========================
 if not st.session_state.current_project:
     st.title("🫒 Olivetti Studio")
-    st.write("Create or select a project to begin.")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
-
-if not chapters:
-    st.write("Import a manuscript to begin.")
-    st.stop()
-
 chapter = chapters[st.session_state.current_chapter]
 
 left, center, right = st.columns([1.1, 2.6, 2.5])
 
 # =========================
-# LEFT — CHAPTERS
+# LEFT
 # =========================
 with left:
     st.subheader("📚 Chapters")
     for i, ch in enumerate(chapters):
-        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
+        if st.button(f"{i+1}. {ch['title']}"):
             st.session_state.current_chapter = i
-    chapter["title"] = st.text_input("Chapter title", chapter["title"])
+    chapter["title"] = st.text_input("Title", chapter["title"])
 
 # =========================
-# CENTER — TEXT
+# CENTER
 # =========================
 with center:
-    st.subheader("✍️ Chapter Text")
+    st.subheader("✍️ Text")
     chapter["text"] = st.text_area("", chapter["text"], height=520)
-
-    c1, c2 = st.columns(2)
-    if c1.button("💾 Save Version"):
+    if st.button("💾 Save Version"):
         save_version(chapter)
 
-    chapter["workflow"] = c2.selectbox(
-        "Workflow",
-        ["Draft", "Revise", "Polish", "Final"],
-        index=["Draft", "Revise", "Polish", "Final"].index(chapter["workflow"])
-    )
-
 # =========================
-# RIGHT — TOOLS
+# RIGHT
 # =========================
 with right:
     st.subheader("📘 Story Bible")
-    project["bible"] = st.text_area("Global canon", project.get("bible", ""), height=140)
+    project["bible"] = st.text_area("", project.get("bible", ""), height=120)
 
-    st.divider()
     st.subheader("🎯 Target")
-    selection = st.text_area(
-        "Paste a paragraph/sentence (empty = whole chapter)",
-        height=110
-    )
+    selection = st.text_area("Paragraph / sentence (optional)", height=100)
     target = selection.strip() if selection.strip() else chapter["text"]
 
-    st.subheader("🎭 Style")
-    genre = st.selectbox("Genre", GENRES.keys())
-    voice = st.selectbox("Voice", VOICES.keys())
+    st.subheader("🎭 Style Preset")
+    preset_name = st.selectbox(
+        "Preset",
+        ["— Manual —"] + list(project["presets"].keys())
+    )
+
+    if preset_name != "— Manual —":
+        genre, voice = project["presets"][preset_name]
+    else:
+        genre = st.selectbox("Genre", GENRES.keys())
+        voice = st.selectbox("Voice", VOICES.keys())
+
+        if st.button("💾 Save Preset"):
+            pname = st.text_input("Preset name", key="pname")
+            if pname:
+                project["presets"][pname] = (genre, voice)
+
     style = f"{GENRES[genre]} {VOICES[voice]}"
 
     st.divider()
     st.subheader("🧰 Tools")
-
-    cols = st.columns(2)
-    for i, tool in enumerate(TOOLS):
-        if cols[i % 2].button(tool):
-            output = call_llm(
-                TOOLS[tool],
-                target,
-                style,
-                project.get("bible", "")
-            )
+    for tool, intent in TOOLS.items():
+        if st.button(tool):
+            out = call_llm(intent, target, style, project["bible"])
             chapter["outputs"].append({
                 "tool": tool,
                 "target": target,
-                "text": output
+                "text": out
             })
 
     if chapter["outputs"]:
         st.divider()
         st.subheader("🧪 Outputs")
-        for idx, out in enumerate(chapter["outputs"]):
+        for i, out in enumerate(chapter["outputs"]):
             st.markdown(f"**{out['tool']}**")
-            st.text_area("", out["text"], height=140, key=f"out_{idx}")
-            if st.button(f"✅ Accept {out['tool']}", key=f"acc_{idx}"):
+            st.text_area("", out["text"], height=120, key=f"out_{i}")
+            if st.button("✅ Accept", key=f"acc_{i}"):
                 save_version(chapter)
+                chapter["history"].append({
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "tool": out["tool"]
+                })
                 if selection.strip():
+                    chapter["text"] = chapter["text"].replace(out["target"], out["text"], 1)
+                else:
+                    chapter["text"] = out["text"]
+                chapter["outputs"].clear()
+                break
+
+    if chapter["history"]:
+        st.divider()
+        st.subheader("🧠 Recent Changes")
+        for h in reversed(chapter["history"][-5:]):
+            st.caption(f"{h['time']} — {h['tool']}")
+
+st.caption("🫒 Olivetti 18.3 — speed + memory unlocked")
