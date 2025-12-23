@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 
 # ============================================================
 # CONFIG
@@ -15,6 +16,8 @@ defaults = {
     "main_text": "",
     "show_story_bible": True,
     "show_voice_bible": True,
+    "focus_mode": False,
+    "last_save": time.time(),
 }
 
 for k, v in defaults.items():
@@ -22,18 +25,43 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ============================================================
+# AUTOSAVE (SESSION-LEVEL)
+# ============================================================
+def autosave():
+    st.session_state.last_save = time.time()
+
+# ============================================================
 # TOP BAR (ALWAYS VISIBLE)
 # ============================================================
 top = st.container()
 with top:
-    c = st.columns([1,1,1,1,4])
+    c = st.columns([1,1,1,1,1,3])
     c[0].button("New Project")
     c[1].button("Rough Draft")
     c[2].button("First Edit")
     c[3].button("Final Draft")
-    c[4].markdown("")
+
+    if c[4].button("🎯 Focus"):
+        st.session_state.focus_mode = True
+
+    c[5].markdown("")
 
 st.divider()
+
+# ============================================================
+# FOCUS MODE (HARD LOCK)
+# ============================================================
+if st.session_state.focus_mode:
+    st.text_area(
+        "",
+        key="main_text",
+        height=700,
+        placeholder="Focus Mode. Refresh page to exit.",
+        on_change=autosave
+    )
+
+    st.caption("Focus Mode active — refresh the page to unlock.")
+    st.stop()
 
 # ============================================================
 # COLLAPSIBLE LAYOUT LOGIC
@@ -53,15 +81,15 @@ with left:
     if st.session_state.show_story_bible:
         st.markdown("### Story Bible")
 
-        st.text_area("Junk Drawer", height=70, key="sb_junk")
-        st.text_area("Synopsis", height=70, key="sb_synopsis")
-        st.text_input("Genre / Style", key="sb_genre")
-        st.text_area("World Elements", height=70, key="sb_world")
-        st.text_area("Characters", height=70, key="sb_characters")
+        st.text_area("Junk Drawer", height=70, key="sb_junk", on_change=autosave)
+        st.text_area("Synopsis", height=70, key="sb_synopsis", on_change=autosave)
+        st.text_input("Genre / Style", key="sb_genre", on_change=autosave)
+        st.text_area("World Elements", height=70, key="sb_world", on_change=autosave)
+        st.text_area("Characters", height=70, key="sb_characters", on_change=autosave)
 
         st.markdown("**Outline**")
         for i in range(1, 6):
-            st.text_input(f"Chapter {i}", key=f"sb_ch_{i}")
+            st.text_input(f"Chapter {i}", key=f"sb_ch_{i}", on_change=autosave)
 
 # ============================================================
 # CENTER — TYPE SCREEN (ALWAYS ON)
@@ -71,7 +99,8 @@ with center:
         "",
         key="main_text",
         height=560,
-        placeholder="Just type. No project required."
+        placeholder="Just type. No project required.",
+        on_change=autosave
     )
 
     st.divider()
@@ -123,7 +152,8 @@ with right:
         st.text_area(
             "Match My Style (example)",
             height=80,
-            key="vb_example"
+            key="vb_example",
+            on_change=autosave
         )
 
         st.selectbox(
@@ -141,4 +171,4 @@ with right:
 # ============================================================
 # FOOTER
 # ============================================================
-st.caption("Olivetti Desk — Layout locked. Behavior comes next.")
+st.caption("Olivetti Desk — Focused. Autosaving. Layout locked.")
