@@ -11,6 +11,85 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+# =========================
+# ITALIAN MODERN DESK SKIN
+# =========================
+st.markdown("""
+<style>
+
+/* --- Global --- */
+html, body, [class*="css"] {
+    font-family: "IBM Plex Serif", "Georgia", serif;
+    background-color: #f6f1eb;
+    color: #2b2b2b;
+}
+
+/* --- Main writing surface --- */
+textarea {
+    background-color: #fbf9f6 !important;
+    border: 1px solid #d8d2cb !important;
+    border-radius: 10px !important;
+    padding: 16px !important;
+    font-size: 1.05rem !important;
+    line-height: 1.6 !important;
+}
+
+/* --- Inputs & Selects --- */
+input, select {
+    background-color: #fbf9f6 !important;
+    border-radius: 8px !important;
+    border: 1px solid #d8d2cb !important;
+}
+
+/* --- Buttons --- */
+button {
+    background-color: #ece6df !important;
+    color: #2b2b2b !important;
+    border-radius: 8px !important;
+    border: 1px solid #d0c7bd !important;
+    font-weight: 500 !important;
+}
+
+button:hover {
+    background-color: #e0d7ce !important;
+}
+
+/* --- Accent (Olivetti red) --- */
+div[data-baseweb="slider"] > div {
+    color: #b22222;
+}
+
+/* --- Sidebar --- */
+section[data-testid="stSidebar"] {
+    background-color: #efe9e2;
+    border-right: 1px solid #d6cdc3;
+}
+
+/* --- Headers --- */
+h1, h2, h3 {
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+
+/* --- Focus Mode Calm --- */
+body:has(input[type="checkbox"]:checked) textarea {
+    background-color: #fffdfb !important;
+    box-shadow: 0 0 0 1px #e6dfd7;
+}
+
+/* --- Reduce visual noise --- */
+hr {
+    border: none;
+    border-top: 1px solid #ddd4cb;
+}
+
+/* --- Caption --- */
+footer {
+    opacity: 0.6;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 # =========================
 # OPTIONAL LOCAL DRAG SUPPORT
@@ -244,3 +323,4 @@ with right:
             st.text_area("Notes", chapter["analysis"], height=160)
 
 st.caption("Olivetti 24.0 — Balanced, stable, built to write all day")
+
