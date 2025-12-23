@@ -1,10 +1,12 @@
 import streamlit as st
 from datetime import datetime
+from openai import OpenAI
 
 # ============================================================
 # CONFIG
 # ============================================================
 st.set_page_config(page_title="🫒 Olivetti", layout="wide")
+client = OpenAI()
 
 # ============================================================
 # SESSION STATE
@@ -31,15 +33,52 @@ def autosave():
     st.session_state.last_saved = datetime.now().strftime("%H:%M:%S")
 
 # ============================================================
+# AI CALL
+# ============================================================
+def ai_write(text, voice_data):
+    style = ""
+    temp = 0.5
+
+    if voice_data:
+        style = f"""
+Match this writing voice:
+{voice_data['sample']}
+"""
+        temp = 0.3 + voice_data["intensity"] * 0.6
+
+    prompt = f"""
+Continue writing the following text.
+Do not summarize.
+Do not explain.
+Just write forward naturally.
+
+{style}
+
+TEXT:
+{text}
+"""
+
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": "You are a professional novelist continuing a draft."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temp
+    )
+
+    return text + "\n\n" + r.output_text
+
+# ============================================================
 # TOP BAR
 # ============================================================
 c1, c2, c3, c4, c5 = st.columns([1,1,1,1,2])
-with c1: st.button("🆕 New Project")
-with c2: st.button("📝 Rough Draft")
-with c3: st.button("✏️ First Edit")
-with c4: st.button("✅ Final Draft")
+with c1: st.button("🆕 New")
+with c2: st.button("📝 Draft")
+with c3: st.button("✏️ Edit")
+with c4: st.button("✅ Final")
 with c5:
-    if st.button("🎯 Focus Mode"):
+    if st.button("🎯 Focus"):
         st.session_state.focus = not st.session_state.focus
 
 st.divider()
@@ -63,7 +102,7 @@ if left:
             st.text_area("Plot Threads", height=120)
 
 # ============================================================
-# CENTER — TYPE SCREEN (LOCKED)
+# CENTER — WRITING DESK (ALWAYS VISIBLE)
 # ============================================================
 with center:
     st.subheader("🫒 Writing Desk")
@@ -72,7 +111,7 @@ with center:
         "",
         st.session_state.text,
         height=420,
-        placeholder="Just write. No project required.",
+        placeholder="Write freely. No project required.",
         on_change=autosave
     )
 
@@ -82,34 +121,41 @@ with center:
     st.divider()
 
     b1, b2, b3, b4, b5 = st.columns(5)
-    b1.button("✍️ Write")
-    b2.button("🔁 Rewrite")
-    b3.button("➕ Expand")
-    b4.button("🔄 Rephrase")
-    b5.button("🎨 Describe")
+
+    if b1.button("✍️ Write"):
+        voice = None
+        if st.session_state.active_voice:
+            voice = st.session_state.voices[st.session_state.active_voice]
+
+        with st.spinner("Writing…"):
+            st.session_state.text = ai_write(
+                st.session_state.text,
+                voice
+            )
+            autosave()
+
+    b2.button("🔁 Rewrite", disabled=True)
+    b3.button("➕ Expand", disabled=True)
+    b4.button("🔄 Rephrase", disabled=True)
+    b5.button("🎨 Describe", disabled=True)
 
     e1, e2, e3, e4, e5 = st.columns(5)
-    e1.button("🧹 Spell")
-    e2.button("📐 Grammar")
-    e3.button("🔍 Find")
-    e4.button("📚 Synonym")
-    e5.button("🧠 Sentence")
+    e1.button("🧹 Spell", disabled=True)
+    e2.button("📐 Grammar", disabled=True)
+    e3.button("🔍 Find", disabled=True)
+    e4.button("📚 Synonym", disabled=True)
+    e5.button("🧠 Sentence", disabled=True)
 
 # ============================================================
-# RIGHT — VOICE SYSTEM
+# RIGHT — VOICE BIBLE
 # ============================================================
 if right:
     with right:
         with st.expander("🎭 Voice Bible", expanded=True):
 
             voice_name = st.text_input("Voice Name")
-
-            voice_sample = st.text_area(
-                "Training Sample (paste your best paragraph)",
-                height=120
-            )
-
-            intensity = st.slider("Voice Intensity", 0.0, 1.0, 0.5)
+            voice_sample = st.text_area("Training Sample", height=120)
+            intensity = st.slider("Intensity", 0.0, 1.0, 0.5)
 
             if st.button("➕ Save Voice"):
                 if voice_name and voice_sample:
@@ -128,14 +174,10 @@ if right:
                 st.session_state.active_voice = selected
 
                 st.caption(
-                    f"Using voice: **{selected}** "
-                    f"(intensity {st.session_state.voices[selected]['intensity']})"
+                    f"Using **{selected}** (intensity {st.session_state.voices[selected]['intensity']})"
                 )
-
-            st.divider()
-            st.caption("Voice affects all AI actions (next step).")
 
 # ============================================================
 # FOOTER
 # ============================================================
-st.caption("Olivetti — Voice system locked. Desk preserved.")
+st.caption("Olivetti — AI Write v1 (voice-aware, desk-safe)")
