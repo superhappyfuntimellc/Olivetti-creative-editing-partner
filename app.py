@@ -3,39 +3,35 @@ import re
 from datetime import datetime
 from openai import OpenAI
 
-st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.0 — Studio Mode")
+st.set_page_config(layout="wide", page_title="🫒 Olivetti 19.1 — Tool Density")
 client = OpenAI()
 
 # =========================
 # SESSION STATE
 # =========================
-defaults = {
+for k, v in {
     "projects": {},
     "current_project": None,
     "current_chapter": 0,
     "selected_para": None
-}
-for k, v in defaults.items():
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # =========================
-# MODELS
+# TOOL PRESETS
 # =========================
-GENRES = {
-    "Literary": "Elegant prose, interiority, subtle metaphor.",
-    "Noir": "Hard-edged, cynical, concrete imagery.",
-    "Thriller": "Fast pacing, tension, urgency.",
-    "Comedy": "Timing, irony, wit, lightness.",
-    "Lyrical": "Rhythm, imagery, musical language."
-}
-
-VOICES = {
-    "Neutral": "Clear, invisible prose.",
-    "Minimal": "Short, restrained sentences.",
-    "Expressive": "Emotion-forward language.",
-    "Hardboiled": "Dry, blunt, unsentimental.",
-    "Poetic": "Figurative, musical language."
+TOOLS = {
+    "Rewrite": "Rewrite for clarity and flow without changing meaning.",
+    "Expand": "Expand the moment with more sensory detail.",
+    "Compress": "Tighten the prose, removing excess.",
+    "Continue": "Continue naturally from the end.",
+    "Dialogue Polish": "Improve dialogue realism and rhythm.",
+    "Heighten Tension": "Increase suspense and emotional pressure.",
+    "Make Colder": "Reduce warmth, increase distance or unease.",
+    "Make Warmer": "Add intimacy and emotional warmth.",
+    "Surprise": "Introduce an unexpected but fitting turn.",
+    "Clarify": "Make meaning clearer without simplifying tone."
 }
 
 # =========================
@@ -47,9 +43,15 @@ def split_paragraphs(text):
 def rebuild(paras):
     return "\n\n".join(paras)
 
+def save_version(ch):
+    ch["versions"].append({
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "text": ch["text"]
+    })
+
 def call_llm(context, intent, text):
     prompt = f"""
-STORY CONTEXT:
+CONTEXT:
 {context}
 
 INTENT:
@@ -67,12 +69,6 @@ TEXT:
         temperature=0.5
     )
     return r.output_text
-
-def save_version(ch):
-    ch["versions"].append({
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "text": ch["text"]
-    })
 
 # =========================
 # SIDEBAR — PROJECT
@@ -102,22 +98,6 @@ with st.sidebar:
         st.subheader("📘 Story Bible")
         project["bible"] = st.text_area("", project["bible"], height=120)
 
-        st.divider()
-        st.subheader("🧍 Characters")
-        cname = st.text_input("New character")
-        if st.button("Add Character") and cname:
-            project["characters"][cname] = {
-                "voice": "",
-                "motivation": "",
-                "constraints": ""
-            }
-
-        for c, data in project["characters"].items():
-            with st.expander(c):
-                data["voice"] = st.text_area("Voice", data["voice"])
-                data["motivation"] = st.text_area("Motivation", data["motivation"])
-                data["constraints"] = st.text_area("Constraints", data["constraints"])
-
 # =========================
 # MAIN
 # =========================
@@ -125,28 +105,26 @@ if not project:
     st.title("🫒 Olivetti Studio")
     st.stop()
 
-# Ensure one chapter
 if not project["chapters"]:
     project["chapters"].append({
         "title": "Chapter 1",
         "text": "",
         "scene": {"pov": "", "location": "", "intent": ""},
         "versions": [],
-        "history": [],
         "outputs": []
     })
 
 chapter = project["chapters"][st.session_state.current_chapter]
 paragraphs = split_paragraphs(chapter["text"])
 
-left, center, right = st.columns([1.1, 2.3, 2.6])
+left, center, right = st.columns([1.1, 2.4, 2.5])
 
 # =========================
 # LEFT — PARAGRAPHS
 # =========================
 with left:
-    st.subheader("¶ Paragraphs")
-    for i, p in enumerate(paragraphs):
+    st.subheader("¶ Target")
+    for i, _ in enumerate(paragraphs):
         if st.button(f"¶ {i+1}", key=f"p{i}"):
             st.session_state.selected_para = i
 
@@ -161,18 +139,69 @@ with center:
         save_version(chapter)
 
 # =========================
-# RIGHT — STUDIO
+# RIGHT — TOOLS
 # =========================
 with right:
-    st.subheader("🎬 Scene Context")
-    chapter["scene"]["pov"] = st.selectbox(
-        "POV Character",
-        [""] + list(project["characters"].keys())
-    )
-    chapter["scene"]["location"] = st.text_input("Location", chapter["scene"]["location"])
-    chapter["scene"]["intent"] = st.text_input("Scene Intent", chapter["scene"]["intent"])
+    st.subheader("🎯 Scope")
+    scope = st.selectbox("Apply to", ["Paragraph", "Chapter"])
+
+    st.divider()
+    st.subheader("🔧 Tool Buttons")
+
+    selected_tools = []
+    for t in TOOLS:
+        if st.checkbox(t):
+            selected_tools.append(t)
 
     st.divider()
     st.subheader("🧠 Command Palette")
+    command = st.text_input("Custom command (optional)")
 
-    intent = st.text_in_
+    if st.button("Run Tools"):
+        chapter["outputs"].clear()
+
+        if scope == "Paragraph" and st.session_state.selected_para is not None:
+            target = paragraphs[st.session_state.selected_para]
+        else:
+            target = chapter["text"]
+
+        context = f"""
+Story Bible:
+{project['bible']}
+"""
+
+        for t in selected_tools:
+            out = call_llm(context, TOOLS[t], target)
+            chapter["outputs"].append({
+                "label": t,
+                "text": out,
+                "scope": scope
+            })
+
+        if command:
+            out = call_llm(context, command, target)
+            chapter["outputs"].append({
+                "label": f"Command: {command}",
+                "text": out,
+                "scope": scope
+            })
+
+    if chapter["outputs"]:
+        st.divider()
+        st.subheader("🧪 Outputs")
+
+        for i, o in enumerate(chapter["outputs"]):
+            with st.expander(o["label"], expanded=True):
+                st.text_area("Preview", o["text"], height=160)
+
+                if st.button("✅ Accept", key=f"a{i}"):
+                    save_version(chapter)
+                    if o["scope"] == "Paragraph" and st.session_state.selected_para is not None:
+                        paragraphs[st.session_state.selected_para] = o["text"]
+                        chapter["text"] = rebuild(paragraphs)
+                    else:
+                        chapter["text"] = o["text"]
+                    chapter["outputs"].clear()
+                    break
+
+st.caption("🫒 Olivetti 19.1 — density without chaos")
