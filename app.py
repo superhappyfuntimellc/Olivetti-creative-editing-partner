@@ -7,7 +7,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Olivetti 23.8", layout="wide")
+st.set_page_config(page_title="Olivetti 23.9", layout="wide")
 client = OpenAI()
 
 # ============================================================
@@ -18,13 +18,17 @@ def init_state():
         "projects": {},
         "current_project": None,
         "current_chapter": 0,
-        "voice_bible": {},
-        "analysis": [],
-        "strong_passages": [],
         "intensity": 0.5,
-        "pov": "Close Third",
-        "tense": "Past",
-        "structure_locked": False,
+        "analysis": [],
+        "story_bible": {
+            "pov": "Close Third",
+            "tense": "Past",
+            "style_rules": "",
+            "characters": "",
+            "setting": "",
+            "themes": "",
+            "prohibitions": ""
+        },
         "instruction_bible": {
             "Editorial": "Revise for clarity and flow.",
             "Minimal": "Make the smallest possible improvement.",
@@ -41,59 +45,67 @@ init_state()
 # ============================================================
 # HELPERS
 # ============================================================
-def split_into_chapters(text):
-    parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
-    chapters = []
-    for i in range(1, len(parts), 2):
-        chapters.append({
-            "title": parts[i].title(),
-            "text": parts[i+1].strip(),
-            "workflow": "Draft",
-            "versions": []
-        })
-    if not chapters:
-        chapters.append({
-            "title": "Chapter 1",
-            "text": text,
-            "workflow": "Draft",
-            "versions": []
-        })
-    return chapters
-
 def save_version(ch):
     ch["versions"].append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "text": ch["text"]
     })
 
-def score_passage(p):
-    words = p.split()
-    sentences = re.split(r"[.!?]", p)
-    verb_strength = sum(1 for w in words if w.endswith("ed") or w.endswith("ing"))
-    noun_density = sum(1 for w in words if w[0].isupper())
-    avg_sentence = sum(len(s.split()) for s in sentences if s.strip()) / max(len(sentences), 1)
+def enforce_pov_tense(text):
+    notes = []
+    if st.session_state.story_bible["tense"] == "Past":
+        if re.search(r"\bis\b|\bare\b", text):
+            notes.append("Possible present-tense drift detected.")
+    if st.session_state.story_bible["pov"] == "First":
+        if re.search(r"\bhe\b|\bshe\b", text):
+            notes.append("Possible POV drift detected (first person expected).")
+    return notes
 
-    score = (
-        min(avg_sentence, 25)
-        + verb_strength * 0.5
-        + noun_density * 0.3
+def ai_action(action, text, instruction):
+    bible = st.session_state.story_bible
+    prompt = f"""
+ACTION: {action}
+
+INSTRUCTIONS:
+{instruction}
+
+STORY BIBLE (MANDATORY):
+POV: {bible['pov']}
+TENSE: {bible['tense']}
+
+STYLE RULES:
+{bible['style_rules']}
+
+CHARACTERS:
+{bible['characters']}
+
+SETTING:
+{bible['setting']}
+
+THEMES:
+{bible['themes']}
+
+PROHIBITIONS:
+{bible['prohibitions']}
+
+TEXT:
+{text}
+"""
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[{"role": "system", "content": "You are a professional novelist following strict canon rules."},
+               {"role": "user", "content": prompt}],
+        temperature=st.session_state.intensity
     )
-    return score
-
-def analyze_strongest(text):
-    paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 80]
-    scored = [(score_passage(p), p) for p in paragraphs]
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return scored[:5]
+    return r.output_text
 
 # ============================================================
 # TOP BAR
 # ============================================================
-top = st.columns([2,2,2,2])
+top = st.columns([2,2,2])
 top[0].slider("Intensity", 0.0, 1.0, key="intensity")
-top[1].selectbox("POV", ["First","Close Third","Omniscient"], key="pov")
-top[2].selectbox("Tense", ["Past","Present"], key="tense")
-top[3].toggle("Lock Structure", key="structure_locked")
+top[1].selectbox("POV", ["First","Close Third","Omniscient"], key="story_bible_pov")
+top[2].selectbox("Tense", ["Past","Present"], key="story_bible_tense")
 
 st.divider()
 
@@ -117,49 +129,38 @@ with st.sidebar:
     if not st.session_state.current_project:
         st.stop()
 
-    project = st.session_state.projects[st.session_state.current_project]
-    chapters = project["chapters"]
-
-    st.divider()
-    st.subheader("Chapters")
-    for i, ch in enumerate(chapters):
-        if st.button(f"{i+1}. {ch['title']}", key=f"ch_{i}"):
-            st.session_state.current_chapter = i
-
 # ============================================================
-# MAIN
+# MAIN — STORY BIBLE + EDITOR
 # ============================================================
+project = st.session_state.projects[st.session_state.current_project]
+chapters = project["chapters"]
 chapter = chapters[st.session_state.current_chapter]
 
-left, center, right = st.columns([1,3,2])
+tabs = st.tabs(["Chapter", "Story Bible"])
 
-# ---------------- LEFT ----------------
-with left:
-    st.subheader("Workflow")
-    st.write(chapter["workflow"])
-
-# ---------------- CENTER ----------------
-with center:
+# ---------------- CHAPTER ----------------
+with tabs[0]:
     st.subheader("Chapter Text")
-    chapter["title"] = st.text_input("Title", chapter["title"])
     chapter["text"] = st.text_area("", chapter["text"], height=520)
 
     if st.button("Save Version"):
         save_version(chapter)
 
-# ---------------- RIGHT — STRONGEST PASSAGES ----------------
-with right:
-    st.subheader("Strongest Passages")
+    drift = enforce_pov_tense(chapter["text"])
+    for d in drift:
+        st.warning(d)
 
-    if st.button("Analyze Chapter"):
-        st.session_state.strong_passages = analyze_strongest(chapter["text"])
+# ---------------- STORY BIBLE ----------------
+with tabs[1]:
+    sb = st.session_state.story_bible
 
-    for i, (score, passage) in enumerate(st.session_state.strong_passages):
-        with st.expander(f"#{i+1} Score {round(score,2)}"):
-            st.write(passage)
+    sb["pov"] = st.selectbox("Global POV", ["First","Close Third","Omniscient"], index=["First","Close Third","Omniscient"].index(sb["pov"]))
+    sb["tense"] = st.selectbox("Global Tense", ["Past","Present"], index=["Past","Present"].index(sb["tense"]))
 
-            if st.button("Use as Voice Anchor", key=f"anchor_{i}"):
-                st.session_state.voice_bible["sample"] = passage
-                st.success("Added to Voice Bible.")
+    sb["style_rules"] = st.text_area("Style Rules", sb["style_rules"], height=100)
+    sb["characters"] = st.text_area("Characters", sb["characters"], height=120)
+    sb["setting"] = st.text_area("Setting / World", sb["setting"], height=120)
+    sb["themes"] = st.text_area("Themes & Motifs", sb["themes"], height=100)
+    sb["prohibitions"] = st.text_area("Rules / Prohibitions", sb["prohibitions"], height=100)
 
-st.caption("Olivetti 23.8 — Strongest Work Analyzer")
+st.caption("Olivetti 23.9 — Canon-Enforced Writing Engine")
