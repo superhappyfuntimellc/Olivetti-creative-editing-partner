@@ -19,6 +19,8 @@ def init_state():
         "current_chapter": 0,
         "lock_chapter": False,
         "preview_text": None,
+        "focus_mode": False,
+        "show_tools": True,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -112,31 +114,36 @@ TEXT:
     )
 
 # ============================================================
-# SIDEBAR — PROJECTS
+# SIDEBAR (HIDEABLE)
 # ============================================================
-with st.sidebar:
-    st.header("Projects")
+if not st.session_state.focus_mode:
+    with st.sidebar:
+        st.header("Projects")
 
-    names = list(st.session_state.projects.keys())
-    choice = st.selectbox("Project", ["— New —"] + names)
+        names = list(st.session_state.projects.keys())
+        choice = st.selectbox("Project", ["— New —"] + names)
 
-    if choice == "— New —":
-        name = st.text_input("Project name")
-        if st.button("Create Project") and name:
-            st.session_state.projects[name] = {"chapters": []}
-            st.session_state.current_project = name
-            st.session_state.current_chapter = 0
-    else:
-        st.session_state.current_project = choice
+        if choice == "— New —":
+            name = st.text_input("Project name")
+            if st.button("Create Project") and name:
+                st.session_state.projects[name] = {"chapters": []}
+                st.session_state.current_project = name
+                st.session_state.current_chapter = 0
+        else:
+            st.session_state.current_project = choice
 
-    if st.session_state.current_project:
-        upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
-        if upload:
-            text = upload.read().decode("utf-8")
-            st.session_state.projects[
-                st.session_state.current_project
-            ]["chapters"] = split_into_chapters(text)
-            st.session_state.current_chapter = 0
+        if st.session_state.current_project:
+            upload = st.file_uploader("Import manuscript (.txt)", type=["txt"])
+            if upload:
+                text = upload.read().decode("utf-8")
+                st.session_state.projects[
+                    st.session_state.current_project
+                ]["chapters"] = split_into_chapters(text)
+                st.session_state.current_chapter = 0
+
+        st.divider()
+        st.checkbox("Focus Mode", key="focus_mode")
+        st.checkbox("Show Tools", key="show_tools")
 
 # ============================================================
 # MAIN
@@ -151,20 +158,21 @@ project, chapters, chapter = get_current()
 # ============================================================
 # LAYOUT
 # ============================================================
-left, center, right = st.columns([1.2, 3.2, 2])
+if st.session_state.focus_mode:
+    left, center, right = st.columns([0.01, 5, 0.01])
+else:
+    left, center, right = st.columns([1.2, 3.2, 2])
 
 # ---------------- LEFT ----------------
-with left:
-    st.subheader("Chapters")
-    for i, ch in enumerate(chapters):
-        if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
-            st.session_state.current_chapter = i
+if not st.session_state.focus_mode:
+    with left:
+        st.subheader("Chapters")
+        for i, ch in enumerate(chapters):
+            if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
+                st.session_state.current_chapter = i
 
-    chapter["title"] = st.text_input("Chapter title", chapter["title"])
-    st.session_state.lock_chapter = st.checkbox(
-        "🔒 Lock Chapter",
-        value=st.session_state.lock_chapter
-    )
+        chapter["title"] = st.text_input("Chapter title", chapter["title"])
+        st.checkbox("🔒 Lock Chapter", key="lock_chapter")
 
 # ---------------- CENTER ----------------
 with center:
@@ -173,7 +181,7 @@ with center:
     chapter["text"] = st.text_area(
         "",
         chapter["text"],
-        height=520,
+        height=620,
         disabled=st.session_state.lock_chapter
     )
 
@@ -181,39 +189,32 @@ with center:
         save_version(chapter)
 
     if st.session_state.preview_text:
-        st.subheader("Preview (Not Applied)")
-        st.text_area(
-            "",
-            st.session_state.preview_text,
-            height=260
-        )
+        st.subheader("Preview")
+        st.text_area("", st.session_state.preview_text, height=260)
 
         colA, colB = st.columns(2)
         if colA.button("Accept Rewrite"):
             save_version(chapter)
             chapter["text"] = st.session_state.preview_text
             st.session_state.preview_text = None
-
         if colB.button("Discard Preview"):
             st.session_state.preview_text = None
 
 # ---------------- RIGHT ----------------
-with right:
-    st.subheader("AI Rewrite Suite")
+if st.session_state.show_tools and not st.session_state.focus_mode:
+    with right:
+        st.subheader("AI Rewrite Suite")
 
-    mode = st.selectbox(
-        "Tool",
-        ["Rewrite", "Tighten", "Tension", "Clarity", "Dialogue", "Compress"]
-    )
+        mode = st.selectbox(
+            "Tool",
+            ["Rewrite", "Tighten", "Tension", "Clarity", "Dialogue", "Compress"]
+        )
 
-    if st.button(
-        "Run Tool",
-        disabled=st.session_state.lock_chapter
-    ):
-        with st.spinner("Working…"):
-            st.session_state.preview_text = ai_rewrite(
-                mode,
-                chapter["text"]
-            )
+        if st.button("Run Tool", disabled=st.session_state.lock_chapter):
+            with st.spinner("Working…"):
+                st.session_state.preview_text = ai_rewrite(
+                    mode,
+                    chapter["text"]
+                )
 
-st.caption("Olivetti 27.0 — AI Rewrite Suite")
+st.caption("Olivetti 28.0 — Digital Typewriter Mode")
