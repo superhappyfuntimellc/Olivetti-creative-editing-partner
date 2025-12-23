@@ -52,6 +52,12 @@ TOOLS = [
 # =========================================================
 # HELPERS
 # =========================================================
+def new_project():
+    return {
+        "story_bible": "",
+        "chapters": []
+    }
+
 def new_chapter(title, text):
     return {
         "title": title,
@@ -89,13 +95,17 @@ def call_llm(system, prompt, temp=0.4):
     )
     return r.output_text
 
-def run_tool(tool, text, genre, voice, sample):
+def run_tool(tool, text, genre, voice, sample, bible):
     style = f"{GENRES[genre]} {VOICES[voice]}"
     if sample:
         style += f"\nMatch this style:\n{sample}"
 
     prompt = f"""
-TOOL: {tool}
+STORY BIBLE:
+{bible if bible else "None provided."}
+
+TOOL:
+{tool}
 
 STYLE:
 {style}
@@ -103,7 +113,7 @@ STYLE:
 TEXT:
 {text}
 """
-    return call_llm("You are a professional fiction editor.", prompt)
+    return call_llm("You are a professional fiction editor who must respect the story bible.", prompt)
 
 # =========================================================
 # SIDEBAR — PROJECTS
@@ -117,7 +127,7 @@ with st.sidebar:
     if choice == "— New —":
         name = st.text_input("Project name")
         if st.button("Create Project") and name:
-            st.session_state.projects[name] = {"chapters": []}
+            st.session_state.projects[name] = new_project()
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
     else:
@@ -150,7 +160,7 @@ if not chapters:
 idx = st.session_state.current_chapter
 chapter = chapters[idx]
 
-left, center, right = st.columns([1.3, 3.2, 2.7])
+left, center, right = st.columns([1.3, 3.2, 3.0])
 
 # =========================================================
 # LEFT — STRUCTURE
@@ -176,17 +186,26 @@ with center:
     st.subheader("✍️ Chapter Text")
 
     if chapter["locked"]:
-        st.text_area("", chapter["text"], height=400, disabled=True)
+        st.text_area("", chapter["text"], height=420, disabled=True)
     else:
-        chapter["text"] = st.text_area("", chapter["text"], height=400)
+        chapter["text"] = st.text_area("", chapter["text"], height=420)
 
     st.subheader("📝 Chapter Notes")
     chapter["notes"] = st.text_area("", chapter["notes"], height=120)
 
 # =========================================================
-# RIGHT — TOOLS + OUTPUTS
+# RIGHT — STORY BIBLE + TOOLS
 # =========================================================
 with right:
+    st.subheader("📖 Story Bible")
+    project["story_bible"] = st.text_area(
+        "",
+        project["story_bible"],
+        height=240,
+        placeholder="World, lore, canon, themes, constraints…"
+    )
+
+    st.divider()
     st.subheader("🧰 Tools")
 
     genre = st.selectbox("Genre", list(GENRES.keys()))
@@ -199,7 +218,14 @@ with right:
                 st.warning("Chapter is locked.")
             else:
                 with st.spinner(f"{tool}…"):
-                    output = run_tool(tool, chapter["text"], genre, voice, sample)
+                    output = run_tool(
+                        tool,
+                        chapter["text"],
+                        genre,
+                        voice,
+                        sample,
+                        project["story_bible"]
+                    )
                     chapter["outputs"][tool].insert(0, {
                         "time": datetime.now().strftime("%H:%M:%S"),
                         "text": output
@@ -210,20 +236,4 @@ with right:
 
     for tool, outputs in chapter["outputs"].items():
         if outputs:
-            with st.expander(f"{tool} ({len(outputs)})", expanded=False):
-                for i, out in enumerate(outputs):
-                    st.caption(out["time"])
-                    st.text_area("", out["text"], height=160, key=f"{tool}_{i}")
-
-                    col1, col2 = st.columns(2)
-                    if col1.button("✅ Accept", key=f"acc_{tool}_{i}"):
-                        save_version(chapter)
-                        chapter["text"] = out["text"]
-                        chapter["outputs"] = {t: [] for t in TOOLS}
-                        st.experimental_rerun()
-
-                    if col2.button("❌ Reject", key=f"rej_{tool}_{i}"):
-                        outputs.pop(i)
-                        st.experimental_rerun()
-
-st.caption("Olivetti Studio — independent tools, deliberate choice")
+            with st.expander(f"{tool} ({
