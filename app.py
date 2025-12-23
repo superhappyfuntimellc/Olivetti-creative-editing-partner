@@ -5,7 +5,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="Olivetti 22.2")
+st.set_page_config(layout="wide", page_title="Olivetti 22.3")
 client = OpenAI()
 
 # ============================================================
@@ -19,10 +19,37 @@ if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
 
 # ============================================================
+# LLM
+# ============================================================
+def llm(system, prompt, temp=0.3):
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temp
+    )
+    return r.output_text
+
+# ============================================================
 # DATA
 # ============================================================
-def make_story_bible():
-    return {"voice_profile": "", "strength_report": ""}
+def make_voice_bible():
+    return {
+        "sentence_architecture": "",
+        "rhythm": "",
+        "diction": "",
+        "distance": "",
+        "intensity": "",
+        "forbidden": ""
+    }
+
+def make_project():
+    return {
+        "chapters": [],
+        "voice_bible": make_voice_bible()
+    }
 
 def make_chapter(title, text):
     return {"title": title, "text": text, "outline": ""}
@@ -37,6 +64,50 @@ def split_into_chapters(text):
     return chapters
 
 # ============================================================
+# VOICE BIBLE TRAINER
+# ============================================================
+def train_voice_bible(sample):
+    prompt = f"""
+Analyze this passage and extract a VOICE BIBLE.
+
+Return labeled sections ONLY:
+
+SENTENCE ARCHITECTURE
+RHYTHM & CADENCE
+DICTION RULES
+NARRATIVE DISTANCE
+INTENSITY ENVELOPE
+FORBIDDEN MOVES
+
+Do not rewrite. Do not summarize the passage.
+
+TEXT:
+{sample}
+"""
+    raw = llm("You are a master literary stylist.", prompt, 0.3)
+
+    bible = make_voice_bible()
+    current = None
+    for line in raw.splitlines():
+        l = line.lower()
+        if "sentence architecture" in l:
+            current = "sentence_architecture"
+        elif "rhythm" in l:
+            current = "rhythm"
+        elif "diction" in l:
+            current = "diction"
+        elif "distance" in l:
+            current = "distance"
+        elif "intensity" in l:
+            current = "intensity"
+        elif "forbidden" in l:
+            current = "forbidden"
+        elif current:
+            bible[current] += line + "\n"
+
+    return bible
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
@@ -47,10 +118,7 @@ with st.sidebar:
     if choice == "— New —":
         name = st.text_input("Project name")
         if st.button("Create Project") and name:
-            st.session_state.projects[name] = {
-                "chapters": [],
-                "bible": make_story_bible()
-            }
+            st.session_state.projects[name] = make_project()
             st.session_state.current_project = name
             st.session_state.current_chapter = 0
     else:
@@ -65,88 +133,68 @@ with st.sidebar:
             ]["chapters"] = split_into_chapters(text)
 
 # ============================================================
-# MAIN GUARD
+# MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("🫒 Olivetti 22.2")
-    st.write("Create or select a project to begin.")
+    st.title("🫒 Olivetti 22.3")
+    st.write("Create or select a project.")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
+voice_bible = project["voice_bible"]
 
-left, center, right = st.columns([1.2, 3.2, 2.4])
+left, center, right = st.columns([1.2, 3.2, 2.6])
 
 # ============================================================
-# LEFT — PROJECT FOLDER (REORDER CHAPTERS)
+# LEFT
 # ============================================================
 with left:
-    st.subheader("📁 Project Chapters")
-
-    for i, ch in enumerate(chapters):
-        cols = st.columns([6, 1, 1])
-        if cols[0].button(f"{i+1}. {ch['title']}", key=f"chap_sel_{i}"):
+    st.subheader("Chapters")
+    for i, c in enumerate(chapters):
+        if st.button(f"{i+1}. {c['title']}"):
             st.session_state.current_chapter = i
-        if cols[1].button("↑", key=f"up_{i}") and i > 0:
-            chapters[i - 1], chapters[i] = chapters[i], chapters[i - 1]
-            st.session_state.current_chapter = i - 1
-            st.experimental_rerun()
-        if cols[2].button("↓", key=f"down_{i}") and i < len(chapters) - 1:
-            chapters[i + 1], chapters[i] = chapters[i], chapters[i + 1]
-            st.session_state.current_chapter = i + 1
-            st.experimental_rerun()
-
-    st.divider()
-    move_to = st.number_input(
-        "Move current chapter to position",
-        min_value=1,
-        max_value=len(chapters),
-        value=st.session_state.current_chapter + 1
-    )
-    if st.button("Move Chapter"):
-        idx = st.session_state.current_chapter
-        ch = chapters.pop(idx)
-        chapters.insert(move_to - 1, ch)
-        st.session_state.current_chapter = move_to - 1
-        st.experimental_rerun()
 
 # ============================================================
-# CENTER — MANUSCRIPT
+# CENTER
 # ============================================================
 chapter = chapters[st.session_state.current_chapter]
-
 with center:
     st.subheader(chapter["title"])
-    chapter["text"] = st.text_area("Chapter Text", chapter["text"], height=520)
+    chapter["text"] = st.text_area("Text", chapter["text"], height=540)
 
 # ============================================================
-# RIGHT — OUTLINE (REORDER SCENES / BEATS)
+# RIGHT — VOICE BIBLE
 # ============================================================
 with right:
-    st.subheader("📑 Chapter Outline")
+    st.subheader("🎙 Voice Bible")
 
-    if not chapter["outline"]:
-        chapter["outline"] = "- Scene 1\n- Scene 2\n- Scene 3"
-
-    beats = [b for b in chapter["outline"].splitlines() if b.strip()]
-
-    for i, beat in enumerate(beats):
-        cols = st.columns([6, 1, 1])
-        cols[0].write(beat)
-        if cols[1].button("↑", key=f"beat_up_{i}") and i > 0:
-            beats[i - 1], beats[i] = beats[i], beats[i - 1]
-            chapter["outline"] = "\n".join(beats)
-            st.experimental_rerun()
-        if cols[2].button("↓", key=f"beat_down_{i}") and i < len(beats) - 1:
-            beats[i + 1], beats[i] = beats[i], beats[i + 1]
-            chapter["outline"] = "\n".join(beats)
-            st.experimental_rerun()
-
-    st.divider()
-    chapter["outline"] = st.text_area(
-        "Edit Outline Manually",
-        chapter["outline"],
-        height=200
+    sample = st.text_area(
+        "Train from your strongest passage",
+        height=140
     )
 
-st.caption("Olivetti 22.2 — Structural Control Without Fragility")
+    if st.button("Build / Update Voice Bible") and sample:
+        with st.spinner("Extracting voice canon…"):
+            project["voice_bible"] = train_voice_bible(sample)
+        st.success("Voice Bible updated.")
+
+    tabs = {
+        "Sentence": "sentence_architecture",
+        "Rhythm": "rhythm",
+        "Diction": "diction",
+        "Distance": "distance",
+        "Intensity": "intensity",
+        "Forbidden": "forbidden"
+    }
+
+    section = st.selectbox("Section", list(tabs.keys()))
+    key = tabs[section]
+
+    voice_bible[key] = st.text_area(
+        section,
+        voice_bible[key],
+        height=260
+    )
+
+st.caption("Olivetti 22.3 — Voice Is Canon")
