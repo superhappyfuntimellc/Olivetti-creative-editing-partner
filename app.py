@@ -80,6 +80,22 @@ def get_current():
     return project, project["chapters"], project["chapters"][idx]
 
 
+def move_item(lst, i, direction):
+    j = i + direction
+    if 0 <= j < len(lst):
+        lst[i], lst[j] = lst[j], lst[i]
+        return j
+    return i
+
+
+def split_scenes(text):
+    return [s for s in text.split("\n\n") if s.strip()]
+
+
+def join_scenes(scenes):
+    return "\n\n".join(scenes)
+
+
 def call_llm(system, prompt, temperature=0.5):
     r = client.responses.create(
         model="gpt-4.1-mini",
@@ -114,7 +130,7 @@ TEXT:
     )
 
 # ============================================================
-# SIDEBAR (HIDEABLE)
+# SIDEBAR
 # ============================================================
 if not st.session_state.focus_mode:
     with st.sidebar:
@@ -163,25 +179,41 @@ if st.session_state.focus_mode:
 else:
     left, center, right = st.columns([1.2, 3.2, 2])
 
-# ---------------- LEFT ----------------
+# ---------------- LEFT — CHAPTER ORDER ----------------
 if not st.session_state.focus_mode:
     with left:
         st.subheader("Chapters")
         for i, ch in enumerate(chapters):
-            if st.button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
+            cols = st.columns([4, 1, 1])
+            if cols[0].button(f"{i+1}. {ch['title']}", key=f"chap_{i}"):
                 st.session_state.current_chapter = i
+            if cols[1].button("↑", key=f"up_{i}"):
+                st.session_state.current_chapter = move_item(chapters, i, -1)
+            if cols[2].button("↓", key=f"down_{i}"):
+                st.session_state.current_chapter = move_item(chapters, i, 1)
 
         chapter["title"] = st.text_input("Chapter title", chapter["title"])
         st.checkbox("🔒 Lock Chapter", key="lock_chapter")
 
-# ---------------- CENTER ----------------
+# ---------------- CENTER — SCENE ORDER ----------------
 with center:
     st.subheader("Draft")
 
-    chapter["text"] = st.text_area(
+    scenes = split_scenes(chapter["text"])
+    for i, scene in enumerate(scenes):
+        sc = st.columns([6, 1, 1])
+        sc[0].write(scene[:200] + ("…" if len(scene) > 200 else ""))
+        if sc[1].button("↑", key=f"scene_up_{i}"):
+            scenes[i], scenes[i-1] = scenes[i-1], scenes[i]
+        if sc[2].button("↓", key=f"scene_down_{i}") and i < len(scenes) - 1:
+            scenes[i], scenes[i+1] = scenes[i+1], scenes[i]
+
+    chapter["text"] = join_scenes(scenes)
+
+    st.text_area(
         "",
         chapter["text"],
-        height=620,
+        height=420,
         disabled=st.session_state.lock_chapter
     )
 
@@ -190,7 +222,7 @@ with center:
 
     if st.session_state.preview_text:
         st.subheader("Preview")
-        st.text_area("", st.session_state.preview_text, height=260)
+        st.text_area("", st.session_state.preview_text, height=240)
 
         colA, colB = st.columns(2)
         if colA.button("Accept Rewrite"):
@@ -200,7 +232,7 @@ with center:
         if colB.button("Discard Preview"):
             st.session_state.preview_text = None
 
-# ---------------- RIGHT ----------------
+# ---------------- RIGHT — AI ----------------
 if st.session_state.show_tools and not st.session_state.focus_mode:
     with right:
         st.subheader("AI Rewrite Suite")
@@ -217,4 +249,4 @@ if st.session_state.show_tools and not st.session_state.focus_mode:
                     chapter["text"]
                 )
 
-st.caption("Olivetti 28.0 — Digital Typewriter Mode")
+st.caption("Olivetti 29.0 — Structural Control")
