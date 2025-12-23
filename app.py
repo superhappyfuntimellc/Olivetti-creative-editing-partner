@@ -5,7 +5,7 @@ from openai import OpenAI
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(layout="wide", page_title="Olivetti 22.1")
+st.set_page_config(layout="wide", page_title="Olivetti 22.2")
 client = OpenAI()
 
 # ============================================================
@@ -19,36 +19,13 @@ if "current_chapter" not in st.session_state:
     st.session_state.current_chapter = 0
 
 # ============================================================
-# LLM HELPER
-# ============================================================
-def llm(system, prompt, temp=0.3):
-    r = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=temp
-    )
-    return r.output_text
-
-# ============================================================
-# DATA STRUCTURES
+# DATA
 # ============================================================
 def make_story_bible():
-    return {
-        "voice_profile": "",
-        "strength_report": "",
-        "pov": "Close Third",
-        "tense": "Past"
-    }
+    return {"voice_profile": "", "strength_report": ""}
 
 def make_chapter(title, text):
-    return {
-        "title": title,
-        "text": text,
-        "outline": ""
-    }
+    return {"title": title, "text": text, "outline": ""}
 
 def split_into_chapters(text):
     parts = re.split(r"\n\s*(chapter\s+\d+|CHAPTER\s+\d+)\s*\n", text)
@@ -60,51 +37,10 @@ def split_into_chapters(text):
     return chapters
 
 # ============================================================
-# VOICE TRAINER
-# ============================================================
-def train_voice(sample):
-    prompt = f"""
-Analyze this passage for AUTHORIAL VOICE.
-
-Return bullet points only:
-- Sentence length habits
-- Syntax patterns
-- Diction level
-- Rhythm and cadence
-- Emotional distance
-
-TEXT:
-{sample}
-"""
-    return llm("You are a literary voice analyst.", prompt, 0.3)
-
-# ============================================================
-# TEXT ANALYZER
-# ============================================================
-def analyze_strength(chapters, voice_profile):
-    prompt = f"""
-Score each chapter from 1–10 on:
-- Voice consistency
-- Density
-- Specificity
-- Momentum
-
-Identify strongest and weakest chapters briefly.
-
-VOICE PROFILE:
-{voice_profile}
-
-CHAPTERS:
-{[(c['title'], c['text'][:1200]) for c in chapters]}
-"""
-    return llm("You are a senior fiction editor.", prompt, 0.3)
-
-# ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
     st.header("Projects")
-
     projects = list(st.session_state.projects.keys())
     choice = st.selectbox("Project", ["— New —"] + projects)
 
@@ -132,27 +68,47 @@ with st.sidebar:
 # MAIN GUARD
 # ============================================================
 if not st.session_state.current_project:
-    st.title("Olivetti 22.1")
+    st.title("🫒 Olivetti 22.2")
     st.write("Create or select a project to begin.")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
 chapters = project["chapters"]
-bible = project["bible"]
+
+left, center, right = st.columns([1.2, 3.2, 2.4])
 
 # ============================================================
-# LAYOUT (LOCKED — DO NOT MOVE)
-# ============================================================
-left, center, right = st.columns([1.1, 3.6, 2.3])
-
-# ============================================================
-# LEFT — CHAPTER LIST
+# LEFT — PROJECT FOLDER (REORDER CHAPTERS)
 # ============================================================
 with left:
-    st.subheader("Chapters")
-    for i, c in enumerate(chapters):
-        if st.button(f"{i+1}. {c['title']}", key=f"chap_{i}"):
+    st.subheader("📁 Project Chapters")
+
+    for i, ch in enumerate(chapters):
+        cols = st.columns([6, 1, 1])
+        if cols[0].button(f"{i+1}. {ch['title']}", key=f"chap_sel_{i}"):
             st.session_state.current_chapter = i
+        if cols[1].button("↑", key=f"up_{i}") and i > 0:
+            chapters[i - 1], chapters[i] = chapters[i], chapters[i - 1]
+            st.session_state.current_chapter = i - 1
+            st.experimental_rerun()
+        if cols[2].button("↓", key=f"down_{i}") and i < len(chapters) - 1:
+            chapters[i + 1], chapters[i] = chapters[i], chapters[i + 1]
+            st.session_state.current_chapter = i + 1
+            st.experimental_rerun()
+
+    st.divider()
+    move_to = st.number_input(
+        "Move current chapter to position",
+        min_value=1,
+        max_value=len(chapters),
+        value=st.session_state.current_chapter + 1
+    )
+    if st.button("Move Chapter"):
+        idx = st.session_state.current_chapter
+        ch = chapters.pop(idx)
+        chapters.insert(move_to - 1, ch)
+        st.session_state.current_chapter = move_to - 1
+        st.experimental_rerun()
 
 # ============================================================
 # CENTER — MANUSCRIPT
@@ -161,49 +117,36 @@ chapter = chapters[st.session_state.current_chapter]
 
 with center:
     st.subheader(chapter["title"])
-    chapter["text"] = st.text_area(
-        "Chapter Text",
-        chapter["text"],
-        height=560
-    )
+    chapter["text"] = st.text_area("Chapter Text", chapter["text"], height=520)
 
 # ============================================================
-# RIGHT — VOICE + ANALYSIS
+# RIGHT — OUTLINE (REORDER SCENES / BEATS)
 # ============================================================
 with right:
-    st.subheader("Voice Trainer")
+    st.subheader("📑 Chapter Outline")
 
-    voice_sample = st.text_area(
-        "Paste your strongest passage",
-        height=140
-    )
+    if not chapter["outline"]:
+        chapter["outline"] = "- Scene 1\n- Scene 2\n- Scene 3"
 
-    if st.button("Train Voice") and voice_sample:
-        with st.spinner("Training voice model..."):
-            bible["voice_profile"] = train_voice(voice_sample)
+    beats = [b for b in chapter["outline"].splitlines() if b.strip()]
 
-    if bible["voice_profile"]:
-        st.text_area(
-            "Learned Voice Profile",
-            bible["voice_profile"],
-            height=200
-        )
+    for i, beat in enumerate(beats):
+        cols = st.columns([6, 1, 1])
+        cols[0].write(beat)
+        if cols[1].button("↑", key=f"beat_up_{i}") and i > 0:
+            beats[i - 1], beats[i] = beats[i], beats[i - 1]
+            chapter["outline"] = "\n".join(beats)
+            st.experimental_rerun()
+        if cols[2].button("↓", key=f"beat_down_{i}") and i < len(beats) - 1:
+            beats[i + 1], beats[i] = beats[i], beats[i + 1]
+            chapter["outline"] = "\n".join(beats)
+            st.experimental_rerun()
 
     st.divider()
-    st.subheader("Text Strength Analyzer")
+    chapter["outline"] = st.text_area(
+        "Edit Outline Manually",
+        chapter["outline"],
+        height=200
+    )
 
-    if st.button("Analyze Manuscript"):
-        with st.spinner("Analyzing chapters..."):
-            bible["strength_report"] = analyze_strength(
-                chapters,
-                bible["voice_profile"]
-            )
-
-    if bible["strength_report"]:
-        st.text_area(
-            "Strength Report",
-            bible["strength_report"],
-            height=260
-        )
-
-st.caption("Olivetti 22.1 — Stable, Author-Centric, Learning Engine")
+st.caption("Olivetti 22.2 — Structural Control Without Fragility")
