@@ -1,12 +1,13 @@
 import streamlit as st
 from datetime import datetime
+from statistics import mean
 from openai import OpenAI
 
 # ============================================================
 # CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="Olivetti 20.3 — Scene Engine",
+    page_title="Olivetti 20.4 — Live Voice Radar",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -25,6 +26,7 @@ def init_state():
         "pov": "Close Third",
         "tense": "Past",
         "persona": "Literary Guardian",
+        "workflow": "Draft",
         "voice_memory": [],
     }
     for k, v in defaults.items():
@@ -39,12 +41,13 @@ init_state()
 GENRES = ["Literary", "Thriller", "Noir", "Comedy", "Lyrical"]
 POVS = ["First", "Close Third", "Omniscient"]
 TENSES = ["Past", "Present"]
+WORKFLOWS = ["Draft", "Revise", "Polish", "Final"]
 
 PERSONAS = {
-    "Literary Guardian": "Protects voice, subtlety, interiority.",
-    "Brutal Line Editor": "Cuts excess, sharpens sentences.",
-    "Structural Editor": "Focuses on scene purpose and pacing.",
-    "Market-Aware Agent": "Flags clarity, stakes, genre signals."
+    "Literary Guardian": 0.9,
+    "Brutal Line Editor": 1.0,
+    "Structural Editor": 0.7,
+    "Market-Aware Agent": 0.8,
 }
 
 # ============================================================
@@ -58,6 +61,7 @@ def new_scene(title="New Scene"):
         "text": "",
         "comments": [],
         "versions": [],
+        "voice_warnings": "",
     }
 
 def save_version(scene):
@@ -70,7 +74,24 @@ def learn_voice(text):
     if len(text) > 300:
         st.session_state.voice_memory.append(text[:800])
 
-def llm(system, prompt, temp=0.4):
+def sentence_lengths(text):
+    sentences = [s.strip() for s in text.replace("?", ".").replace("!", ".").split(".") if s.strip()]
+    return [len(s.split()) for s in sentences]
+
+def voice_radar(scene_text):
+    lengths = sentence_lengths(scene_text)
+    if not lengths:
+        return 0.0, 0.0
+
+    avg_len = mean(lengths)
+    variance = max(lengths) - min(lengths)
+
+    alignment = max(0.0, min(1.0, 1 - abs(avg_len - 18) / 18))
+    drift = min(1.0, variance / 30)
+
+    return alignment, drift
+
+def llm(system, prompt, temp=0.3):
     r = client.responses.create(
         model="gpt-4.1-mini",
         input=[
@@ -81,32 +102,24 @@ def llm(system, prompt, temp=0.4):
     )
     return r.output_text
 
-def persona_comment(scene):
+def deep_voice_check(scene):
     prompt = f"""
-EDITOR PERSONA:
-{st.session_state.persona} — {PERSONAS[st.session_state.persona]}
+Compare this scene to the author's established voice.
+Flag specific deviations if present.
 
-GENRE: {st.session_state.genre}
-POV: {st.session_state.pov}
-TENSE: {st.session_state.tense}
-
-SCENE PURPOSE:
-{scene["purpose"]}
+AUTHOR VOICE:
+{chr(10).join(st.session_state.voice_memory[-5:])}
 
 TEXT:
 {scene["text"]}
-
-Leave margin comments only. No rewriting.
 """
-    comment = llm(
-        "You are a professional editorial persona.",
-        prompt,
-        0.3
+    scene["voice_warnings"] = llm(
+        "You are a literary continuity editor.",
+        prompt
     )
-    scene["comments"].append(comment)
 
 # ============================================================
-# SIDEBAR — PROJECT + ENGINE
+# SIDEBAR
 # ============================================================
 with st.sidebar:
     st.header("Olivetti Studio")
@@ -124,74 +137,73 @@ with st.sidebar:
         st.session_state.current_project = choice
 
     st.divider()
-
-    st.subheader("Global Style")
     st.selectbox("Genre", GENRES, key="genre")
     st.selectbox("POV", POVS, key="pov")
     st.selectbox("Tense", TENSES, key="tense")
-
-    st.divider()
-
-    st.subheader("Editorial Persona")
+    st.selectbox("Workflow", WORKFLOWS, key="workflow")
     st.selectbox("Persona", PERSONAS.keys(), key="persona")
-    st.caption(PERSONAS[st.session_state.persona])
 
 # ============================================================
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("Olivetti 20.3")
-    st.write("Create or select a project to begin.")
+    st.title("Olivetti 20.4")
     st.stop()
 
 project = st.session_state.projects[st.session_state.current_project]
 scenes = project["scenes"]
-
 scene = scenes[st.session_state.current_scene]
 
-left, center, right = st.columns([1.2, 3.5, 2.3])
+left, center, right = st.columns([1.1, 3.4, 2.0])
 
 # ============================================================
-# LEFT — SCENE STRUCTURE
+# LEFT — SCENES
 # ============================================================
 with left:
     st.subheader("Scenes")
-
     for i, sc in enumerate(scenes):
         if st.button(sc["title"], key=f"s_{i}"):
             st.session_state.current_scene = i
-
     if st.button("Add Scene"):
         scenes.append(new_scene(f"Scene {len(scenes)+1}"))
         st.session_state.current_scene = len(scenes) - 1
 
 # ============================================================
-# CENTER — SCENE EDITOR
+# CENTER — WRITE
 # ============================================================
 with center:
     scene["title"] = st.text_input("Scene Title", scene["title"])
     scene["purpose"] = st.text_input("Scene Purpose", scene["purpose"])
-    scene["tension"] = st.slider("Tension", 0.0, 1.0, scene["tension"])
+    scene["text"] = st.text_area("", scene["text"], height=560)
 
-    scene["text"] = st.text_area("", scene["text"], height=520)
-
-    col1, col2 = st.columns(2)
-    if col1.button("Save Version"):
+    if st.button("Save Version"):
         save_version(scene)
         learn_voice(scene["text"])
 
-    if col2.button("Persona Comment"):
-        persona_comment(scene)
-
 # ============================================================
-# RIGHT — COMMENTS
+# RIGHT — LIVE VOICE RADAR
 # ============================================================
 with right:
-    st.subheader("Editorial Comments")
-    if not scene["comments"]:
-        st.write("No comments yet.")
-    for i, c in enumerate(scene["comments"]):
-        st.markdown(f"**{st.session_state.persona} #{i+1}**")
-        st.markdown(c)
+    st.subheader("Live Voice Radar")
 
-st.caption("Olivetti 20.3 — Scene-First Authorial Engine")
+    alignment, drift = voice_radar(scene["text"])
+
+    persona_weight = PERSONAS[st.session_state.persona]
+    workflow_pressure = WORKFLOWS.index(st.session_state.workflow) / (len(WORKFLOWS)-1)
+
+    st.metric("Voice Alignment", f"{int(alignment*100)}%")
+    st.metric("Drift Risk", f"{int(drift*100)}%")
+    st.metric("Persona Sensitivity", f"{int(persona_weight*100)}%")
+    st.metric("Workflow Pressure", f"{int(workflow_pressure*100)}%")
+
+    st.progress(alignment)
+    st.progress(drift)
+
+    if st.button("Deep Voice Check"):
+        deep_voice_check(scene)
+
+    if scene["voice_warnings"]:
+        st.subheader("Voice Warnings")
+        st.write(scene["voice_warnings"])
+
+st.caption("Olivetti 20.4 — Live Voice Radar")
