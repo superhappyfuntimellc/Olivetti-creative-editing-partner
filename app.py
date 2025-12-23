@@ -1,5 +1,6 @@
 import streamlit as st
 from openai import OpenAI
+import time
 
 # ============================================================
 # CONFIG
@@ -8,68 +9,84 @@ st.set_page_config(page_title="🫒 Olivetti", layout="wide")
 client = OpenAI()
 
 # ============================================================
-# SESSION STATE (SAFE INIT)
+# SAFE SESSION INIT
 # ============================================================
 def init(key, value):
     if key not in st.session_state:
         st.session_state[key] = value
 
-init("text", "")
-init("junk", "")
-init("synopsis", "")
-init("genre", "Literary")
-init("world", "")
-init("characters", "")
-init("outline", "")
-init("style", "Neutral")
-init("voice", "Literary")
-init("trained_voices", {})
-init("trained_voice", "— None —")
-init("sample", "")
-init("intensity", 0.5)
-init("voice_lock", False)
-init("focus", False)
+STATE_DEFAULTS = {
+    "text": "",
+    "junk": "",
+    "synopsis": "",
+    "genre": "Literary",
+    "world": "",
+    "characters": "",
+    "outline": "",
+    "style": "Neutral",
+    "voice": "Literary",
+    "trained_voices": {},
+    "trained_voice": "— None —",
+    "sample": "",
+    "intensity": 0.5,
+    "voice_lock": False,
+    "focus": False,
+    "last_save": time.time(),
+}
+
+for k, v in STATE_DEFAULTS.items():
+    init(k, v)
 
 # ============================================================
-# VOICE ENGINE (PURE / SAFE)
+# AUTOSAVE (SAFE, SILENT)
+# ============================================================
+def autosave():
+    st.session_state.last_save = time.time()
+
+# ============================================================
+# VOICE ENGINE (PURE / IMMUTABLE)
 # ============================================================
 def build_voice_block():
-    parts = [
+    blocks = [
         f"Writing Style: {st.session_state.style}",
         f"Genre Voice: {st.session_state.voice}",
         f"Intensity: {st.session_state.intensity}",
     ]
 
     if st.session_state.trained_voice != "— None —":
-        parts.append(
-            f"Use this trained voice:\n{st.session_state.trained_voices.get(st.session_state.trained_voice,'')}"
+        blocks.append(
+            f"Trained Voice:\n{st.session_state.trained_voices.get(st.session_state.trained_voice,'')}"
         )
     elif st.session_state.sample.strip():
-        parts.append(f"Match this sample:\n{st.session_state.sample}")
+        blocks.append(f"Match This Style:\n{st.session_state.sample}")
 
     if st.session_state.voice_lock:
-        parts.append("IMPORTANT: Do not change voice or tone.")
+        blocks.append("IMPORTANT: Maintain voice exactly.")
 
-    return "\n".join(parts)
+    return "\n".join(blocks)
 
 # ============================================================
-# AI CORE (GUARDED)
+# AI CORE (HARDENED)
 # ============================================================
 PROMPTS = {
     "write": "Continue writing naturally.",
     "rewrite": "Rewrite for clarity and strength.",
-    "expand": "Expand with more depth and detail.",
+    "expand": "Expand with more depth.",
     "rephrase": "Rephrase without changing meaning.",
-    "describe": "Add vivid sensory description.",
+    "describe": "Add vivid description.",
     "spell": "Fix spelling only.",
     "grammar": "Fix grammar only.",
-    "find": "Improve consistency and phrasing.",
-    "syn": "Suggest better word choices inline.",
-    "sentence": "Improve sentence flow and rhythm.",
+    "find": "Improve consistency.",
+    "syn": "Suggest stronger word choices.",
+    "sentence": "Improve sentence flow.",
 }
 
 def run_ai(action):
     if action not in PROMPTS:
+        return
+
+    text = st.session_state.text.strip()
+    if not text:
         return
 
     prompt = f"""
@@ -80,7 +97,7 @@ TASK:
 {PROMPTS[action]}
 
 TEXT:
-{st.session_state.text}
+{text}
 """
 
     try:
@@ -90,21 +107,24 @@ TEXT:
                 {"role": "system", "content": "You are a professional fiction editor."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=st.session_state.intensity,
+            temperature=float(st.session_state.intensity),
         )
-        st.session_state.text = (r.output_text or "").strip()
+        output = (r.output_text or "").strip()
+        if output:
+            st.session_state.text = output
+            autosave()
     except Exception:
         pass
 
 # ============================================================
 # TOP BAR
 # ============================================================
-top = st.columns([2, 1, 1, 1, 1])
+top = st.columns([2,1,1,1,1])
 top[0].markdown("## 🫒 **Olivetti**")
-top[1].button("New Project")
-top[2].button("Rough Draft")
-top[3].button("First Edit")
-top[4].button("Final Draft")
+top[1].button("New Project", key="top_new")
+top[2].button("Rough Draft", key="top_rough")
+top[3].button("First Edit", key="top_edit")
+top[4].button("Final Draft", key="top_final")
 
 st.divider()
 
@@ -118,37 +138,37 @@ left, center, right = st.columns([1.3, 3.4, 1.3], gap="large")
 # ============================================================
 with left:
     with st.expander("📖 Story Bible", expanded=True):
-        st.text_area("Junk Drawer", key="junk", height=80)
-        st.text_area("Synopsis", key="synopsis", height=80)
+        st.text_area("Junk Drawer", key="junk", height=70, on_change=autosave)
+        st.text_area("Synopsis", key="synopsis", height=70, on_change=autosave)
         st.selectbox(
             "Genre / Style",
             ["Literary", "Noir", "Thriller", "Comedy"],
             key="genre",
         )
-        st.text_area("World Elements", key="world", height=80)
-        st.text_area("Characters", key="characters", height=80)
-        st.text_area("Outline", key="outline", height=120)
+        st.text_area("World Elements", key="world", height=70, on_change=autosave)
+        st.text_area("Characters", key="characters", height=70, on_change=autosave)
+        st.text_area("Outline", key="outline", height=120, on_change=autosave)
 
 # ============================================================
-# CENTER — WRITING DESK (ALWAYS VISIBLE)
+# CENTER — WRITING DESK (LOCKED)
 # ============================================================
 with center:
     st.markdown("### ✍️ Writing Desk")
-    st.text_area("", key="text", height=560)
+    st.text_area("", key="text", height=600, on_change=autosave)
 
-    row1 = st.columns(5)
-    if row1[0].button("Write"): run_ai("write")
-    if row1[1].button("Rewrite"): run_ai("rewrite")
-    if row1[2].button("Expand"): run_ai("expand")
-    if row1[3].button("Rephrase"): run_ai("rephrase")
-    if row1[4].button("Describe"): run_ai("describe")
+    r1 = st.columns(5)
+    if r1[0].button("Write", key="w1"): run_ai("write")
+    if r1[1].button("Rewrite", key="w2"): run_ai("rewrite")
+    if r1[2].button("Expand", key="w3"): run_ai("expand")
+    if r1[3].button("Rephrase", key="w4"): run_ai("rephrase")
+    if r1[4].button("Describe", key="w5"): run_ai("describe")
 
-    row2 = st.columns(5)
-    if row2[0].button("Spell Check"): run_ai("spell")
-    if row2[1].button("Grammar Check"): run_ai("grammar")
-    if row2[2].button("Find / Replace"): run_ai("find")
-    if row2[3].button("Synonyms"): run_ai("syn")
-    if row2[4].button("Sentence Improve"): run_ai("sentence")
+    r2 = st.columns(5)
+    if r2[0].button("Spell Check", key="e1"): run_ai("spell")
+    if r2[1].button("Grammar Check", key="e2"): run_ai("grammar")
+    if r2[2].button("Find / Replace", key="e3"): run_ai("find")
+    if r2[3].button("Synonyms", key="e4"): run_ai("syn")
+    if r2[4].button("Sentence Improve", key="e5"): run_ai("sentence")
 
 # ============================================================
 # RIGHT — VOICE BIBLE
@@ -166,25 +186,26 @@ with right:
             key="voice",
         )
 
-        voice_list = ["— None —"] + list(st.session_state.trained_voices.keys())
-        st.selectbox("Trained Voices", voice_list, key="trained_voice")
+        voices = ["— None —"] + list(st.session_state.trained_voices.keys())
+        st.selectbox("Trained Voices", voices, key="trained_voice")
 
-        st.text_area("Match My Style", key="sample", height=80)
+        st.text_area("Match My Style", key="sample", height=70)
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            voice_name = st.text_input("Save Voice As")
-        with col_b:
-            if st.button("Train Voice"):
-                if voice_name and st.session_state.sample.strip():
-                    st.session_state.trained_voices[voice_name] = st.session_state.sample
-                    st.session_state.trained_voice = voice_name
+        c1, c2 = st.columns(2)
+        with c1:
+            vname = st.text_input("Save Voice As", key="voice_name")
+        with c2:
+            if st.button("Train Voice", key="train_voice"):
+                if vname and st.session_state.sample.strip():
+                    st.session_state.trained_voices[vname] = st.session_state.sample
+                    st.session_state.trained_voice = vname
+                    autosave()
 
         st.slider("Intensity", 0.0, 1.0, key="intensity")
         st.toggle("Voice Lock", key="voice_lock")
 
 # ============================================================
-# FOCUS MODE (SAFE)
+# FOCUS MODE (HARD SAFE)
 # ============================================================
 if st.session_state.focus:
     st.markdown(
@@ -193,6 +214,7 @@ if st.session_state.focus:
     )
 
 st.divider()
-foot = st.columns(2)
-foot[0].button("🔒 Focus Mode", on_click=lambda: st.session_state.update({"focus": True}))
-foot[1].caption("Olivetti — Stable Build")
+f = st.columns(2)
+f[0].button("🔒 Focus Mode", key="focus_btn",
+            on_click=lambda: st.session_state.update({"focus": True}))
+f[1].caption("Olivetti — Hardened Build")
