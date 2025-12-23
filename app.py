@@ -1,98 +1,57 @@
 # ============================================================
-# LEFT SIDEBAR — STORY BIBLE (WITH AI IDEAS)
+# RIGHT SIDEBAR — VOICE BIBLE (FIXED)
 # ============================================================
-if left:
-    with left:
-        st.subheader("📖 Story Bible")
+if right:
+    with right:
+        st.subheader("🎭 Voice Bible")
 
-        def idea_prompt(label, existing):
-            return f"""
-Generate creative ideas for the following story section.
-Do not explain. Just write useful content.
+        # --- Active Voice ---
+        voice_names = ["— Neutral —"] + list(st.session_state.voices.keys())
+        active = st.selectbox(
+            "Active Voice",
+            voice_names,
+            index=0 if not st.session_state.active_voice else voice_names.index(st.session_state.active_voice)
+        )
 
-SECTION: {label}
+        if active == "— Neutral —":
+            st.session_state.active_voice = None
+        else:
+            st.session_state.active_voice = active
 
-CURRENT NOTES:
-{existing}
-"""
+        # --- Intensity ---
+        st.slider(
+            "Voice Intensity",
+            0.0,
+            1.0,
+            st.session_state.voices.get(st.session_state.active_voice, {}).get("intensity", 0.5),
+            key="voice_intensity"
+        )
 
-        # Junk Drawer
-        with st.expander("Junk Drawer", expanded=True):
-            junk = st.text_area("Notes", key="junk", height=120)
-            if st.button("💡 Generate Ideas", key="junk_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=idea_prompt("Junk Drawer", junk),
-                    temperature=0.7
-                )
-                st.session_state.junk = junk + "\n\n" + r.output_text
-
-        # Synopsis
-        with st.expander("Synopsis", expanded=False):
-            synopsis = st.text_area("Synopsis", key="synopsis", height=120)
-            if st.button("💡 Generate Synopsis Ideas", key="syn_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=idea_prompt("Synopsis", synopsis),
-                    temperature=0.6
-                )
-                st.session_state.synopsis = synopsis + "\n\n" + r.output_text
-
-        # Genre / Style
-        with st.expander("Genre / Style", expanded=False):
-            genre_notes = st.text_area("Genre & Style Notes", key="genre_notes", height=120)
-            if st.button("💡 Generate Style Ideas", key="genre_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=idea_prompt("Genre / Style", genre_notes),
-                    temperature=0.5
-                )
-                st.session_state.genre_notes = genre_notes + "\n\n" + r.output_text
-        # Characters
-        with st.expander("Characters", expanded=False):
-            characters = st.text_area(
-                "Characters (names, traits, arcs, relationships)",
-                key="characters",
+        # --- Train New Voice ---
+        with st.expander("Train New Voice", expanded=False):
+            new_voice_name = st.text_input("Voice Name")
+            new_voice_sample = st.text_area(
+                "Paste a representative writing sample",
                 height=160
             )
 
-            if st.button("💡 Generate Character Ideas", key="char_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=f"""
-Generate character ideas for a novel.
-Include:
-- Names
-- Roles
-- Key traits
-- Internal conflict
-- Relationships
+            if st.button("➕ Save Voice"):
+                if new_voice_name and new_voice_sample:
+                    st.session_state.voices[new_voice_name] = {
+                        "sample": new_voice_sample,
+                        "intensity": st.session_state.voice_intensity
+                    }
+                    st.session_state.active_voice = new_voice_name
+                    st.success(f"Saved voice: {new_voice_name}")
 
-CURRENT NOTES:
-{characters}
-""",
-                    temperature=0.6
-                )
-                st.session_state.characters = characters + "\n\n" + r.output_text
-
-        # World Elements
-        with st.expander("World Elements", expanded=False):
-            world = st.text_area("Worldbuilding", key="world", height=140)
-            if st.button("💡 Generate World Ideas", key="world_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=idea_prompt("World Elements", world),
-                    temperature=0.6
-                )
-                st.session_state.world = world + "\n\n" + r.output_text
-
-        # Outline
-        with st.expander("Outline", expanded=False):
-            outline = st.text_area("Chapter Outline", key="outline", height=200)
-            if st.button("💡 Generate Chapter Ideas", key="outline_ai"):
-                r = client.responses.create(
-                    model="gpt-4.1-mini",
-                    input=idea_prompt("Outline", outline),
-                    temperature=0.6
-                )
-                st.session_state.outline = outline + "\n\n" + r.output_text
+        # --- Voice Library ---
+        if st.session_state.voices:
+            with st.expander("Voice Library", expanded=False):
+                for v in list(st.session_state.voices.keys()):
+                    cols = st.columns([3,1])
+                    cols[0].write(v)
+                    if cols[1].button("🗑", key=f"del_{v}"):
+                        del st.session_state.voices[v]
+                        if st.session_state.active_voice == v:
+                            st.session_state.active_voice = None
+                        st.experimental_rerun()
