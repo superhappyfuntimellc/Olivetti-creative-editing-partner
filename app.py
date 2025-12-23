@@ -2,9 +2,10 @@ import streamlit as st
 from openai import OpenAI
 import time
 import os
+import copy
 
 # ============================================================
-# CONFIG (SAFE)
+# CONFIG
 # ============================================================
 st.set_page_config(page_title="🫒 Olivetti", layout="wide")
 
@@ -12,13 +13,14 @@ API_KEY = os.getenv("OPENAI_API_KEY", "")
 client = OpenAI() if API_KEY else None
 
 # ============================================================
-# CONSTANTS (GUARDS)
+# CONSTANTS
 # ============================================================
 MAX_TEXT_CHARS = 12000
 AI_COOLDOWN_SEC = 2.0
+MAX_VERSIONS = 50
 
 # ============================================================
-# SAFE SESSION INIT
+# SESSION INIT (DEFENSIVE)
 # ============================================================
 def init(k, v):
     if k not in st.session_state:
@@ -26,6 +28,7 @@ def init(k, v):
 
 DEFAULTS = {
     "text": "",
+    "versions": [],
     "junk": "",
     "synopsis": "",
     "genre": "Literary",
@@ -40,7 +43,7 @@ DEFAULTS = {
     "intensity": 0.5,
     "voice_lock": False,
     "focus": False,
-    "last_save": time.time(),
+    "last_save": 0.0,
     "last_ai_call": 0.0,
 }
 
@@ -48,10 +51,23 @@ for k, v in DEFAULTS.items():
     init(k, v)
 
 # ============================================================
-# AUTOSAVE (SILENT)
+# VERSIONING (INVISIBLE, SAFE)
 # ============================================================
+def snapshot(text):
+    if not text:
+        return
+    versions = st.session_state.versions
+    if versions and versions[-1] == text:
+        return
+    versions.append(text)
+    if len(versions) > MAX_VERSIONS:
+        st.session_state.versions = versions[-MAX_VERSIONS:]
+
 def autosave():
-    st.session_state.last_save = time.time()
+    text = st.session_state.text
+    if isinstance(text, str):
+        snapshot(text[:MAX_TEXT_CHARS])
+        st.session_state.last_save = time.time()
 
 # ============================================================
 # VOICE ENGINE (PURE)
@@ -76,7 +92,7 @@ def build_voice_block():
     return "\n".join(parts)
 
 # ============================================================
-# AI CORE (SECURE + RATE-LIMITED)
+# AI CORE (ATOMIC + SAFE)
 # ============================================================
 PROMPTS = {
     "write": "Continue writing naturally.",
@@ -102,15 +118,14 @@ def run_ai(action):
     if not client or action not in PROMPTS:
         return
 
-    text = (st.session_state.text or "").strip()
-    if not text:
+    source_text = st.session_state.text
+    if not isinstance(source_text, str) or not source_text.strip():
         return
-
-    if len(text) > MAX_TEXT_CHARS:
-        text = text[:MAX_TEXT_CHARS]
 
     if not can_call_ai():
         return
+
+    safe_text = source_text[:MAX_TEXT_CHARS]
 
     prompt = f"""
 VOICE PROFILE:
@@ -120,7 +135,7 @@ TASK:
 {PROMPTS[action]}
 
 TEXT:
-{text}
+{safe_text}
 """
 
     try:
@@ -132,11 +147,17 @@ TEXT:
             ],
             temperature=float(st.session_state.intensity),
         )
-        out = (r.output_text or "").strip()
-        if out:
-            st.session_state.text = out[:MAX_TEXT_CHARS]
+
+        output = (r.output_text or "").strip()
+
+        # ATOMIC COMMIT
+        if isinstance(output, str) and output.strip():
+            snapshot(safe_text)
+            st.session_state.text = output[:MAX_TEXT_CHARS]
             autosave()
+
     except Exception:
+        # Silent fail: text remains untouched
         pass
 
 # ============================================================
@@ -152,7 +173,7 @@ top[4].button("Final Draft", key="top_final")
 st.divider()
 
 # ============================================================
-# MAIN LAYOUT (LOCKED)
+# LAYOUT (LOCKED)
 # ============================================================
 left, center, right = st.columns([1.3, 3.4, 1.3], gap="large")
 
@@ -177,18 +198,18 @@ with center:
     st.text_area("", key="text", height=600, on_change=autosave)
 
     r1 = st.columns(5)
-    if r1[0].button("Write", key="w1"): run_ai("write")
-    if r1[1].button("Rewrite", key="w2"): run_ai("rewrite")
-    if r1[2].button("Expand", key="w3"): run_ai("expand")
-    if r1[3].button("Rephrase", key="w4"): run_ai("rephrase")
-    if r1[4].button("Describe", key="w5"): run_ai("describe")
+    if r1[0].button("Write"): run_ai("write")
+    if r1[1].button("Rewrite"): run_ai("rewrite")
+    if r1[2].button("Expand"): run_ai("expand")
+    if r1[3].button("Rephrase"): run_ai("rephrase")
+    if r1[4].button("Describe"): run_ai("describe")
 
     r2 = st.columns(5)
-    if r2[0].button("Spell Check", key="e1"): run_ai("spell")
-    if r2[1].button("Grammar Check", key="e2"): run_ai("grammar")
-    if r2[2].button("Find / Replace", key="e3"): run_ai("find")
-    if r2[3].button("Synonyms", key="e4"): run_ai("syn")
-    if r2[4].button("Sentence Improve", key="e5"): run_ai("sentence")
+    if r2[0].button("Spell Check"): run_ai("spell")
+    if r2[1].button("Grammar Check"): run_ai("grammar")
+    if r2[2].button("Find / Replace"): run_ai("find")
+    if r2[3].button("Synonyms"): run_ai("syn")
+    if r2[4].button("Sentence Improve"): run_ai("sentence")
 
 # ============================================================
 # RIGHT — VOICE BIBLE
@@ -205,9 +226,9 @@ with right:
 
         c1, c2 = st.columns(2)
         with c1:
-            vname = st.text_input("Save Voice As", key="voice_name")
+            vname = st.text_input("Save Voice As")
         with c2:
-            if st.button("Train Voice", key="train_voice"):
+            if st.button("Train Voice"):
                 if vname and st.session_state.sample.strip():
                     st.session_state.trained_voices[vname] = st.session_state.sample
                     st.session_state.trained_voice = vname
@@ -217,7 +238,7 @@ with right:
         st.toggle("Voice Lock", key="voice_lock")
 
 # ============================================================
-# FOCUS MODE (HARD LOCK)
+# FOCUS MODE
 # ============================================================
 if st.session_state.focus:
     st.markdown(
@@ -227,6 +248,5 @@ if st.session_state.focus:
 
 st.divider()
 f = st.columns(2)
-f[0].button("🔒 Focus Mode", key="focus_btn",
-            on_click=lambda: st.session_state.update({"focus": True}))
-f[1].caption("Olivetti — Secured & Stable")
+f[0].button("🔒 Focus Mode", on_click=lambda: st.session_state.update({"focus": True}))
+f[1].caption("Olivetti — Writing Core Locked")
