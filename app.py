@@ -7,7 +7,7 @@ from openai import OpenAI
 # CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="🫒 Olivetti 20.1 — Studio",
+    page_title="Olivetti 20.2 — Editorial Intelligence",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -30,7 +30,7 @@ def init_state():
         "tense": "Past",
         "mode": "Prose",
         "find_term": "",
-        "replace_term": ""
+        "replace_term": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -52,10 +52,24 @@ GENRES = {
 POVS = ["First", "Close Third", "Omniscient"]
 TENSES = ["Past", "Present"]
 MODES = ["Prose", "Screenplay"]
+WORKFLOWS = ["Draft", "Revise", "Polish", "Final"]
 
 # ============================================================
 # HELPERS
 # ============================================================
+def new_chapter(title, text):
+    return {
+        "title": title,
+        "text": text.strip(),
+        "outline": "",
+        "analysis": "",
+        "comments": [],
+        "versions": [],
+        "workflow": "Draft",
+        "strengths": [],
+        "warnings": []
+    }
+
 def split_chapters(text):
     parts = re.split(r"\n\s*(CHAPTER\s+\d+|Chapter\s+\d+)\s*\n", text)
     chapters = []
@@ -65,17 +79,6 @@ def split_chapters(text):
         chapters.append(new_chapter("Chapter 1", text))
     return chapters
 
-def new_chapter(title, text):
-    return {
-        "title": title,
-        "text": text.strip(),
-        "outline": "",
-        "analysis": "",
-        "comments": [],
-        "versions": [],
-        "workflow": "Draft"
-    }
-
 def save_version(ch):
     ch["versions"].append({
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -84,7 +87,7 @@ def save_version(ch):
 
 def learn_voice(text):
     if len(text) > 300:
-        st.session_state.voice_memory.append(text[:900])
+        st.session_state.voice_memory.append(text[:800])
 
 def llm(system, prompt, temp=0.4):
     r = client.responses.create(
@@ -107,31 +110,64 @@ def voice_profile():
     return f"""
 AUTHOR VOICE PROFILE
 Intensity: {st.session_state.voice_intensity:.2f}
-Apply proportionally. Do not overwrite intent.
 
 {samples}
 """
 
 # ============================================================
-# EDITORIAL TOOLS
+# ADAPTIVE STRICTNESS
 # ============================================================
-def generate_outline(ch):
+def adaptive_strictness(workflow):
+    base = st.session_state.strictness
+    if workflow == "Draft":
+        return max(0.1, base - 0.2)
+    if workflow == "Revise":
+        return base
+    if workflow == "Polish":
+        return min(0.9, base + 0.2)
+    if workflow == "Final":
+        return 1.0
+    return base
+
+# ============================================================
+# EDITORIAL INTELLIGENCE
+# ============================================================
+def analyze_strengths(ch):
     prompt = f"""
-Create a concise chapter outline.
-• Bullet points
-• Structure only
-• No prose rewriting
+Identify the strongest paragraphs in this chapter.
+Return:
+• Quoted paragraph
+• One-sentence reason why it works
 
 TEXT:
 {ch["text"]}
 """
-    ch["outline"] = llm(
-        "You are a developmental editor.",
+    ch["strengths"] = llm(
+        "You are a senior literary editor.",
+        prompt,
+        0.3
+    )
+
+def detect_voice_deviation(ch):
+    prompt = f"""
+Compare this text to the author's established voice.
+If deviations exist, list them briefly.
+If not, say 'No significant deviation.'
+
+VOICE:
+{voice_profile()}
+
+TEXT:
+{ch["text"]}
+"""
+    ch["warnings"] = llm(
+        "You are an editorial continuity specialist.",
         prompt,
         0.3
     )
 
 def rewrite_preview(ch):
+    strict = adaptive_strictness(ch["workflow"])
     prompt = f"""
 Rewrite this text.
 
@@ -139,7 +175,7 @@ MODE: {st.session_state.mode}
 GENRE: {GENRES[st.session_state.genre]}
 POV: {st.session_state.pov}
 TENSE: {st.session_state.tense}
-STRICTNESS: {st.session_state.strictness}
+STRICTNESS: {strict}
 
 {voice_profile()}
 
@@ -152,26 +188,12 @@ TEXT:
         0.5
     )
 
-def analyze_strength(ch):
-    prompt = f"""
-Identify the strongest passages.
-Explain why they work.
-
-TEXT:
-{ch["text"]}
-"""
-    ch["analysis"] = llm("You are a literary editor.", prompt, 0.3)
-
-def add_comment(ch, note):
-    ch["comments"].append(note)
-
 # ============================================================
-# SIDEBAR — ENGINE
+# SIDEBAR
 # ============================================================
 with st.sidebar:
-    st.header("🫒 Olivetti Studio")
+    st.header("Olivetti Studio")
 
-    st.subheader("Project")
     projects = list(st.session_state.projects.keys())
     choice = st.selectbox("Project", ["— New —"] + projects)
 
@@ -193,7 +215,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("Style & Voice")
+    st.subheader("Style")
     st.selectbox("Genre", GENRES.keys(), key="genre")
     st.selectbox("POV", POVS, key="pov")
     st.selectbox("Tense", TENSES, key="tense")
@@ -202,16 +224,11 @@ with st.sidebar:
     st.slider("Voice Intensity", 0.0, 1.0, key="voice_intensity")
     st.slider("Strictness", 0.0, 1.0, key="strictness")
 
-    st.divider()
-    st.subheader("Find & Replace")
-    st.text_input("Find", key="find_term")
-    st.text_input("Replace", key="replace_term")
-
 # ============================================================
 # MAIN
 # ============================================================
 if not st.session_state.current_project:
-    st.title("🫒 Olivetti 20.1")
+    st.title("Olivetti 20.2")
     st.write("Create or select a project to begin.")
     st.stop()
 
@@ -225,11 +242,8 @@ if not chapters:
 idx = st.session_state.current_chapter
 chapter = chapters[idx]
 
-# ============================================================
-# TABS
-# ============================================================
-tab_write, tab_tools, tab_notes = st.tabs(
-    ["✍️ Write", "🧠 Tools", "💬 Comments"]
+tab_write, tab_intel, tab_comments = st.tabs(
+    ["Write", "Editorial Intel", "Comments"]
 )
 
 # ============================================================
@@ -239,51 +253,56 @@ with tab_write:
     left, center = st.columns([1, 3])
 
     with left:
-        st.subheader("Chapters")
         for i, ch in enumerate(chapters):
-            colA, colB, colC = st.columns([6,1,1])
-            colA.button(ch["title"], key=f"nav_{i}", on_click=lambda i=i: st.session_state.update({"current_chapter": i}))
-            if colB.button("⬆️", key=f"up_{i}") and i > 0:
-                chapters[i-1], chapters[i] = chapters[i], chapters[i-1]
-            if colC.button("⬇️", key=f"down_{i}") and i < len(chapters)-1:
-                chapters[i+1], chapters[i] = chapters[i], chapters[i+1]
+            if st.button(ch["title"], key=f"nav_{i}"):
+                st.session_state.current_chapter = i
 
     with center:
         chapter["title"] = st.text_input("Title", chapter["title"])
+        chapter["workflow"] = st.selectbox(
+            "Workflow",
+            WORKFLOWS,
+            index=WORKFLOWS.index(chapter["workflow"])
+        )
         chapter["text"] = st.text_area("", chapter["text"], height=600)
 
-        if st.button("💾 Save Version"):
+        if st.button("Save Version"):
             save_version(chapter)
             learn_voice(chapter["text"])
 
-        if st.session_state.find_term:
-            chapter["text"] = chapter["text"].replace(
-                st.session_state.find_term,
-                st.session_state.replace_term
-            )
-
 # ============================================================
-# TOOLS TAB
+# EDITORIAL INTEL TAB
 # ============================================================
-with tab_tools:
+with tab_intel:
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("📑 Generate Outline"):
-            generate_outline(chapter)
-        st.text_area("Outline", chapter.get("outline", ""), height=240)
+        if st.button("Analyze Strongest Passages"):
+            analyze_strengths(chapter)
+        st.text_area(
+            "Strong Passages",
+            chapter.get("strengths", ""),
+            height=260
+        )
+
+        if st.button("Promote Strengths to Voice Memory"):
+            learn_voice(chapter.get("strengths", ""))
 
     with col2:
-        if st.button("🧠 Analyze Strength"):
-            analyze_strength(chapter)
-        st.text_area("Analysis", chapter.get("analysis", ""), height=240)
+        if st.button("Check Voice Deviation"):
+            detect_voice_deviation(chapter)
+        st.text_area(
+            "Voice Deviation Warnings",
+            chapter.get("warnings", ""),
+            height=260
+        )
 
-    if st.button("🧪 Rewrite Preview"):
+    if st.button("Rewrite Preview"):
         chapter["preview"] = rewrite_preview(chapter)
 
     if "preview" in chapter:
         st.text_area("Rewrite Preview", chapter["preview"], height=300)
-        if st.button("✅ Accept Rewrite"):
+        if st.button("Accept Rewrite"):
             save_version(chapter)
             chapter["text"] = chapter.pop("preview")
             learn_voice(chapter["text"])
@@ -291,12 +310,12 @@ with tab_tools:
 # ============================================================
 # COMMENTS TAB
 # ============================================================
-with tab_notes:
+with tab_comments:
     note = st.text_area("Add Comment")
     if st.button("Add Comment"):
-        add_comment(chapter, note)
+        chapter["comments"].append(note)
 
     for i, c in enumerate(chapter["comments"]):
-        st.markdown(f"**Comment {i+1}:** {c}")
+        st.markdown(f"{i+1}. {c}")
 
-st.caption("🫒 Olivetti 20.1 — Studio Expansion")
+st.caption("Olivetti 20.2 — Editorial Intelligence Layer")
