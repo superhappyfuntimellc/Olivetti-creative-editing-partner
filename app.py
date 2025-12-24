@@ -161,6 +161,8 @@ button:hover{
 LANES = ["Dialogue", "Narration", "Interiority", "Action"]
 BAYS = ["NEW", "ROUGH", "EDIT", "FINAL"]
 
+
+ENGINE_STYLES = ["NARRATIVE", "DESCRIPTIVE", "EMOTIONAL", "LYRICAL"]
 AUTOSAVE_DIR = "autosave"
 AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB guardrail
@@ -547,10 +549,196 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "forced_lane": "Narration",
         },
         "voices": default_voice_vault(),
+        "style_banks": default_style_banks(),
     }
 
 
 # ============================================================
+
+# ============================================================
+# ENGINE STYLE BANKS (project/workspace) — trainable writing styles
+# ============================================================
+def default_style_banks() -> Dict[str, Any]:
+    ts = now_ts()
+    return {s: {"created_ts": ts, "lanes": {ln: [] for ln in LANES}} for s in ENGINE_STYLES}
+
+
+def rebuild_vectors_in_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
+    src = banks or {}
+    out: Dict[str, Any] = {}
+    for style in ENGINE_STYLES:
+        b = (src.get(style) or {}) if isinstance(src, dict) else {}
+        lanes = b.get("lanes") or {}
+        new_lanes: Dict[str, List[Dict[str, Any]]] = {}
+        for ln in LANES:
+            samples = (lanes.get(ln) or []) if isinstance(lanes, dict) else []
+            rebuilt: List[Dict[str, Any]] = []
+            for it in samples:
+                if isinstance(it, str):
+                    t = it.strip()
+                    if not t:
+                        continue
+                    rebuilt.append({"ts": now_ts(), "text": t, "vec": _hash_vec(t)})
+                    continue
+                if not isinstance(it, dict):
+                    continue
+                t = (it.get("text") or "").strip()
+                if not t:
+                    continue
+                vec = it.get("vec") if isinstance(it.get("vec"), list) else None
+                if not vec:
+                    vec = _hash_vec(t)
+                rebuilt.append({"ts": it.get("ts") or now_ts(), "text": t, "vec": vec})
+            new_lanes[ln] = rebuilt
+        out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": new_lanes}
+    return out if out else default_style_banks()
+
+
+def compact_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(banks, dict):
+        return default_style_banks()
+    out: Dict[str, Any] = {}
+    for style in ENGINE_STYLES:
+        b = banks.get(style) or {}
+        lanes = b.get("lanes") or {}
+        c_lanes: Dict[str, List[Dict[str, Any]]] = {}
+        for ln in LANES:
+            ss = (lanes.get(ln) or []) if isinstance(lanes, dict) else []
+            cleaned: List[Dict[str, Any]] = []
+            for it in ss:
+                if not isinstance(it, dict):
+                    continue
+                t = (it.get("text") or "").strip()
+                if not t:
+                    continue
+                cleaned.append({"ts": it.get("ts") or now_ts(), "text": _clamp_text(t, 9000)})
+            c_lanes[ln] = cleaned
+        out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": c_lanes}
+    return out
+
+
+def add_style_samples(style: str, lane: str, raw_text: str, split_mode: str = "Paragraphs", cap_per_lane: int = 250) -> int:
+    style = (style or "").strip().upper()
+    if style not in ENGINE_STYLES:
+        return 0
+    lane = lane if lane in LANES else "Narration"
+    t = _normalize_text(raw_text)
+    if not t.strip():
+        return 0
+
+    parts = _split_paragraphs(t) if split_mode == "Paragraphs" else [t.strip()]
+    parts = [p for p in parts if len(p.strip()) >= 40]
+
+    sb = st.session_state.get("style_banks")
+    if not isinstance(sb, dict) or style not in sb:
+        sb = rebuild_vectors_in_style_banks(default_style_banks())
+        st.session_state.style_banks = sb
+
+    bank = sb.get(style) or {}
+    lanes = bank.get("lanes") or {}
+    lane_list = list((lanes.get(lane) or [])) if isinstance(lanes, dict) else []
+
+    added = 0
+    for p in parts:
+        p = _clamp_text(p.strip(), 9000)
+        lane_list.append({"ts": now_ts(), "text": p, "vec": _hash_vec(p)})
+        added += 1
+
+    # cap: keep newest
+    lane_list = lane_list[-cap_per_lane:]
+    lanes[lane] = lane_list
+    bank["lanes"] = lanes
+    sb[style] = bank
+    st.session_state.style_banks = sb
+    return added
+
+
+def delete_last_style_sample(style: str, lane: str) -> bool:
+    style = (style or "").strip().upper()
+    if style not in ENGINE_STYLES:
+        return False
+    lane = lane if lane in LANES else "Narration"
+    sb = st.session_state.get("style_banks") or {}
+    bank = (sb.get(style) or {})
+    lanes = bank.get("lanes") or {}
+    lane_list = (lanes.get(lane) or [])
+    if not lane_list:
+        return False
+    lane_list.pop()
+    lanes[lane] = lane_list
+    bank["lanes"] = lanes
+    sb[style] = bank
+    st.session_state.style_banks = sb
+    return True
+
+
+def clear_style_lane(style: str, lane: str) -> None:
+    style = (style or "").strip().upper()
+    if style not in ENGINE_STYLES:
+        return
+    lane = lane if lane in LANES else "Narration"
+    sb = st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks())
+    bank = sb.get(style) or {}
+    lanes = bank.get("lanes") or {}
+    lanes[lane] = []
+    bank["lanes"] = lanes
+    sb[style] = bank
+    st.session_state.style_banks = sb
+
+
+def retrieve_style_exemplars(style: str, lane: str, query: str, k: int = 2) -> List[str]:
+    style = (style or "").strip().upper()
+    if style not in ENGINE_STYLES:
+        return []
+    lane = lane if lane in LANES else "Narration"
+    sb = st.session_state.get("style_banks") or {}
+    bank = sb.get(style) or {}
+    lanes = bank.get("lanes") or {}
+    pool = (lanes.get(lane) or [])
+    if not pool:
+        # fallback: all lanes pooled
+        pool = []
+        for ln in LANES:
+            pool.extend(lanes.get(ln) or [])
+    if not pool:
+        return []
+    # favor newest slice for speed
+    pool = pool[-160:]
+    qv = _hash_vec(query or "")
+    scored = []
+    for it in pool:
+        if not isinstance(it, dict):
+            continue
+        vec = it.get("vec")
+        if not isinstance(vec, list):
+            continue
+        scored.append((_cosine(qv, vec), it.get("text") or ""))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out = [t.strip() for _, t in scored[: max(0, k)] if (t or "").strip()]
+    return out
+
+
+_ENGINE_STYLE_GUIDE = {
+    "NARRATIVE": "Narrative clarity, clean cause→effect, confident pacing. Prioritize story logic and readability.",
+    "DESCRIPTIVE": "Sensory precision, spatial clarity, vivid concrete nouns, controlled detail density (no purple bloat).",
+    "EMOTIONAL": "Interior depth, subtext, emotional specificity. Show the feeling through behavior, sensation, and thought.",
+    "LYRICAL": "Rhythm, musical syntax, image-forward language, elegant metaphor with restraint. Make prose sing without obscuring meaning.",
+}
+
+
+def engine_style_directive(style: str, intensity: float, lane: str) -> str:
+    style = (style or "").strip().upper()
+    base = _ENGINE_STYLE_GUIDE.get(style, "")
+    x = float(intensity)
+    if x <= 0.33:
+        mod = "Keep it subtle and controlled. Minimal overt stylization."
+    elif x <= 0.66:
+        mod = "Medium stylization. Let the style clearly shape diction and cadence."
+    else:
+        mod = "High stylization. Strong stylistic fingerprint, but still professional and coherent."
+    return f"{base}\\nLane: {lane}\\n{mod}"
+
+
 # STORY BIBLE WORKSPACE (pre-project creation space)
 # ============================================================
 def default_story_bible_workspace() -> Dict[str, Any]:
@@ -564,6 +752,7 @@ def default_story_bible_workspace() -> Dict[str, Any]:
         "voice_sample": "",
         "ai_intensity": 0.75,
         "voices": default_voice_vault(),
+        "style_banks": default_style_banks(),
     }
 
 
@@ -585,6 +774,7 @@ def save_workspace_from_session() -> None:
     w["voice_sample"] = st.session_state.voice_sample
     w["ai_intensity"] = float(st.session_state.ai_intensity)
     w["voices"] = compact_voice_vault(st.session_state.voices)
+    w["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
     st.session_state.sb_workspace = w
 
 
@@ -603,6 +793,7 @@ def load_workspace_into_session() -> None:
     st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
     st.session_state.voices = rebuild_vectors_in_voice_vault(w.get("voices", default_voice_vault()))
     st.session_state.voices_seeded = True
+    st.session_state.style_banks = rebuild_vectors_in_style_banks(w.get("style_banks", default_style_banks()))
     st.session_state.workspace_title = w.get("title", "") or ""
 
 
@@ -613,6 +804,7 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
         neww["voice_sample"] = old.get("voice_sample", "")
         neww["ai_intensity"] = float(old.get("ai_intensity", 0.75))
         neww["voices"] = old.get("voices", default_voice_vault())
+        neww["style_banks"] = old.get("style_banks", default_style_banks())
     st.session_state.sb_workspace = neww
     if in_workspace_mode():
         load_workspace_into_session()
@@ -669,6 +861,7 @@ def init_state() -> None:
         },
         "voices": {},
         "voices_seeded": False,
+        "style_banks": rebuild_vectors_in_style_banks(default_style_banks()),
         "last_saved_digest": "",
 
         # internal UI helpers (not widgets)
@@ -774,6 +967,7 @@ def save_session_into_project() -> None:
     }
     p["locks"] = st.session_state.locks
     p["voices"] = compact_voice_vault(st.session_state.voices)
+    p["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
     # keep fingerprint up to date
     try:
         p["story_bible_fingerprint"] = _fingerprint_story_bible(p["story_bible"])
@@ -876,6 +1070,7 @@ def create_project_from_current_bible(title: str) -> str:
     p["voice_bible"]["voice_sample"] = st.session_state.voice_sample
     p["voice_bible"]["ai_intensity"] = float(st.session_state.ai_intensity)
     p["voices"] = compact_voice_vault(st.session_state.voices)
+    p["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
 
     st.session_state.projects[p["id"]] = p
     st.session_state.active_project_by_bay["NEW"] = p["id"]
@@ -1019,6 +1214,7 @@ def load_all_from_disk() -> None:
                 p["locks"].setdefault("sb_edit_unlocked", False)
                 p["locks"].setdefault("story_bible_lock", True)
             p.setdefault("voices", default_voice_vault())
+            p.setdefault("style_banks", default_style_banks())
             if "story_bible_fingerprint" not in p:
                 try:
                     p["story_bible_fingerprint"] = _fingerprint_story_bible(p.get("story_bible", {}) or {})
@@ -1240,6 +1436,7 @@ def import_project_bundle(bundle: Dict[str, Any], target_bay: str = "NEW", renam
         proj["locks"].setdefault("sb_edit_unlocked", False)
         proj["locks"].setdefault("story_bible_lock", True)
     proj.setdefault("voices", default_voice_vault())
+    proj.setdefault("style_banks", default_style_banks())
     proj.setdefault("story_bible_fingerprint", "")
 
     st.session_state.projects[pid] = proj
@@ -1391,6 +1588,17 @@ def build_partner_brief(action_name: str, lane: str) -> str:
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
+    # Engine Style (trainable banks)
+    style_name = (st.session_state.writing_style or "").strip().upper()
+    style_directive = ""
+    style_exemplars: List[str] = []
+    if st.session_state.vb_style_on and style_name in ENGINE_STYLES:
+        style_directive = engine_style_directive(style_name, float(st.session_state.style_intensity), lane)
+        ctx2 = (st.session_state.main_text or "")[-2500:]
+        q2 = ctx2 if ctx2.strip() else (st.session_state.synopsis or "")
+        k = 1 + int(max(0.0, min(1.0, float(st.session_state.style_intensity))) * 2.0)
+        style_exemplars = retrieve_style_exemplars(style_name, lane, q2, k=k)
+
     exemplars: List[str] = []
     tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv and tv != "— None —":
@@ -1398,6 +1606,7 @@ def build_partner_brief(action_name: str, lane: str) -> str:
         query = ctx if ctx.strip() else st.session_state.synopsis
         exemplars = retrieve_mixed_exemplars(tv, lane, query)
     ex_block = "\n\n---\n\n".join(exemplars) if exemplars else "— None —"
+    style_ex_block = "\n\n---\n\n".join(style_exemplars) if style_exemplars else "— None —"
 
     ai_x = float(st.session_state.ai_intensity)
     return f"""
@@ -1415,6 +1624,12 @@ INTENSITY PROFILE: {intensity_profile(ai_x)}
 
 VOICE CONTROLS:
 {voice_controls}
+
+ENGINE STYLE DIRECTIVE:
+{style_directive if style_directive else "— None —"}
+
+STYLE EXEMPLARS (mimic cadence/diction, not content):
+{style_ex_block}
 
 TRAINED EXEMPLARS (mimic patterns, not content):
 {ex_block}
@@ -2050,7 +2265,7 @@ with left:
             label_visibility="collapsed",
             help="Commands: /create: Title  |  /promote  |  /find: term",
         )
-        st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
+        st.text_area("Tool Output", value=st.session_state.tool_output, height=140, disabled=True)
 
     with st.expander("📝 Synopsis"):
         st.text_area("Synopsis", key="synopsis", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
@@ -2133,12 +2348,61 @@ with right:
     st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
     st.selectbox(
         "Writing Style",
-        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"],
+        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"] + ENGINE_STYLES,
         key="writing_style",
         disabled=not st.session_state.vb_style_on,
         on_change=autosave,
     )
     st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on, on_change=autosave)
+
+    with st.expander("🎨 Style Trainer (Engine Styles)", expanded=False):
+        st.caption("Train per-project style banks. These steer the engine styles across all actions.")
+        s_cols = st.columns([1.2, 1.0, 1.0])
+        st_style = s_cols[0].selectbox("Engine style", ENGINE_STYLES, key="style_train_style")
+        st_lane = s_cols[1].selectbox("Lane", LANES, key="style_train_lane")
+        split_mode = s_cols[2].selectbox("Split", ["Paragraphs", "Whole"], key="style_train_split")
+
+        up = st.file_uploader("Upload training (.txt/.md/.docx)", type=["txt", "md", "docx"], key="style_train_upload")
+        paste = st.text_area("Paste training text", key="style_train_paste", height=140)
+
+        c1, c2, c3 = st.columns([1, 1, 1])
+        if c1.button("Add Samples", key="style_train_add"):
+            ftxt, fname = _read_uploaded_text(up)
+            src = _normalize_text((paste or "").strip() if (paste or "").strip() else ftxt)
+            if not src.strip():
+                st.session_state.tool_output = "Style Trainer: no text provided (or file too large)."
+                st.session_state.voice_status = "Style Trainer blocked"
+                autosave()
+            else:
+                n = add_style_samples(st_style, st_lane, src, split_mode=split_mode)
+                st.session_state.voice_status = f"Style Trainer: added {n} sample(s) → {st_style} • {st_lane}"
+                st.session_state.tool_output = _clamp_text(f"Added {n} sample(s) to {st_style} / {st_lane}.\nSource: {fname or 'paste'}")
+                autosave()
+
+        if c2.button("Delete last", key="style_train_del"):
+            if delete_last_style_sample(st_style, st_lane):
+                st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
+                autosave()
+                st.rerun()
+            else:
+                st.warning("Nothing to delete for that style/lane.")
+
+        if c3.button("Clear trainer text", key="style_train_clear"):
+            st.session_state.ui_notice = "Style trainer text cleared."
+            queue_action("__STYLE_CLEAR_PASTE__")
+            st.rerun()
+
+        st.caption("Lane sample counts:")
+        bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
+        lanes = bank.get("lanes") or {}
+        counts = {ln: len((lanes.get(ln) or [])) for ln in LANES}
+        st.code("  ".join([f"{ln}: {counts[ln]}" for ln in LANES]), language="")
+
+        if st.button("Clear THIS lane", key="style_train_clear_lane"):
+            clear_style_lane(st_style, st_lane)
+            st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
+            autosave()
+            st.rerun()
 
     st.divider()
 
