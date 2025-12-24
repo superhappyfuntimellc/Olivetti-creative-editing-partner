@@ -22,6 +22,18 @@ except Exception:
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
 # ============================================================
+# BUILD STAMP (so you always know what code is deployed)
+# ============================================================
+def _build_stamp() -> str:
+    try:
+        with open(__file__, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()[:8]
+    except Exception:
+        return "dev"
+
+APP_BUILD = _build_stamp()
+
+# ============================================================
 # CONFIG
 # ============================================================
 st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
@@ -96,6 +108,27 @@ def _split_paragraphs(text: str) -> List[str]:
     if not t:
         return []
     return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
+
+def _split_sentences(text: str) -> List[str]:
+    t = _normalize_text(text)
+    if not t:
+        return []
+    # lightweight sentence split; good enough for button tools
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    return [p.strip() for p in parts if p.strip()]
+
+def _last_sentence(text: str) -> str:
+    sents = _split_sentences(text)
+    return sents[-1] if sents else ""
+
+def _guess_target_word_from_last_sentence(text: str) -> str:
+    sent = _last_sentence(text)
+    words = WORD_RE.findall(sent)
+    # pick last "meaningful" token
+    for w in reversed(words):
+        if len(w) >= 4:
+            return w
+    return words[-1] if words else ""
 
 # ============================================================
 # LANE DETECTION (lightweight)
@@ -464,7 +497,7 @@ def promote_project(pid: str, to_bay: str) -> None:
 def _payload() -> Dict[str, Any]:
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-bays-intensity-leftpanel-v1"},
+        "meta": {"saved_at": now_ts(), "version": f"olivetti-bays-intensity-leftpanel-v1+{APP_BUILD}"},
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
         "projects": st.session_state.projects,
@@ -665,6 +698,51 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
+def local_find(term: str) -> str:
+    q = (term or "").strip()
+    if not q:
+        return "Find: empty query."
+    ql = q.lower()
+
+    # Search targets: draft + story bible (current project) + voice sample
+    targets: List[Tuple[str, str]] = [
+        ("DRAFT", st.session_state.main_text or ""),
+        ("SYNOPSIS", st.session_state.synopsis or ""),
+        ("GENRE/STYLE", st.session_state.genre_style_notes or ""),
+        ("WORLD", st.session_state.world or ""),
+        ("CHARACTERS", st.session_state.characters or ""),
+        ("OUTLINE", st.session_state.outline or ""),
+        ("VOICE SAMPLE", st.session_state.voice_sample or ""),
+        ("VOICE LOCK", st.session_state.voice_lock_prompt or ""),
+    ]
+
+    hits: List[str] = []
+    for label, txt in targets:
+        if not txt.strip():
+            continue
+        # paragraph-level hits for readability
+        paras = _split_paragraphs(txt)
+        for i, p in enumerate(paras, start=1):
+            if ql in p.lower():
+                snippet = p.strip()
+                if len(snippet) > 260:
+                    # center around first match
+                    idx = p.lower().find(ql)
+                    start = max(0, idx - 90)
+                    end = min(len(p), idx + 170)
+                    snippet = ("…" if start > 0 else "") + p[start:end].strip() + ("…" if end < len(p) else "")
+                hits.append(f"[{label} • ¶{i}] {snippet}")
+
+    if not hits:
+        return f"Find: no matches for '{q}'."
+
+    # cap output so Tool Output stays usable
+    cap = 24
+    out = "\n".join(hits[:cap])
+    if len(hits) > cap:
+        out += f"\n\n(+{len(hits) - cap} more hits)"
+    return out
+
 # ============================================================
 # COMMANDS (Junk Drawer)
 # ============================================================
@@ -715,6 +793,16 @@ def handle_junk_commands():
         autosave()
         return
 
+    m = CMD_FIND.match(raw)
+    if m:
+        term = m.group(1).strip()
+        st.session_state.tool_output = local_find(term)
+        st.session_state.voice_status = f"Find: '{term}'"
+        st.session_state.last_action = "Find"
+        st.session_state.junk = ""
+        autosave()
+        return
+
 handle_junk_commands()
 
 # ============================================================
@@ -740,6 +828,13 @@ def partner_action(action: str):
                 st.session_state.main_text = result.strip()
             st.session_state.last_action = action
             autosave()
+
+    def apply_tool_output(result: str, status: str = ""):
+        st.session_state.tool_output = (result or "").strip()
+        st.session_state.last_action = action
+        if status:
+            st.session_state.voice_status = status
+        autosave()
 
     try:
         if action == "Write":
@@ -801,6 +896,40 @@ def partner_action(action: str):
                 apply_replace(cleaned)
             return
 
+        # ✅ NEW: Synonym button actually does something (does not overwrite draft)
+        if action == "Synonym":
+            target = _guess_target_word_from_last_sentence(text)
+            if not target:
+                apply_tool_output("Synonym: no target word found. Add a sentence to the draft first.", "Synonym idle.")
+                return
+            if use_ai:
+                task = (
+                    f"Provide 12 strong synonyms for the word '{target}'. "
+                    "Keep the same part of speech. No filler. Output as a clean list."
+                )
+                out = call_openai(brief, task, text if text.strip() else target)
+                apply_tool_output(out, f"Synonyms: {target}")
+            else:
+                apply_tool_output(f"Synonym (offline): target='{target}'. Add OPENAI_API_KEY to enable suggestions.", f"Synonyms: {target}")
+            return
+
+        # ✅ NEW: Sentence button actually does something (does not overwrite draft)
+        if action == "Sentence":
+            sent = _last_sentence(text)
+            if not sent:
+                apply_tool_output("Sentence: no sentence found. Add a sentence to the draft first.", "Sentence idle.")
+                return
+            if use_ai:
+                task = (
+                    f"Generate 7 alternative versions of the FINAL sentence, preserving meaning and lane ({lane}). "
+                    "Do not add new facts. Output ONLY the alternatives as a numbered list."
+                )
+                out = call_openai(brief, task, text)
+                apply_tool_output(out, "Sentence alternatives ready.")
+            else:
+                apply_tool_output("Sentence (offline): add OPENAI_API_KEY to enable alternatives.", "Sentence idle.")
+            return
+
         apply_replace(text)
 
     except Exception as e:
@@ -838,6 +967,7 @@ with top:
             &nbsp;•&nbsp; Project: <b>{st.session_state.project_title}</b>
             &nbsp;•&nbsp; Autosave: {st.session_state.autosave_time or '—'}
             <br/>AI Intensity: {float(st.session_state.ai_intensity):.2f}
+            &nbsp;•&nbsp; Build: <b>{APP_BUILD}</b>
             &nbsp;•&nbsp; Status: {st.session_state.voice_status}
         </div>
         """,
@@ -957,7 +1087,10 @@ with center:
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"): partner_action("Spell")
     if b2[1].button("Grammar", key="btn_grammar"): partner_action("Grammar")
-    if b2[2].button("Find", key="btn_find"): st.session_state.tool_output = "Find is wired via /find: in Junk Drawer."; autosave()
+    if b2[2].button("Find", key="btn_find"):
+        st.session_state.tool_output = "Find is wired via /find: term in Junk Drawer."
+        st.session_state.voice_status = "Find hint shown."
+        autosave()
     if b2[3].button("Synonym", key="btn_synonym"): partner_action("Synonym")
     if b2[4].button("Sentence", key="btn_sentence"): partner_action("Sentence")
 
