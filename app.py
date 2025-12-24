@@ -269,7 +269,6 @@ def new_project_payload(title: str) -> Dict[str, Any]:
         "updated_ts": ts,
         "bay": "NEW",
         "draft": "",
-        # Story Bible is per-project and travels with the project forever
         "story_bible_id": hashlib.md5(f"sb|{title}|{ts}".encode("utf-8")).hexdigest()[:12],
         "story_bible_created_ts": ts,
         "story_bible": {
@@ -279,11 +278,8 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "characters": "",
             "outline": "",
         },
-        # Junk Drawer = Idea Bank (per project)
         "idea_bank": "",
-        # Voice Bible persists per project
         "voice_bible": default_voice_bible(),
-        # Per-button controls (new)
         "action_controls": default_action_controls(),
         "locks": {
             "story_bible_lock": True,
@@ -328,7 +324,6 @@ def init_state():
         "last_action": "—",
         "voice_status": "—",
 
-        # Editor fields
         "main_text": "",
         "synopsis": "",
         "genre_style_notes": "",
@@ -336,16 +331,14 @@ def init_state():
         "characters": "",
         "outline": "",
 
-        # Junk Drawer = Idea Bank
         "junk": "",
         "idea_bank_last": "",
-
         "tool_output": "",
 
         "workspace": default_workspace(),
         "workspace_title": "",
 
-        # Voice Bible controls (flat scalars)
+        # Voice Bible (flat)
         "vb_style_on": True,
         "vb_genre_on": True,
         "vb_trained_on": False,
@@ -375,8 +368,12 @@ def init_state():
         "voices": {},
         "voices_seeded": False,
 
-        # Action controls scalars
         "ac_locked": False,
+
+        # Promote UI
+        "promote_selected": [],
+        "promote_target": "World",
+        "promote_remove_from_ideas": False,
 
         "last_saved_digest": "",
     }
@@ -384,7 +381,6 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Ensure action control scalars exist
     for a in ALL_ACTIONS:
         st.session_state.setdefault(_ac_key(a, "enabled"), True)
         st.session_state.setdefault(_ac_key(a, "use_global"), True)
@@ -399,7 +395,7 @@ def in_workspace_mode() -> bool:
     return st.session_state.active_bay == "NEW" and not st.session_state.project_id
 
 # ============================================================
-# WORKSPACE <-> SESSION SYNC
+# VOICE BIBLE <-> SESSION
 # ============================================================
 def _vb_struct_from_session() -> Dict[str, Any]:
     return {
@@ -429,6 +425,9 @@ def _vb_apply_to_session(vb: Dict[str, Any]) -> None:
         if k in st.session_state:
             st.session_state[k] = v
 
+# ============================================================
+# WORKSPACE <-> SESSION
+# ============================================================
 def save_workspace_from_session() -> None:
     w = st.session_state.workspace or default_workspace()
     w["title"] = st.session_state.workspace_title
@@ -473,7 +472,7 @@ def reset_workspace_content(keep_templates: bool = True) -> None:
         load_workspace_into_session()
 
 # ============================================================
-# PROJECT <-> SESSION SYNC
+# PROJECT <-> SESSION
 # ============================================================
 def rebuild_vectors_in_voice_vault(compact_voices: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -654,7 +653,7 @@ def _payload() -> Dict[str, Any]:
         save_workspace_from_session()
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-action-controls-v1"},
+        "meta": {"saved_at": now_ts(), "version": "olivetti-action-controls+promote-v1"},
         "workspace": st.session_state.workspace,
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
@@ -914,6 +913,88 @@ def local_find(term: str) -> str:
     return out
 
 # ============================================================
+# PROMOTE IDEAS → CANON
+# ============================================================
+def idea_lines_from_bank(bank_text: str) -> List[str]:
+    # Non-empty lines, trimmed, keep original order, drop exact duplicates
+    lines_raw = [ln.strip() for ln in (bank_text or "").splitlines()]
+    lines = [ln for ln in lines_raw if ln]
+    seen = set()
+    out = []
+    for ln in lines:
+        if ln in seen:
+            continue
+        seen.add(ln)
+        out.append(ln)
+    return out
+
+def _append_bullets(existing: str, bullets: List[str]) -> str:
+    existing = existing or ""
+    existing = existing.rstrip()
+    add_lines = [b.strip() for b in bullets if (b or "").strip()]
+    if not add_lines:
+        return existing
+
+    # de-dup vs existing text (simple contains)
+    filtered = []
+    low = existing.lower()
+    for b in add_lines:
+        if b.lower() in low:
+            continue
+        filtered.append(b)
+    if not filtered:
+        return existing
+
+    block = "\n".join([f"- {b}" if not b.startswith(("-", "•")) else b for b in filtered])
+    if not existing:
+        return block.strip()
+    return (existing + "\n\n" + block).strip()
+
+def promote_selected_ideas(target: str, selected: List[str], remove_from_ideas: bool) -> None:
+    selected = [s.strip() for s in (selected or []) if s and s.strip()]
+    if not selected:
+        st.session_state.tool_output = "Promote: nothing selected."
+        st.session_state.voice_status = "Promote: no selection"
+        return
+
+    t = (target or "").strip()
+
+    if t == "Synopsis":
+        st.session_state.synopsis = _append_bullets(st.session_state.synopsis, selected)
+    elif t == "Genre/Style Notes":
+        st.session_state.genre_style_notes = _append_bullets(st.session_state.genre_style_notes, selected)
+    elif t == "World":
+        st.session_state.world = _append_bullets(st.session_state.world, selected)
+    elif t == "Characters":
+        st.session_state.characters = _append_bullets(st.session_state.characters, selected)
+    elif t == "Outline":
+        st.session_state.outline = _append_bullets(st.session_state.outline, selected)
+    elif t == "Draft":
+        # Draft gets a clean note block (doesn't pretend it's prose)
+        note_block = "\n".join([f"[IDEA → DRAFT NOTE] {s}" for s in selected])
+        base = (st.session_state.main_text or "").rstrip()
+        st.session_state.main_text = (base + ("\n\n" if base else "") + note_block).strip()
+    else:
+        st.session_state.tool_output = f"Promote: unknown target '{t}'."
+        st.session_state.voice_status = "Promote: error"
+        return
+
+    if remove_from_ideas:
+        bank_lines = (st.session_state.junk or "").splitlines()
+        to_remove = set(selected)
+        new_bank = []
+        for ln in bank_lines:
+            if ln.strip() and ln.strip() in to_remove:
+                continue
+            new_bank.append(ln)
+        st.session_state.junk = "\n".join(new_bank).strip()
+
+    st.session_state.tool_output = f"Promoted {len(selected)} idea(s) → {t}."
+    st.session_state.voice_status = f"Promoted → {t}"
+    st.session_state.last_action = f"Promote → {t}"
+    autosave()
+
+# ============================================================
 # COMMANDS (Idea Bank)
 # ============================================================
 CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
@@ -1000,6 +1081,7 @@ def handle_idea_commands():
         autosave()
         return
 
+# Execute command handler each rerun
 handle_idea_commands()
 
 # ============================================================
@@ -1304,6 +1386,52 @@ with left:
             on_change=autosave,
             help="Idea pool for this context. Commands: /find: term  |  /create: Title  |  /promote"
         )
+
+        # Promote UI (new)
+        ideas = idea_lines_from_bank(st.session_state.junk or "")
+        if ideas:
+            st.caption("Promote selected idea lines into canon fields (one-click).")
+            st.multiselect(
+                "Select idea line(s)",
+                options=ideas,
+                key="promote_selected",
+            )
+            colsP = st.columns([1.2, 1.2, 1.6])
+            colsP[0].selectbox(
+                "Target",
+                ["Synopsis", "Genre/Style Notes", "World", "Characters", "Outline", "Draft"],
+                key="promote_target",
+            )
+            colsP[1].checkbox(
+                "Remove from Idea Bank",
+                key="promote_remove_from_ideas",
+                help="OFF by default. When ON, promoted lines are removed from the Idea Bank text.",
+            )
+            if colsP[2].button("Promote Selected → Target", key="btn_promote_selected"):
+                promote_selected_ideas(
+                    st.session_state.promote_target,
+                    st.session_state.promote_selected,
+                    bool(st.session_state.promote_remove_from_ideas),
+                )
+
+            # Quick one-click targets (no extra selects)
+            st.caption("Quick Promote:")
+            q = st.columns(6)
+            if q[0].button("→ Synopsis", key="q_prom_syn"):
+                promote_selected_ideas("Synopsis", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+            if q[1].button("→ Genre", key="q_prom_gen"):
+                promote_selected_ideas("Genre/Style Notes", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+            if q[2].button("→ World", key="q_prom_world"):
+                promote_selected_ideas("World", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+            if q[3].button("→ Characters", key="q_prom_char"):
+                promote_selected_ideas("Characters", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+            if q[4].button("→ Outline", key="q_prom_out"):
+                promote_selected_ideas("Outline", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+            if q[5].button("→ Draft", key="q_prom_draft"):
+                promote_selected_ideas("Draft", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
+        else:
+            st.caption("Add idea lines above to enable Promote → Canon.")
+
         st.text_area("Tool Output", key="tool_output", height=160, disabled=True)
 
     with st.expander("📝 Synopsis"):
