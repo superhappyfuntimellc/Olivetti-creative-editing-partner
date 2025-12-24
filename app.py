@@ -4,7 +4,7 @@ import math
 import hashlib
 import streamlit as st
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 # ============================================================
 # ENV / METADATA HYGIENE
@@ -113,9 +113,7 @@ def init_state():
         "revisions": [],      # list[{ts, action, text}]
         "redo_stack": [],     # list[{ts, action, text}]
 
-        # Temporary session “My Voice”
-        "voiceA_snips": [],   # list[str]
-        "voiceB_snips": [],   # list[str]
+        # Status
         "voice_status": "—",
 
         # Tool output (shown inside existing Junk Drawer expander)
@@ -123,6 +121,11 @@ def init_state():
 
         # Throttles
         "last_captured_hash": "",
+
+        # Session-only Voice Vault (distinct voices, selectable at will)
+        # voices[name] = {"samples":[{"text":..., "vec":[...], "ts":...}], "created_ts":...}
+        "voices": {},
+        "voices_seeded": False,
     }
 
     for k, v in defaults.items():
@@ -133,6 +136,20 @@ init_state()
 
 # Free writing always: permanently disable hard focus behavior (button stays visible)
 st.session_state.focus_mode = False
+
+# ============================================================
+# TEMP VOICE VAULT — seed default voices (keeps existing options)
+# ============================================================
+def seed_default_voices():
+    if st.session_state.voices_seeded:
+        return
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Keep the original “Voice A / Voice B” concepts as real vault entries
+    st.session_state.voices.setdefault("Voice A", {"samples": [], "created_ts": now})
+    st.session_state.voices.setdefault("Voice B", {"samples": [], "created_ts": now})
+    st.session_state.voices_seeded = True
+
+seed_default_voices()
 
 # ============================================================
 # AUTOSAVE
@@ -190,7 +207,6 @@ CMD_REDO = re.compile(r"^\s*/redo\s*$", re.IGNORECASE)
 CMD_STATUS = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
 CMD_CLEAR = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
 
-# Optional helper commands (still inside Junk Drawer, no new features removed)
 CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
 CMD_SYN = re.compile(r"^\s*/syn\s*:\s*(.+)$", re.IGNORECASE)
 CMD_SENT = re.compile(r"^\s*/sentence\s*:\s*(.+)$", re.IGNORECASE)
@@ -209,9 +225,9 @@ def handle_junk_commands():
         st.session_state.junk = ""
         return
     if CMD_STATUS.match(raw):
-        a = len(st.session_state.voiceA_snips)
-        b = len(st.session_state.voiceB_snips)
-        st.session_state.voice_status = f"Status: A={a} samples, B={b} samples. Revisions={len(st.session_state.revisions)}."
+        voice_names = sorted([k for k in st.session_state.voices.keys()])
+        st.session_state.voice_status = f"Status: Voices={len(voice_names)} • Revisions={len(st.session_state.revisions)}"
+        st.session_state.tool_output = "VOICES:\n" + ("\n".join(voice_names) if voice_names else "— none —")
         st.session_state.junk = ""
         return
     if CMD_CLEAR.match(raw):
@@ -220,7 +236,7 @@ def handle_junk_commands():
         st.session_state.voice_status = "Cleared."
         return
 
-    # Tool command hints (optional)
+    # Tool command priming
     m = CMD_FIND.match(raw)
     if m:
         st.session_state.voice_status = "Find primed."
@@ -241,7 +257,7 @@ def handle_junk_commands():
 handle_junk_commands()
 
 # ============================================================
-# TEMP “MY VOICE” — Session-only training + retrieval
+# VOICE VAULT ENGINE (session-only) — import samples + choose voices at will
 # ============================================================
 WORD_RE = re.compile(r"[A-Za-z']+")
 
@@ -267,31 +283,142 @@ def _cosine(a: List[float], b: List[float]) -> float:
         return 0.0
     return dot / (na * nb)
 
+def _normalize_sample(s: str) -> str:
+    t = (s or "").strip()
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+def voice_names_for_selector() -> List[str]:
+    # Keep original options + add any custom voices
+    base = ["— None —"]
+    names = sorted([k for k in st.session_state.voices.keys() if k not in ("Voice A", "Voice B")])
+    return base + ["Voice A", "Voice B"] + names
+
+def ensure_voice(name: str):
+    name = (name or "").strip()
+    if not name:
+        return
+    if name not in st.session_state.voices:
+        st.session_state.voices[name] = {
+            "samples": [],
+            "created_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+def add_sample_to_voice(name: str, sample: str) -> str:
+    name = (name or "").strip()
+    sample = _normalize_sample(sample)
+    if not name:
+        return "Voice name missing."
+    if len(sample) < 200:
+        return "Paste at least ~200 characters before importing a sample."
+    ensure_voice(name)
+    st.session_state.voices[name]["samples"].append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "text": sample,
+        "vec": _hash_vec(sample),
+    })
+    # cap to keep session light
+    if len(st.session_state.voices[name]["samples"]) > 200:
+        st.session_state.voices[name]["samples"] = st.session_state.voices[name]["samples"][-200:]
+    return f"Imported sample → Voice: {name} (total samples: {len(st.session_state.voices[name]['samples'])})"
+
+def delete_voice(name: str) -> str:
+    name = (name or "").strip()
+    if name in ("Voice A", "Voice B"):
+        # keep base voices; allow clearing instead of deleting
+        st.session_state.voices[name]["samples"] = []
+        return f"Cleared samples for {name}."
+    if name in st.session_state.voices:
+        del st.session_state.voices[name]
+        return f"Deleted voice: {name}"
+    return "Voice not found."
+
+def retrieve_voice_exemplars(query_text: str, voice: str, k: int = 3) -> List[str]:
+    v = st.session_state.voices.get(voice)
+    if not v or not v.get("samples"):
+        return []
+    pool = v["samples"][-120:]
+    qv = _hash_vec(query_text)
+    scored = []
+    for s in pool:
+        scored.append((_cosine(qv, s.get("vec", [])), s.get("text", "")))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [txt for score, txt in scored[:k] if score > 0.0 and txt]
+    return top[:k]
+
+# --- Voice import commands typed into Style Example (NO new UI elements) ---
+CMD_SAVEVOICE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
+CMD_DELETEVOICE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
+CMD_LISTVOICES = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
+
+def handle_voice_sample_commands():
+    """
+    Use the existing Style Example box as your import channel.
+
+    Format:
+    First line:  /savevoice My New Voice
+    Then paste writing sample underneath.
+
+    Also:
+    /listvoices
+    /deletevoice My New Voice
+    """
+    raw = st.session_state.voice_sample or ""
+    if not raw.strip():
+        return
+
+    lines = raw.splitlines()
+    first = lines[0].strip()
+
+    if CMD_LISTVOICES.match(first):
+        names = sorted(st.session_state.voices.keys())
+        st.session_state.tool_output = "VOICES:\n" + ("\n".join(names) if names else "— none —")
+        st.session_state.voice_status = "Listed voices."
+        st.session_state.voice_sample = ""
+        return
+
+    m = CMD_DELETEVOICE.match(first)
+    if m:
+        name = m.group(1).strip()
+        msg = delete_voice(name)
+        st.session_state.voice_status = msg
+        st.session_state.tool_output = msg
+        st.session_state.voice_sample = ""
+        return
+
+    m = CMD_SAVEVOICE.match(first)
+    if m:
+        name = m.group(1).strip()
+        sample = "\n".join(lines[1:]).strip()
+        msg = add_sample_to_voice(name, sample)
+        st.session_state.voice_status = msg
+        st.session_state.tool_output = msg
+        st.session_state.voice_sample = ""
+        return
+
+# Process voice commands every rerun (so it feels OS-like)
+handle_voice_sample_commands()
+
+# ============================================================
+# “TRAINED VOICE” passive training from your current draft (session-only)
+# ============================================================
 def _split_paragraphs(text: str) -> List[str]:
     t = (text or "").strip()
     if not t:
         return []
     return re.split(r"\n\s*\n", t, flags=re.MULTILINE)
 
-def _join_paragraphs(paras: List[str]) -> str:
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
-
-def _last_sentence(text: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    parts = re.split(r"(?<=[.!?])\s+", t)
-    return parts[-1].strip() if parts else t
-
 def capture_voice_snippet_from_draft():
     """
-    Learns passively DURING the session (temporary memory).
-    Captures the latest paragraph occasionally while Trained Voice is ON.
+    If Trained Voice is ON and a voice is selected, it learns passively from your draft.
+    This builds distinct voices over long sessions.
     """
     if not st.session_state.vb_trained_on:
         return
     tv = st.session_state.trained_voice
-    if tv not in ("Voice A", "Voice B"):
+    if not tv or tv == "— None —":
         return
 
     paras = _split_paragraphs(st.session_state.main_text or "")
@@ -306,28 +433,16 @@ def capture_voice_snippet_from_draft():
         return
     st.session_state.last_captured_hash = h
 
-    if tv == "Voice A":
-        st.session_state.voiceA_snips.append(last)
-        if len(st.session_state.voiceA_snips) > 120:
-            st.session_state.voiceA_snips = st.session_state.voiceA_snips[-120:]
-    else:
-        st.session_state.voiceB_snips.append(last)
-        if len(st.session_state.voiceB_snips) > 120:
-            st.session_state.voiceB_snips = st.session_state.voiceB_snips[-120:]
+    ensure_voice(tv)
+    st.session_state.voices[tv]["samples"].append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "text": last,
+        "vec": _hash_vec(last),
+    })
+    if len(st.session_state.voices[tv]["samples"]) > 200:
+        st.session_state.voices[tv]["samples"] = st.session_state.voices[tv]["samples"][-200:]
 
     st.session_state.voice_status = f"Trained {tv}: +1 paragraph"
-
-def retrieve_voice_exemplars(query_text: str, voice: str, k: int = 3) -> List[str]:
-    pool = st.session_state.voiceA_snips if voice == "Voice A" else st.session_state.voiceB_snips
-    if not pool:
-        return []
-    qv = _hash_vec(query_text)
-    scored = []
-    for s in pool[-80:]:
-        scored.append((_cosine(qv, _hash_vec(s)), s))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [s for score, s in scored[:k] if score > 0.0]
-    return top[:k]
 
 # ============================================================
 # STORY BIBLE AS CANON + IDEA BANK (MANDATORY)
@@ -365,12 +480,13 @@ DOMINANCE RULES (do not violate):
 - Genre influence shapes structure/tropes but must not override the author’s voice.
 """.strip()
 
+    # Voice controls (existing toggles/sliders; nothing removed)
     vb = []
     if st.session_state.vb_style_on:
         vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
     if st.session_state.vb_genre_on:
         vb.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
-    if st.session_state.vb_trained_on and st.session_state.trained_voice in ("Voice A", "Voice B"):
+    if st.session_state.vb_trained_on and st.session_state.trained_voice and st.session_state.trained_voice != "— None —":
         vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
     if st.session_state.vb_match_on and st.session_state.voice_sample.strip():
         vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
@@ -378,11 +494,13 @@ DOMINANCE RULES (do not violate):
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
+    # Trained voice exemplars (from selected voice)
     exemplars = []
     tv = st.session_state.trained_voice
-    if st.session_state.vb_trained_on and tv in ("Voice A", "Voice B"):
+    if st.session_state.vb_trained_on and tv and tv != "— None —":
         ctx = (st.session_state.main_text or "")[-2500:]
         exemplars = retrieve_voice_exemplars(ctx if ctx.strip() else st.session_state.synopsis, tv, k=3)
+
     ex_block = "— None —"
     if exemplars:
         ex_block = "\n\n---\n\n".join(exemplars)
@@ -457,10 +575,7 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
-def local_find(text: str, query: str, limit: int = 10) -> List[Tuple[int, str]]:
-    """
-    Returns (index, snippet) hits from draft text for a query.
-    """
+def local_find(text: str, query: str, limit: int = 12) -> List[Tuple[int, str]]:
     q = (query or "").strip()
     if not q:
         return []
@@ -476,33 +591,26 @@ def local_find(text: str, query: str, limit: int = 10) -> List[Tuple[int, str]]:
                 break
     return hits
 
-# ============================================================
-# BUTTON TOOLING: hook every tool into Story Bible / Project context
-# ============================================================
 def _read_query_from_junk(default: str = "") -> str:
-    """
-    If Junk Drawer contains a tool command (/find: X or /syn: X), extract X.
-    Otherwise treat the entire junk text as a plain query (if short).
-    """
     raw = (st.session_state.junk or "").strip()
 
     m = CMD_FIND.match(raw)
     if m:
         return m.group(1).strip()
-
     m = CMD_SYN.match(raw)
     if m:
         return m.group(1).strip()
-
     m = CMD_SENT.match(raw)
     if m:
         return m.group(1).strip()
 
-    # If the user typed a simple word/phrase in junk, use it as query
     if raw and len(raw) <= 80 and not raw.startswith("/"):
         return raw.strip()
 
     return default
+
+def _join_paragraphs(paras: List[str]) -> str:
+    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
 
 # ============================================================
 # PARTNER ACTIONS (wired to ALL bottom bar buttons)
@@ -529,8 +637,8 @@ def partner_action(action: str):
             autosave()
             st.session_state.last_action = action
 
-    # === GENERATIVE WRITING TOOLS (all Story Bible hooked via brief) ===
     try:
+        # === GENERATIVE WRITING TOOLS (Story Bible + Project Voice) ===
         if action == "Write":
             if use_ai:
                 task = (
@@ -592,7 +700,7 @@ def partner_action(action: str):
                 apply_replace(text)
             return
 
-        # === TEXT CHECKING / EDITING TOOLS (also Story Bible hooked via brief) ===
+        # === TEXT CHECKING / EDITING TOOLS (also project-aware) ===
         if action in ("Spell", "Grammar"):
             cleaned = local_cleanup(text)
             if use_ai:
@@ -606,24 +714,14 @@ def partner_action(action: str):
                 apply_replace(cleaned)
             return
 
-        # === Find (project-aware) ===
         if action == "Find":
             query = _read_query_from_junk(default="")
             if not query:
-                # If no query provided, use a small, useful default: try to locate Story Bible proper nouns
-                sb = _story_bible_text()
-                # crude extraction of capitalized words (names/places)
-                names = re.findall(r"\b[A-Z][a-z]{2,}\b", sb)
-                names = list(dict.fromkeys(names))[:5]
-                if names:
-                    query = names[0]
-                    st.session_state.tool_output = f"No query provided. Defaulting Find to: {query}\n(You can type /find: term in Junk Drawer.)"
-                else:
-                    st.session_state.tool_output = "Find: enter /find: term (or type a short term) in Junk Drawer."
-                    st.session_state.voice_status = "Find: waiting for query."
-                    return
-
-            hits = local_find(text, query, limit=12)
+                st.session_state.tool_output = "Find: enter /find: term (or type a short term) in Junk Drawer."
+                st.session_state.voice_status = "Find: waiting for query."
+                st.session_state.last_action = "Find"
+                return
+            hits = local_find(text, query)
             if hits:
                 lines = "\n".join([f"Line {ln}: {snip}" for ln, snip in hits])
                 st.session_state.tool_output = f"FIND: '{query}'\n\n{lines}"
@@ -631,11 +729,9 @@ def partner_action(action: str):
             else:
                 st.session_state.tool_output = f"FIND: '{query}'\n\nNo hits in draft."
                 st.session_state.voice_status = "Find: 0 hits."
-            # Find does not modify draft
             st.session_state.last_action = "Find"
             return
 
-        # === Synonym (project-aware) ===
         if action == "Synonym":
             query = _read_query_from_junk(default="")
             if not query:
@@ -643,12 +739,11 @@ def partner_action(action: str):
                 st.session_state.voice_status = "Synonym: waiting for word."
                 st.session_state.last_action = "Synonym"
                 return
-
             if use_ai:
                 task = (
-                    f"Provide 12 strong synonym/replacement options for the word/phrase: '{query}'. "
-                    "Rank by fit for the current project voice and tone. "
-                    "Avoid thesaurus weirdness. If replacements change nuance, label them."
+                    f"Provide 12 strong replacements for: '{query}'. "
+                    "Rank by fit for this project voice and tone. "
+                    "Avoid thesaurus weirdness. If nuance changes, label it."
                 )
                 out = call_openai(brief, task, query)
                 st.session_state.tool_output = f"SYNONYMS FOR: '{query}'\n\n{out}"
@@ -659,17 +754,14 @@ def partner_action(action: str):
             st.session_state.last_action = "Synonym"
             return
 
-        # === Sentence (project-aware) ===
         if action == "Sentence":
             directive = _read_query_from_junk(default="tighten")
-            # Sentence tool edits last paragraph at sentence-level
             paras = _split_paragraphs(text)
             if not paras:
                 st.session_state.tool_output = "Sentence: draft is empty."
                 st.session_state.voice_status = "Sentence: nothing to edit."
                 st.session_state.last_action = "Sentence"
                 return
-
             if use_ai:
                 task = (
                     f"Perform a sentence-level pass on the FINAL paragraph with directive: '{directive}'. "
@@ -685,21 +777,19 @@ def partner_action(action: str):
                 else:
                     st.session_state.tool_output = "Sentence: no output returned."
                     st.session_state.voice_status = "Sentence: no change."
-                    st.session_state.last_action = "Sentence"
+                st.session_state.last_action = "Sentence"
             else:
-                # Local fallback: minimal safe tighten on last sentence spacing/punct
-                lastp = local_cleanup(paras[-1])
-                paras[-1] = lastp
+                paras[-1] = local_cleanup(paras[-1])
                 apply_replace(_join_paragraphs(paras))
                 st.session_state.tool_output = "Sentence: applied local cleanup (enable OPENAI_API_KEY for full sentence partner)."
                 st.session_state.voice_status = "Sentence: local."
+                st.session_state.last_action = "Sentence"
             return
 
-        # If unknown, no-op
+        # No-op fallback
         apply_replace(text)
 
     except Exception as e:
-        # No UI changes: report via existing status line/output
         st.session_state.voice_status = f"Engine: {str(e)}"
         st.session_state.tool_output = f"ERROR:\n{str(e)}"
         apply_replace(text)
@@ -754,7 +844,6 @@ with left:
 
     with st.expander("🗃 Junk Drawer"):
         st.text_area("", key="junk", height=80)
-        # Output stays inside this existing feature (no layout changes)
         st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
 
     with st.expander("📝 Synopsis"):
@@ -793,7 +882,7 @@ with center:
     if b1[4].button("Describe", key="btn_describe"):
         partner_action("Describe")
 
-    # Bottom bar — editing (EXACT BUTTONS KEPT; ALL now project-aware)
+    # Bottom bar — editing (EXACT BUTTONS KEPT; project-aware)
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"):
         partner_action("Spell")
@@ -807,7 +896,7 @@ with center:
         partner_action("Sentence")
 
 # ============================================================
-# RIGHT — VOICE BIBLE (TOP → BOTTOM, EXACT)
+# RIGHT — VOICE BIBLE (TOP → BOTTOM, EXACT FEATURES KEPT)
 # ============================================================
 with right:
     st.subheader("🎙 Voice Bible")
@@ -836,11 +925,15 @@ with right:
 
     st.divider()
 
-    # 3. Trained Voices (EXACT OPTIONS KEPT)
+    # 3. Trained Voices (selector upgraded: still includes Voice A/B, PLUS imported voices)
     st.checkbox("Enable Trained Voice", key="vb_trained_on")
+    trained_options = voice_names_for_selector()
+    # Keep user's current selection if it still exists
+    if st.session_state.trained_voice not in trained_options:
+        st.session_state.trained_voice = "— None —"
     st.selectbox(
         "Trained Voice",
-        ["— None —", "Voice A", "Voice B"],
+        trained_options,
         key="trained_voice",
         disabled=not st.session_state.vb_trained_on
     )
@@ -848,9 +941,15 @@ with right:
 
     st.divider()
 
-    # 4. Match My Style
+    # 4. Match My Style (also your “import channel” via commands)
     st.checkbox("Enable Match My Style", key="vb_match_on")
-    st.text_area("Style Example", key="voice_sample", height=100, disabled=not st.session_state.vb_match_on)
+    st.text_area(
+        "Style Example",
+        key="voice_sample",
+        height=100,
+        disabled=not st.session_state.vb_match_on,
+        help="Import voice sample (session-only): First line '/savevoice Name' then paste sample. Also: /listvoices, /deletevoice Name"
+    )
     st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on)
 
     st.divider()
