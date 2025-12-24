@@ -1,10 +1,11 @@
 import os
 import re
 import math
+import json
 import hashlib
 import streamlit as st
 from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
 
 # ============================================================
 # ENV / METADATA HYGIENE
@@ -42,17 +43,24 @@ st.markdown(
       font-size: 16px !important;
       padding: 0.6rem 0.9rem !important;
     }
-    label, .stSelectbox label, .stSlider label { font-size: 14px !important; }
+    label, .stSelectbox label, .stSlider label {
+      font-size: 14px !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
 )
 
 # ============================================================
-# SESSION STATE INIT
+# GLOBALS
 # ============================================================
 LANES = ["Dialogue", "Narration", "Interiority", "Action"]
+AUTOSAVE_DIR = "autosave"
+AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
 
+# ============================================================
+# SESSION STATE INIT
+# ============================================================
 def init_state():
     defaults = {
         # Main writing
@@ -92,14 +100,11 @@ def init_state():
         "pov": "Close Third",
         "tense": "Past",
 
-        # UI
-        "focus_mode": False,
-
         # Production mode
         "stage": "Rough",
         "last_action": "—",
 
-        # Safety
+        # Safety: non-destructive history
         "revisions": [],
         "redo_stack": [],
 
@@ -109,49 +114,32 @@ def init_state():
 
         # Throttles
         "last_captured_hash": "",
+        "last_saved_digest": "",
 
-        # Voices (session-only)
-        # voices[name] = {"created_ts":..., "lanes": {lane:[{text,vec,ts}...]}, "fingerprint": {...}, "lane_fingerprints": {...}}
+        # Session-only Voice Vault (distinct voices, selectable at will)
+        # voices[name] = {"created_ts":..., "lanes": {"Dialogue":[sample...], ...}}
         "voices": {},
         "voices_seeded": False,
 
-        # Locks (no UI changes; controlled via Junk Drawer commands)
+        # Locks (kept; no focus mode)
         "locks": {
-            "story_bible_lock": True,          # default ON (this is a project engine)
-            "voice_fingerprint_lock": True,    # default ON for pro stability
+            "story_bible_lock": True,
+            "voice_fingerprint_lock": True,
             "lane_lock": False,
             "forced_lane": "Narration",
         },
     }
+
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 init_state()
 
-# Free writing always
-st.session_state.focus_mode = False
-
 # ============================================================
 # TEXT / VECTOR UTILS
 # ============================================================
 WORD_RE = re.compile(r"[A-Za-z']+")
-
-def _normalize_text(s: str) -> str:
-    t = (s or "").strip()
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    t = re.sub(r"[ \t]{2,}", " ", t)
-    return t.strip()
-
-def _split_paragraphs(text: str) -> List[str]:
-    t = _normalize_text(text)
-    if not t:
-        return []
-    return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
-
-def _join_paragraphs(paras: List[str]) -> str:
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
 
 def _tokenize(text: str) -> List[str]:
     return [w.lower() for w in WORD_RE.findall(text or "")]
@@ -175,20 +163,35 @@ def _cosine(a: List[float], b: List[float]) -> float:
         return 0.0
     return dot / (na * nb)
 
+def _normalize_text(s: str) -> str:
+    t = (s or "").strip()
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+def _split_paragraphs(text: str) -> List[str]:
+    t = _normalize_text(text)
+    if not t:
+        return []
+    return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
+
+def _join_paragraphs(paras: List[str]) -> str:
+    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
+
 # ============================================================
 # LANE DETECTION
 # ============================================================
-THOUGHT_WORDS = set([
+THOUGHT_WORDS = {
     "think","thought","felt","wondered","realized","remembered","knew","noticed","decided",
     "hoped","feared","wanted","imagined","could","should","would"
-])
-
-ACTION_VERBS = set([
+}
+ACTION_VERBS = {
     "run","ran","walk","walked","grab","grabbed","push","pushed","pull","pulled","slam","slammed",
     "hit","struck","kick","kicked","turn","turned","snap","snapped","dive","dived","duck","ducked",
     "rush","rushed","lunge","lunged","climb","climbed","drop","dropped","throw","threw","fire","fired",
     "aim","aimed","break","broke","shatter","shattered","step","stepped","move","moved","reach","reached"
-])
+}
 
 def detect_lane(paragraph: str) -> str:
     p = (paragraph or "").strip()
@@ -197,29 +200,38 @@ def detect_lane(paragraph: str) -> str:
 
     quote_count = p.count('"') + p.count("“") + p.count("”")
     has_dialogue_punct = (p.startswith("—") or p.startswith("- ") or p.startswith("“") or p.startswith('"'))
+
     dialogue_score = 0.0
-    if quote_count >= 2: dialogue_score += 2.5
-    if has_dialogue_punct: dialogue_score += 1.5
+    if quote_count >= 2:
+        dialogue_score += 2.5
+    if has_dialogue_punct:
+        dialogue_score += 1.5
     if p.count("\n") >= 2:
         short_lines = sum(1 for ln in p.splitlines() if len(ln.strip()) <= 60)
-        if short_lines >= 2: dialogue_score += 1.0
+        if short_lines >= 2:
+            dialogue_score += 1.0
 
     toks = _tokenize(p)
     interior_score = 0.0
     if toks:
         first_person = sum(1 for t in toks if t in ("i","me","my","mine","myself"))
         thought_hits = sum(1 for t in toks if t in THOUGHT_WORDS)
-        if first_person >= 2 and thought_hits >= 1: interior_score += 2.2
-        if "?" in p and thought_hits >= 1: interior_score += 0.6
+        if first_person >= 2 and thought_hits >= 1:
+            interior_score += 2.2
+        if "?" in p and thought_hits >= 1:
+            interior_score += 0.6
 
     action_score = 0.0
     if toks:
         verb_hits = sum(1 for t in toks if t in ACTION_VERBS)
         sent_count = max(1, len(re.split(r"[.!?]+", p)) - 1)
         avg_len = len(toks) / sent_count if sent_count else len(toks)
-        if verb_hits >= 2: action_score += 1.6
-        if avg_len <= 14 and verb_hits >= 1: action_score += 1.0
-        if "!" in p: action_score += 0.3
+        if verb_hits >= 2:
+            action_score += 1.6
+        if avg_len <= 14 and verb_hits >= 1:
+            action_score += 1.0
+        if "!" in p:
+            action_score += 0.3
 
     scores = {"Dialogue": dialogue_score, "Interiority": interior_score, "Action": action_score, "Narration": 0.25}
     lane = max(scores.items(), key=lambda kv: kv[1])[0]
@@ -232,21 +244,14 @@ def current_lane_from_draft(text: str) -> str:
     return detect_lane(paras[-1])
 
 # ============================================================
-# VOICE VAULT + FINGERPRINTS (TRAINABLE + LOCKABLE)
+# VOICE VAULT
 # ============================================================
 def seed_default_voices():
     if st.session_state.voices_seeded:
         return
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     def make_voice():
-        return {
-            "created_ts": now,
-            "lanes": {ln: [] for ln in LANES},
-            "fingerprint": {},
-            "lane_fingerprints": {ln: {} for ln in LANES},
-        }
-
+        return {"created_ts": now, "lanes": {ln: [] for ln in LANES}}
     st.session_state.voices.setdefault("Voice A", make_voice())
     st.session_state.voices.setdefault("Voice B", make_voice())
     st.session_state.voices_seeded = True
@@ -258,12 +263,9 @@ def ensure_voice(name: str):
     if not nm:
         return
     if nm not in st.session_state.voices:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.voices[nm] = {
-            "created_ts": now,
+            "created_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "lanes": {ln: [] for ln in LANES},
-            "fingerprint": {},
-            "lane_fingerprints": {ln: {} for ln in LANES},
         }
 
 def voice_names_for_selector() -> List[str]:
@@ -277,72 +279,7 @@ def _cap_lane_samples(voice_name: str, lane: str, cap: int = 160):
         return
     v["lanes"][lane] = v["lanes"][lane][-cap:]
 
-def _sentence_lengths(text: str) -> List[int]:
-    t = (text or "").strip()
-    if not t:
-        return []
-    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", t) if s.strip()]
-    out = []
-    for s in sents:
-        out.append(len(_tokenize(s)))
-    return out
-
-def compute_fingerprint(texts: List[str]) -> Dict[str, float]:
-    """
-    A light, stable fingerprint (trainable as you add more samples).
-    """
-    if not texts:
-        return {}
-
-    joined = "\n\n".join(texts)
-    toks = _tokenize(joined)
-    if not toks:
-        return {}
-
-    sent_lens = []
-    for t in texts:
-        sent_lens.extend(_sentence_lengths(t))
-    avg_sent = float(sum(sent_lens) / max(1, len(sent_lens))) if sent_lens else float(len(toks) / 5.0)
-
-    total_chars = max(1, len(joined))
-    comma_rate = joined.count(",") / total_chars
-    semi_rate = joined.count(";") / total_chars
-    dash_rate = (joined.count("—") + joined.count("--")) / total_chars
-    ellip_rate = joined.count("…") / total_chars
-
-    quote_chars = joined.count('"') + joined.count("“") + joined.count("”")
-    dialogue_density = min(1.0, quote_chars / max(1, total_chars * 0.06))  # normalized heuristic
-
-    # adjective-ish heuristic: words ending in common adj suffixes
-    adj_hits = sum(1 for w in toks if w.endswith(("ous","ful","ive","able","ible","less","al","ic","y")))
-    adj_rate = adj_hits / max(1, len(toks))
-
-    return {
-        "avg_sentence_words": round(avg_sent, 2),
-        "comma_rate": round(comma_rate, 4),
-        "semicolon_rate": round(semi_rate, 4),
-        "dash_rate": round(dash_rate, 4),
-        "ellipsis_rate": round(ellip_rate, 4),
-        "dialogue_density": round(dialogue_density, 3),
-        "adj_rate": round(adj_rate, 3),
-    }
-
-def refresh_voice_fingerprints(voice_name: str):
-    v = st.session_state.voices.get(voice_name)
-    if not v:
-        return
-    # overall
-    all_texts: List[str] = []
-    for ln in LANES:
-        all_texts.extend([s["text"] for s in v["lanes"].get(ln, []) if s.get("text")])
-    v["fingerprint"] = compute_fingerprint(all_texts)
-
-    # lane-specific
-    for ln in LANES:
-        lane_texts = [s["text"] for s in v["lanes"].get(ln, []) if s.get("text")]
-        v["lane_fingerprints"][ln] = compute_fingerprint(lane_texts)
-
-def add_sample_to_voice_lane(voice_name: str, lane: str, sample_text: str):
+def add_sample_to_voice_lane(voice_name: str, lane: str, sample_text: str) -> None:
     ensure_voice(voice_name)
     lane = lane if lane in LANES else "Narration"
     txt = _normalize_text(sample_text)
@@ -354,14 +291,12 @@ def add_sample_to_voice_lane(voice_name: str, lane: str, sample_text: str):
         "vec": _hash_vec(txt),
     })
     _cap_lane_samples(voice_name, lane)
-    refresh_voice_fingerprints(voice_name)
 
 def import_samples_to_voice(voice_name: str, big_sample: str) -> Tuple[int, Dict[str, int]]:
     ensure_voice(voice_name)
     text = _normalize_text(big_sample)
     paras = _split_paragraphs(text)
 
-    # merge very short paras to make better exemplars
     merged: List[str] = []
     buf = ""
     for p in paras:
@@ -388,7 +323,6 @@ def import_samples_to_voice(voice_name: str, big_sample: str) -> Tuple[int, Dict
     for ln in LANES:
         _cap_lane_samples(voice_name, ln, cap=160)
 
-    refresh_voice_fingerprints(voice_name)
     return imported, counts
 
 def delete_voice(name: str) -> str:
@@ -396,7 +330,6 @@ def delete_voice(name: str) -> str:
     if nm in ("Voice A", "Voice B"):
         for ln in LANES:
             st.session_state.voices[nm]["lanes"][ln] = []
-        refresh_voice_fingerprints(nm)
         return f"Cleared samples for {nm}."
     if nm in st.session_state.voices:
         del st.session_state.voices[nm]
@@ -414,8 +347,7 @@ def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) 
     qv = _hash_vec(query_text)
     scored = [(_cosine(qv, s.get("vec", [])), s.get("text", "")) for s in pool[-140:]]
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = [txt for score, txt in scored[:k] if score > 0.0 and txt]
-    return top[:k]
+    return [txt for score, txt in scored[:k] if score > 0.0 and txt][:k]
 
 def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> List[str]:
     lane_ex = retrieve_exemplars(voice_name, lane, query_text, k=2)
@@ -425,17 +357,159 @@ def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> Lis
     out = lane_ex + [x for x in nar_ex if x not in lane_ex]
     return out[:3]
 
-def format_fingerprint(fp: Dict[str, float]) -> str:
-    if not fp:
-        return "— None —"
-    return "\n".join([f"- {k}: {v}" for k, v in fp.items()])
+# ============================================================
+# DISK AUTOSAVE (AUTO SAVE ALL)
+# - saves: draft + story bible + voice bible settings + locks + voices (texts)
+# - does NOT save vectors; vectors are rebuilt on load
+# ============================================================
+def _state_payload() -> Dict[str, Any]:
+    # Compact voices: store only text + ts per lane
+    voices_out: Dict[str, Any] = {}
+    for name, v in (st.session_state.voices or {}).items():
+        lanes_out: Dict[str, Any] = {}
+        for ln in LANES:
+            samples = v.get("lanes", {}).get(ln, []) or []
+            lanes_out[ln] = [{"ts": s.get("ts"), "text": s.get("text", "")} for s in samples if s.get("text")]
+        voices_out[name] = {
+            "created_ts": v.get("created_ts"),
+            "lanes": lanes_out,
+        }
+
+    payload = {
+        "meta": {
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "version": "olivetti-autosave-all-v1",
+        },
+        "draft": st.session_state.main_text,
+        "story_bible": {
+            "synopsis": st.session_state.synopsis,
+            "genre_style_notes": st.session_state.genre_style_notes,
+            "world": st.session_state.world,
+            "characters": st.session_state.characters,
+            "outline": st.session_state.outline,
+        },
+        "voice_bible": {
+            "vb_style_on": st.session_state.vb_style_on,
+            "vb_genre_on": st.session_state.vb_genre_on,
+            "vb_trained_on": st.session_state.vb_trained_on,
+            "vb_match_on": st.session_state.vb_match_on,
+            "vb_lock_on": st.session_state.vb_lock_on,
+            "writing_style": st.session_state.writing_style,
+            "genre": st.session_state.genre,
+            "trained_voice": st.session_state.trained_voice,
+            "voice_lock_prompt": st.session_state.voice_lock_prompt,
+            "style_intensity": st.session_state.style_intensity,
+            "genre_intensity": st.session_state.genre_intensity,
+            "trained_intensity": st.session_state.trained_intensity,
+            "match_intensity": st.session_state.match_intensity,
+            "lock_intensity": st.session_state.lock_intensity,
+            "pov": st.session_state.pov,
+            "tense": st.session_state.tense,
+        },
+        "production": {
+            "stage": st.session_state.stage,
+            "last_action": st.session_state.last_action,
+        },
+        "locks": st.session_state.locks,
+        "voices": voices_out,
+    }
+    return payload
+
+def _digest(payload: Dict[str, Any]) -> str:
+    s = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+def save_all_to_disk(force: bool = False) -> None:
+    try:
+        os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+        payload = _state_payload()
+        dig = _digest(payload)
+        if (not force) and dig == st.session_state.last_saved_digest:
+            return
+        with open(AUTOSAVE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        st.session_state.last_saved_digest = dig
+    except Exception as e:
+        # Never break the desk over autosave
+        st.session_state.voice_status = f"Autosave warning: {e}"
+
+def load_all_from_disk() -> None:
+    if not os.path.exists(AUTOSAVE_PATH):
+        return
+    try:
+        with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        st.session_state.main_text = payload.get("draft", st.session_state.main_text)
+
+        sb = payload.get("story_bible", {}) or {}
+        st.session_state.synopsis = sb.get("synopsis", st.session_state.synopsis)
+        st.session_state.genre_style_notes = sb.get("genre_style_notes", st.session_state.genre_style_notes)
+        st.session_state.world = sb.get("world", st.session_state.world)
+        st.session_state.characters = sb.get("characters", st.session_state.characters)
+        st.session_state.outline = sb.get("outline", st.session_state.outline)
+
+        vb = payload.get("voice_bible", {}) or {}
+        for k in [
+            "vb_style_on","vb_genre_on","vb_trained_on","vb_match_on","vb_lock_on",
+            "writing_style","genre","trained_voice","voice_lock_prompt",
+            "style_intensity","genre_intensity","trained_intensity","match_intensity","lock_intensity",
+            "pov","tense"
+        ]:
+            if k in vb:
+                st.session_state[k] = vb[k]
+
+        prod = payload.get("production", {}) or {}
+        if "stage" in prod:
+            st.session_state.stage = prod["stage"]
+        if "last_action" in prod:
+            st.session_state.last_action = prod["last_action"]
+
+        if "locks" in payload and isinstance(payload["locks"], dict):
+            st.session_state.locks = payload["locks"]
+
+        # Rebuild voices + vectors
+        voices_in = payload.get("voices", {}) or {}
+        st.session_state.voices = {}
+        for name, v in voices_in.items():
+            created_ts = v.get("created_ts") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            lanes_in = v.get("lanes", {}) or {}
+            lanes_out: Dict[str, Any] = {ln: [] for ln in LANES}
+            for ln in LANES:
+                samples = lanes_in.get(ln, []) or []
+                for s in samples:
+                    txt = _normalize_text(s.get("text", ""))
+                    if not txt:
+                        continue
+                    lanes_out[ln].append({
+                        "ts": s.get("ts") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "text": txt,
+                        "vec": _hash_vec(txt),
+                    })
+            st.session_state.voices[name] = {"created_ts": created_ts, "lanes": lanes_out}
+
+        st.session_state.voices_seeded = True
+        st.session_state.voice_status = f"Loaded autosave ({payload.get('meta', {}).get('saved_at','')})."
+
+        # Set digest baseline so we don't re-save instantly
+        dig = _digest(_state_payload())
+        st.session_state.last_saved_digest = dig
+
+    except Exception as e:
+        st.session_state.voice_status = f"Load warning: {e}"
+
+# Load once per session
+if "did_load_autosave" not in st.session_state:
+    st.session_state.did_load_autosave = True
+    load_all_from_disk()
 
 # ============================================================
-# AUTOSAVE
+# AUTOSAVE HOOK (Freewriting: always)
 # ============================================================
 def autosave():
     st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
     capture_voice_snippet_from_draft()
+    save_all_to_disk()
 
 # ============================================================
 # REVISION VAULT (non-destructive)
@@ -451,8 +525,11 @@ def undo_last():
     if not st.session_state.revisions:
         st.session_state.voice_status = "Undo: nothing to undo."
         return
-    current = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "action": "redo_point", "text": st.session_state.main_text}
-    st.session_state.redo_stack.append(current)
+    st.session_state.redo_stack.append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "action": "redo_point",
+        "text": st.session_state.main_text,
+    })
     snap = st.session_state.revisions.pop()
     st.session_state.main_text = snap["text"]
     st.session_state.last_action = "Undo"
@@ -471,7 +548,7 @@ def redo_last():
     st.session_state.voice_status = "Redo: restored."
 
 # ============================================================
-# COMMANDS (Junk Drawer): locks + tools + intensity setting
+# COMMANDS (no new UI) — typed into Junk Drawer
 # ============================================================
 CMD_UNDO = re.compile(r"^\s*/undo\s*$", re.IGNORECASE)
 CMD_REDO = re.compile(r"^\s*/redo\s*$", re.IGNORECASE)
@@ -479,24 +556,12 @@ CMD_STATUS = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
 CMD_CLEAR = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
 
 CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
-CMD_SYN  = re.compile(r"^\s*/syn\s*:\s*(.+)$", re.IGNORECASE)
+CMD_SYN = re.compile(r"^\s*/syn\s*:\s*(.+)$", re.IGNORECASE)
 CMD_SENT = re.compile(r"^\s*/sentence\s*:\s*(.+)$", re.IGNORECASE)
 
-CMD_LOCK = re.compile(r"^\s*/lock\s+(.+)$", re.IGNORECASE)
-CMD_UNLOCK = re.compile(r"^\s*/unlock\s+(.+)$", re.IGNORECASE)
-CMD_SET = re.compile(r"^\s*/set\s+(\w+)\s+([0-9]*\.?[0-9]+)\s*$", re.IGNORECASE)
-CMD_FORCE_LANE = re.compile(r"^\s*/lane\s*:\s*(Dialogue|Narration|Interiority|Action)\s*$", re.IGNORECASE)
-
-CMD_VOICEINFO = re.compile(r"^\s*/voiceinfo\s+(.+)$", re.IGNORECASE)
-CMD_USEVOICE = re.compile(r"^\s*/usevoice\s+(.+)$", re.IGNORECASE)
-
-def locks_status_text() -> str:
-    L = st.session_state.locks
-    return (
-        f"Locks: storybible={'ON' if L['story_bible_lock'] else 'OFF'} • "
-        f"fingerprint={'ON' if L['voice_fingerprint_lock'] else 'OFF'} • "
-        f"lane={'ON' if L['lane_lock'] else 'OFF'}({L['forced_lane']})"
-    )
+CMD_SAVEVOICE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
+CMD_DELETEVOICE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
+CMD_LISTVOICES = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
 
 def handle_junk_commands():
     raw = (st.session_state.junk or "").strip()
@@ -504,146 +569,34 @@ def handle_junk_commands():
         return
 
     if CMD_UNDO.match(raw):
-        undo_last()
-        st.session_state.junk = ""
-        return
+        undo_last(); st.session_state.junk = ""; return
     if CMD_REDO.match(raw):
-        redo_last()
-        st.session_state.junk = ""
-        return
+        redo_last(); st.session_state.junk = ""; return
     if CMD_CLEAR.match(raw):
         st.session_state.junk = ""
         st.session_state.tool_output = ""
         st.session_state.voice_status = "Cleared."
+        save_all_to_disk(force=True)
         return
-
     if CMD_STATUS.match(raw):
         names = sorted(st.session_state.voices.keys())
-        st.session_state.tool_output = (
-            locks_status_text()
-            + "\n\nVOICES:\n"
-            + ("\n".join(names) if names else "— none —")
-        )
+        st.session_state.tool_output = "VOICES:\n" + ("\n".join(names) if names else "— none —")
         st.session_state.voice_status = "Status."
-        st.session_state.junk = ""
-        return
-
-    m = CMD_LOCK.match(raw)
-    if m:
-        what = m.group(1).strip().lower()
-        if what in ("storybible", "story", "bible"):
-            st.session_state.locks["story_bible_lock"] = True
-            st.session_state.voice_status = "Locked: Story Bible."
-        elif what in ("fingerprint", "voice", "voiceprint"):
-            st.session_state.locks["voice_fingerprint_lock"] = True
-            st.session_state.voice_status = "Locked: Voice Fingerprint."
-        elif what in ("lane",):
-            st.session_state.locks["lane_lock"] = True
-            st.session_state.voice_status = f"Locked: Lane ({st.session_state.locks['forced_lane']})."
-        else:
-            st.session_state.voice_status = "Lock: unknown target. Use storybible | fingerprint | lane."
-        st.session_state.tool_output = locks_status_text()
-        st.session_state.junk = ""
-        return
-
-    m = CMD_UNLOCK.match(raw)
-    if m:
-        what = m.group(1).strip().lower()
-        if what in ("storybible", "story", "bible"):
-            st.session_state.locks["story_bible_lock"] = False
-            st.session_state.voice_status = "Unlocked: Story Bible."
-        elif what in ("fingerprint", "voice", "voiceprint"):
-            st.session_state.locks["voice_fingerprint_lock"] = False
-            st.session_state.voice_status = "Unlocked: Voice Fingerprint."
-        elif what in ("lane",):
-            st.session_state.locks["lane_lock"] = False
-            st.session_state.voice_status = "Unlocked: Lane."
-        else:
-            st.session_state.voice_status = "Unlock: unknown target. Use storybible | fingerprint | lane."
-        st.session_state.tool_output = locks_status_text()
-        st.session_state.junk = ""
-        return
-
-    m = CMD_FORCE_LANE.match(raw)
-    if m:
-        st.session_state.locks["forced_lane"] = m.group(1)
-        st.session_state.voice_status = f"Forced lane set to {m.group(1)}."
-        st.session_state.tool_output = locks_status_text()
-        st.session_state.junk = ""
-        return
-
-    m = CMD_SET.match(raw)
-    if m:
-        key = m.group(1).lower()
-        val = float(m.group(2))
-        val = max(0.0, min(1.0, val))
-        # limited, safe settable knobs (no UI change)
-        if key in ("trained", "trained_intensity"):
-            st.session_state.trained_intensity = val
-            st.session_state.voice_status = f"Set trained_intensity={val:.2f}"
-        elif key in ("style", "style_intensity"):
-            st.session_state.style_intensity = val
-            st.session_state.voice_status = f"Set style_intensity={val:.2f}"
-        elif key in ("genre", "genre_intensity"):
-            st.session_state.genre_intensity = val
-            st.session_state.voice_status = f"Set genre_intensity={val:.2f}"
-        elif key in ("match", "match_intensity"):
-            st.session_state.match_intensity = val
-            st.session_state.voice_status = f"Set match_intensity={val:.2f}"
-        elif key in ("lock", "lock_intensity"):
-            st.session_state.lock_intensity = val
-            st.session_state.voice_status = f"Set lock_intensity={val:.2f}"
-        else:
-            st.session_state.voice_status = "Set: unknown key. Use trained/style/genre/match/lock."
-        st.session_state.tool_output = locks_status_text()
-        st.session_state.junk = ""
-        return
-
-    m = CMD_USEVOICE.match(raw)
-    if m:
-        name = m.group(1).strip()
-        ensure_voice(name)
-        st.session_state.trained_voice = name
-        st.session_state.voice_status = f"Selected trained voice: {name}"
-        st.session_state.tool_output = locks_status_text()
-        st.session_state.junk = ""
-        return
-
-    m = CMD_VOICEINFO.match(raw)
-    if m:
-        name = m.group(1).strip()
-        v = st.session_state.voices.get(name)
-        if not v:
-            st.session_state.voice_status = "voiceinfo: voice not found."
-            st.session_state.tool_output = "Use /listvoices via Style Example box, or /status here."
-        else:
-            counts = {ln: len(v["lanes"].get(ln, [])) for ln in LANES}
-            overall = v.get("fingerprint", {})
-            lane_fp = v.get("lane_fingerprints", {})
-            out = [f"VOICEINFO: {name}", f"Samples: " + " • ".join([f"{k}={counts[k]}" for k in LANES]), ""]
-            out.append("Overall Fingerprint:")
-            out.append(format_fingerprint(overall))
-            out.append("")
-            out.append("Lane Fingerprints:")
-            for ln in LANES:
-                out.append(f"[{ln}]")
-                out.append(format_fingerprint(lane_fp.get(ln, {})))
-                out.append("")
-            st.session_state.tool_output = "\n".join(out).strip()
-            st.session_state.voice_status = f"voiceinfo: {name}"
         st.session_state.junk = ""
         return
 
 handle_junk_commands()
 
-# ============================================================
-# VOICE IMPORT COMMANDS (use existing Style Example box)
-# ============================================================
-CMD_SAVEVOICE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
-CMD_DELETEVOICE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
-CMD_LISTVOICES = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
-
 def handle_voice_sample_commands():
+    """
+    Use Voice Bible -> Style Example box as your import channel.
+
+    /savevoice Name
+    [paste pages]
+
+    /listvoices
+    /deletevoice Name
+    """
     raw = st.session_state.voice_sample or ""
     if not raw.strip():
         return
@@ -665,6 +618,7 @@ def handle_voice_sample_commands():
         st.session_state.voice_status = msg
         st.session_state.tool_output = msg
         st.session_state.voice_sample = ""
+        save_all_to_disk(force=True)
         return
 
     m = CMD_SAVEVOICE.match(first)
@@ -681,12 +635,13 @@ def handle_voice_sample_commands():
         st.session_state.voice_status = msg
         st.session_state.tool_output = msg
         st.session_state.voice_sample = ""
+        save_all_to_disk(force=True)
         return
 
 handle_voice_sample_commands()
 
 # ============================================================
-# PASSIVE TRAINING FROM DRAFT (if enabled)
+# PASSIVE TRAINING FROM DRAFT (session + disk)
 # ============================================================
 def capture_voice_snippet_from_draft():
     if not st.session_state.vb_trained_on:
@@ -712,7 +667,7 @@ def capture_voice_snippet_from_draft():
     st.session_state.voice_status = f"Trained {tv} [{lane}]: +1 paragraph"
 
 # ============================================================
-# STORY BIBLE AS CANON + IDEA BANK
+# STORY BIBLE AS CANON + IDEA BANK (MANDATORY)
 # ============================================================
 def _story_bible_text() -> str:
     sb = []
@@ -723,67 +678,14 @@ def _story_bible_text() -> str:
     if st.session_state.outline.strip(): sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
     return "\n\n".join(sb).strip() if sb else "— None provided —"
 
-def fingerprint_constraints_block(tv: str, lane: str) -> str:
-    if not tv or tv == "— None —":
-        return "— None —"
-    v = st.session_state.voices.get(tv)
-    if not v:
-        return "— None —"
-    overall = v.get("fingerprint", {}) or {}
-    lane_fp = (v.get("lane_fingerprints", {}) or {}).get(lane, {}) or {}
-
-    if not overall and not lane_fp:
-        return "— None —"
-
-    # Use lane fp if available; otherwise fall back to overall
-    fp = lane_fp if lane_fp else overall
-
-    # Convert fingerprint into hard constraints the model can follow
-    avg_sent = fp.get("avg_sentence_words", None)
-    comma_rate = fp.get("comma_rate", None)
-    dash_rate = fp.get("dash_rate", None)
-    dialog = fp.get("dialogue_density", None)
-
-    constraints = []
-    constraints.append("FINGERPRINT CONSTRAINTS (HARD):")
-    constraints.append("- Stay inside the selected voice’s measurable habits. Do not drift toward generic AI voice.")
-    if avg_sent is not None:
-        lo = max(6.0, avg_sent * 0.75)
-        hi = min(40.0, avg_sent * 1.25)
-        constraints.append(f"- Sentence length band: keep most sentences ~{lo:.1f}–{hi:.1f} words (match voice).")
-    if comma_rate is not None:
-        constraints.append(f"- Comma usage: match the sample’s density (reference rate ~{comma_rate}).")
-    if dash_rate is not None:
-        constraints.append(f"- Dash usage: match the sample’s density (reference rate ~{dash_rate}).")
-    if dialog is not None:
-        constraints.append(f"- Dialogue density: match the sample’s dialogue presence (reference ~{dialog}).")
-    constraints.append("- Prefer the voice’s cadence, phrasing, and rhythm over novelty.")
-    return "\n".join(constraints).strip()
-
 def build_partner_brief(action_name: str, lane: str) -> str:
     story_bible = _story_bible_text()
-    L = st.session_state.locks
-
-    story_lock = L.get("story_bible_lock", True)
-    fp_lock = L.get("voice_fingerprint_lock", True)
-    lane_lock = L.get("lane_lock", False)
-    forced_lane = L.get("forced_lane", "Narration")
-
-    lane_effective = forced_lane if lane_lock else lane
 
     idea_directive = """
 STORY BIBLE USAGE (MANDATORY):
 - Treat Story Bible as CANON and as an IDEA BANK.
-- When generating NEW material, you MUST pull at least 2 concrete specifics from the Story Bible
-  (character detail, world element, outline beat, relationship, rule, setting detail).
+- When generating NEW material, you MUST pull at least 2 concrete specifics from the Story Bible.
 - Do not contradict canon. Prefer Story Bible specificity over generic invention.
-""".strip()
-
-    # Stronger enforcement if Story Bible lock is ON
-    if story_lock:
-        idea_directive += """
-- HARD LOCK: If Story Bible lacks a needed detail, do NOT invent contradictions.
-  Instead, stay compatible and narrow the output to what is supported.
 """.strip()
 
     dominance = """
@@ -796,12 +698,12 @@ DOMINANCE RULES (do not violate):
 
     lane_directive = f"""
 LANE (MODE) ENFORCEMENT:
-- Current lane: {lane_effective}
-- If lane is Dialogue: prioritize spoken rhythm, subtext, interruptions, and clean beats.
-- If lane is Interiority: prioritize thought texture, honesty, distance, and sentence music.
-- If lane is Action: prioritize clarity, impact, momentum, and concrete motion.
-- If lane is Narration: prioritize scene texture, specificity, pacing, and viewpoint control.
-Keep the output in the same lane unless the draft naturally transitions.
+- Current lane: {lane}
+- Dialogue: spoken rhythm, subtext, interruptions, clean beats.
+- Interiority: thought texture, distance, honesty.
+- Action: clarity, momentum, concrete motion.
+- Narration: scene texture, specificity, pacing, viewpoint control.
+Keep output in the same lane unless the draft naturally transitions.
 """.strip()
 
     vb = []
@@ -817,20 +719,16 @@ Keep the output in the same lane unless the draft naturally transitions.
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
-    tv = st.session_state.trained_voice
     exemplars: List[str] = []
+    tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv and tv != "— None —":
         ctx = (st.session_state.main_text or "")[-2500:]
         query = ctx if ctx.strip() else st.session_state.synopsis
-        exemplars = retrieve_mixed_exemplars(tv, lane_effective, query)
+        exemplars = retrieve_mixed_exemplars(tv, lane, query)
 
     ex_block = "— None —"
     if exemplars:
         ex_block = "\n\n---\n\n".join(exemplars)
-
-    fp_block = "— None —"
-    if fp_lock and st.session_state.vb_trained_on and tv and tv != "— None —":
-        fp_block = fingerprint_constraints_block(tv, lane_effective)
 
     stage = st.session_state.stage
     pov = st.session_state.pov
@@ -838,7 +736,7 @@ Keep the output in the same lane unless the draft naturally transitions.
 
     return f"""
 YOU ARE OLIVETTI: the author's personal writing and editing partner.
-This is professional production. Be assertive and decisive when executing a tool.
+This is professional production.
 
 ABSOLUTE RULES:
 - Do not mention UI. Do not explain process. Output only usable writing or usable edits.
@@ -858,9 +756,6 @@ TENSE: {tense}
 VOICE CONTROLS:
 {voice_controls}
 
-VOICE FINGERPRINT (LOCKED IF ENABLED):
-{fp_block}
-
 TRAINED VOICE EXEMPLARS (lane-aware; mimic patterns, not content):
 {ex_block}
 
@@ -871,7 +766,7 @@ ACTION: {action_name}
 """.strip()
 
 # ============================================================
-# OPTIONAL OPENAI CALL
+# OPTIONAL OPENAI CALL (safe; won’t crash app)
 # ============================================================
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
     if not OPENAI_API_KEY:
@@ -893,7 +788,7 @@ def call_openai(system_brief: str, user_task: str, text: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 # ============================================================
-# LOCAL TOOLS (fallback)
+# LOCAL COPYEDIT + LOCAL FIND (fallback)
 # ============================================================
 def local_cleanup(text: str) -> str:
     t = (text or "")
@@ -942,17 +837,15 @@ def partner_action(action: str):
     text = st.session_state.main_text or ""
     push_revision(action)
 
-    draft_lane = current_lane_from_draft(text)
-    lane = st.session_state.locks["forced_lane"] if st.session_state.locks["lane_lock"] else draft_lane
-
+    lane = current_lane_from_draft(text)
     brief = build_partner_brief(action, lane=lane)
     use_ai = bool(OPENAI_API_KEY)
 
     def apply_replace(result: str):
         if result and result.strip():
             st.session_state.main_text = result.strip()
-            autosave()
             st.session_state.last_action = action
+            autosave()
 
     def apply_append(result: str):
         if result and result.strip():
@@ -960,8 +853,8 @@ def partner_action(action: str):
                 st.session_state.main_text = (st.session_state.main_text.rstrip() + "\n\n" + result.strip()).strip()
             else:
                 st.session_state.main_text = result.strip()
-            autosave()
             st.session_state.last_action = action
+            autosave()
 
     try:
         if action == "Write":
@@ -1044,6 +937,7 @@ def partner_action(action: str):
                 st.session_state.tool_output = "Find: enter /find: term (or type a short term) in Junk Drawer."
                 st.session_state.voice_status = "Find: waiting for query."
                 st.session_state.last_action = "Find"
+                autosave()
                 return
             hits = local_find(text, query)
             if hits:
@@ -1054,6 +948,7 @@ def partner_action(action: str):
                 st.session_state.tool_output = f"FIND: '{query}'\n\nNo hits in draft."
                 st.session_state.voice_status = "Find: 0 hits."
             st.session_state.last_action = "Find"
+            autosave()
             return
 
         if action == "Synonym":
@@ -1062,11 +957,12 @@ def partner_action(action: str):
                 st.session_state.tool_output = "Synonym: enter /syn: word (or type a short word) in Junk Drawer."
                 st.session_state.voice_status = "Synonym: waiting for word."
                 st.session_state.last_action = "Synonym"
+                autosave()
                 return
             if use_ai:
                 task = (
                     f"Provide 12 strong replacements for: '{query}'. "
-                    "Rank by fit for this project voice and the current lane. "
+                    "Rank by fit for this project's voice and the current lane. "
                     "Avoid thesaurus weirdness. If nuance changes, label it."
                 )
                 out = call_openai(brief, task, query)
@@ -1076,6 +972,7 @@ def partner_action(action: str):
                 st.session_state.tool_output = f"SYNONYMS FOR: '{query}'\n\n(Enable OPENAI_API_KEY for synonym generation.)"
                 st.session_state.voice_status = "Synonym: no AI key."
             st.session_state.last_action = "Synonym"
+            autosave()
             return
 
         if action == "Sentence":
@@ -1085,6 +982,7 @@ def partner_action(action: str):
                 st.session_state.tool_output = "Sentence: draft is empty."
                 st.session_state.voice_status = "Sentence: nothing to edit."
                 st.session_state.last_action = "Sentence"
+                autosave()
                 return
             if use_ai:
                 task = (
@@ -1101,13 +999,13 @@ def partner_action(action: str):
                 else:
                     st.session_state.tool_output = "Sentence: no output returned."
                     st.session_state.voice_status = "Sentence: no change."
-                st.session_state.last_action = "Sentence"
+                    autosave()
             else:
                 paras[-1] = local_cleanup(paras[-1])
                 apply_replace(_join_paragraphs(paras))
                 st.session_state.tool_output = "Sentence: applied local cleanup (enable OPENAI_API_KEY for full sentence partner)."
                 st.session_state.voice_status = "Sentence: local."
-                st.session_state.last_action = "Sentence"
+            st.session_state.last_action = "Sentence"
             return
 
         apply_replace(text)
@@ -1115,7 +1013,7 @@ def partner_action(action: str):
     except Exception as e:
         st.session_state.voice_status = f"Engine: {str(e)}"
         st.session_state.tool_output = f"ERROR:\n{str(e)}"
-        apply_replace(text)
+        autosave()
 
 # ============================================================
 # TOP BAR (EXACT BUTTONS KEPT)
@@ -1127,18 +1025,21 @@ with top:
     if cols[0].button("🆕 New", key="new_project"):
         push_revision("New")
         st.session_state.main_text = ""
-        autosave()
         st.session_state.last_action = "New"
+        autosave()
 
     if cols[1].button("✏️ Rough", key="rough"):
         st.session_state.stage = "Rough"
         st.session_state.last_action = "Stage: Rough"
+        autosave()
     if cols[2].button("🛠 Edit", key="edit"):
         st.session_state.stage = "Edit"
         st.session_state.last_action = "Stage: Edit"
+        autosave()
     if cols[3].button("✅ Final", key="final"):
         st.session_state.stage = "Final"
         st.session_state.last_action = "Stage: Final"
+        autosave()
 
     cols[4].markdown(
         f"""
@@ -1170,22 +1071,22 @@ with left:
         st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
 
     with st.expander("📝 Synopsis"):
-        st.text_area("", key="synopsis", height=100)
+        st.text_area("", key="synopsis", height=100, on_change=autosave)
 
     with st.expander("🎭 Genre / Style Notes"):
-        st.text_area("", key="genre_style_notes", height=80)
+        st.text_area("", key="genre_style_notes", height=80, on_change=autosave)
 
     with st.expander("🌍 World Elements"):
-        st.text_area("", key="world", height=100)
+        st.text_area("", key="world", height=100, on_change=autosave)
 
     with st.expander("👤 Characters"):
-        st.text_area("", key="characters", height=120)
+        st.text_area("", key="characters", height=120, on_change=autosave)
 
     with st.expander("🧱 Outline"):
-        st.text_area("", key="outline", height=160)
+        st.text_area("", key="outline", height=160, on_change=autosave)
 
 # ============================================================
-# CENTER — WRITING DESK (ALWAYS ON)
+# CENTER — WRITING DESK (ALWAYS ON) — FREEWRITING ALWAYS
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
@@ -1212,29 +1113,31 @@ with center:
 with right:
     st.subheader("🎙 Voice Bible")
 
-    st.checkbox("Enable Writing Style", key="vb_style_on")
+    st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
     st.selectbox(
         "Writing Style",
         ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"],
         key="writing_style",
-        disabled=not st.session_state.vb_style_on
+        disabled=not st.session_state.vb_style_on,
+        on_change=autosave
     )
-    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on)
+    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on, on_change=autosave)
 
     st.divider()
 
-    st.checkbox("Enable Genre Influence", key="vb_genre_on")
+    st.checkbox("Enable Genre Influence", key="vb_genre_on", on_change=autosave)
     st.selectbox(
         "Genre",
         ["Literary", "Noir", "Thriller", "Comedy", "Lyrical"],
         key="genre",
-        disabled=not st.session_state.vb_genre_on
+        disabled=not st.session_state.vb_genre_on,
+        on_change=autosave
     )
-    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on)
+    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on, on_change=autosave)
 
     st.divider()
 
-    st.checkbox("Enable Trained Voice", key="vb_trained_on")
+    st.checkbox("Enable Trained Voice", key="vb_trained_on", on_change=autosave)
     trained_options = voice_names_for_selector()
     if st.session_state.trained_voice not in trained_options:
         st.session_state.trained_voice = "— None —"
@@ -1242,45 +1145,38 @@ with right:
         "Trained Voice",
         trained_options,
         key="trained_voice",
-        disabled=not st.session_state.vb_trained_on
+        disabled=not st.session_state.vb_trained_on,
+        on_change=autosave
     )
-    st.slider("Trained Voice Intensity", 0.0, 1.0, key="trained_intensity", disabled=not st.session_state.vb_trained_on)
+    st.slider("Trained Voice Intensity", 0.0, 1.0, key="trained_intensity", disabled=not st.session_state.vb_trained_on, on_change=autosave)
 
     st.divider()
 
-    st.checkbox("Enable Match My Style", key="vb_match_on")
+    st.checkbox("Enable Match My Style", key="vb_match_on", on_change=autosave)
     st.text_area(
         "Style Example",
         key="voice_sample",
         height=100,
         disabled=not st.session_state.vb_match_on,
-        help="Import voice: first line '/savevoice Name' then paste pages. Also: /listvoices, /deletevoice Name."
+        help="Import voice: first line '/savevoice Name' then paste pages. Also: /listvoices, /deletevoice Name.",
+        on_change=autosave
     )
-    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on)
+    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on, on_change=autosave)
 
     st.divider()
 
-    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on")
-    st.text_area("Voice Lock Prompt", key="voice_lock_prompt", height=80, disabled=not st.session_state.vb_lock_on)
-    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on)
+    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on", on_change=autosave)
+    st.text_area("Voice Lock Prompt", key="voice_lock_prompt", height=80, disabled=not st.session_state.vb_lock_on, on_change=autosave)
+    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on, on_change=autosave)
 
     st.divider()
 
-    st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov")
-    st.selectbox("Tense", ["Past", "Present"], key="tense")
-
-    st.button("🔒 Focus Mode", disabled=True)
+    st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov", on_change=autosave)
+    st.selectbox("Tense", ["Past", "Present"], key="tense", on_change=autosave)
 
 # ============================================================
-# FOCUS MODE — HARD LOCK (PERMANENTLY DISABLED)
+# ALWAYS SAVE ON EVERY RERUN (AUTO SAVE ALL)
 # ============================================================
-if st.session_state.focus_mode:
-    st.markdown(
-        """
-        <style>
-        header, footer, aside, .stSidebar {display:none !important;}
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-    st.info("Focus Mode enabled. Refresh page to exit.")
+# This guarantees that ANY change that triggers a rerun is persisted,
+# even if a widget didn't call on_change for some reason.
+save_all_to_disk()
