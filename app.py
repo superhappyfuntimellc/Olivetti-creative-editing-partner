@@ -255,7 +255,7 @@ def default_story_bible_workspace() -> Dict[str, Any]:
         # Keep these as DEFAULT templates for new projects, unless you change them.
         "voice_sample": "",
         "ai_intensity": 0.75,
-        "voices": compact_voice_vault(rebuild_vectors_in_voice_vault(default_voice_vault())),
+        "voices": default_voice_vault(),
     }
 
 def in_workspace_mode() -> bool:
@@ -334,6 +334,8 @@ def init_state():
 
         "junk": "",
         "tool_output": "",
+        "pending_action": None,
+        "pending_action_extra": {},
 
         "vb_style_on": True,
         "vb_genre_on": True,
@@ -637,27 +639,67 @@ def _digest(payload: Dict[str, Any]) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
 def save_all_to_disk(force: bool = False) -> None:
+    """Autosave state to disk with an atomic write and a simple backup."""
     try:
         os.makedirs(AUTOSAVE_DIR, exist_ok=True)
         payload = _payload()
         dig = _digest(payload)
         if (not force) and dig == st.session_state.last_saved_digest:
             return
-        with open(AUTOSAVE_PATH, "w", encoding="utf-8") as f:
+
+        tmp_path = AUTOSAVE_PATH + ".tmp"
+        bak_path = AUTOSAVE_PATH + ".bak"
+
+        # Best-effort backup of last good state (helps recover from partial writes)
+        try:
+            if os.path.exists(AUTOSAVE_PATH):
+                import shutil
+                shutil.copy2(AUTOSAVE_PATH, bak_path)
+        except Exception:
+            pass
+
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, AUTOSAVE_PATH)
+
         st.session_state.last_saved_digest = dig
     except Exception as e:
         st.session_state.voice_status = f"Autosave warning: {e}"
 
 def load_all_from_disk() -> None:
-    if not os.path.exists(AUTOSAVE_PATH):
+    main_path = AUTOSAVE_PATH
+    bak_path = AUTOSAVE_PATH + ".bak"
+
+    def _boot_new() -> None:
         st.session_state.sb_workspace = st.session_state.get("sb_workspace") or default_story_bible_workspace()
         switch_bay("NEW")
-        return
-    try:
-        with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
 
+    if (not os.path.exists(main_path)) and (not os.path.exists(bak_path)):
+        _boot_new()
+        return
+
+    payload = None
+    loaded_from = "primary"
+    last_err = None
+
+    for path, label in ((main_path, "primary"), (bak_path, "backup")):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            loaded_from = label
+            break
+        except Exception as e:
+            last_err = e
+            payload = None
+
+    if payload is None:
+        st.session_state.voice_status = f"Load warning: {last_err}"
+        _boot_new()
+        return
+
+    try:
         projs = payload.get("projects", {})
         if isinstance(projs, dict):
             st.session_state.projects = projs
@@ -718,13 +760,15 @@ def load_all_from_disk() -> None:
             else:
                 switch_bay(ab)
 
-        st.session_state.voice_status = f"Loaded autosave ({payload.get('meta', {}).get('saved_at','')})."
+
+        saved_at = (payload.get("meta", {}) or {}).get("saved_at", "")
+        src = "autosave" if loaded_from == "primary" else "backup autosave"
+        st.session_state.voice_status = f"Loaded {src} ({saved_at})."
         st.session_state.last_saved_digest = _digest(_payload())
     except Exception as e:
         st.session_state.voice_status = f"Load warning: {e}"
         st.session_state.sb_workspace = default_story_bible_workspace()
         switch_bay("NEW")
-
 
 if "did_load_autosave" not in st.session_state:
     st.session_state.did_load_autosave = True
@@ -842,7 +886,10 @@ def call_openai(system_brief: str, user_task: str, text: str) -> str:
     except Exception as e:
         raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY, timeout=60)
+    except TypeError:
+        client = OpenAI(api_key=OPENAI_API_KEY)
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
@@ -1275,9 +1322,50 @@ def partner_action(action: str):
         apply_replace(text)
 
     except Exception as e:
-        st.session_state.voice_status = f"Engine: {e}"
-        st.session_state.tool_output = f"ERROR:\n{e}"
+        msg = str(e)
+        if ("insufficient_quota" in msg) or ("exceeded your current quota" in msg.lower()):
+            st.session_state.voice_status = "Engine: OpenAI quota exceeded."
+            st.session_state.tool_output = (
+                "OpenAI returned a quota/billing error.\n\n"
+                "Fix:\n"
+                "• Confirm your API key is correct\n"
+                "• Check billing/usage limits in your OpenAI account\n"
+                "• Or swap to a different key in Streamlit Secrets\n"
+            )
+        elif "OPENAI_API_KEY not set" in msg:
+            st.session_state.voice_status = "Engine: missing OPENAI_API_KEY."
+            st.session_state.tool_output = "Set OPENAI_API_KEY in Streamlit Secrets (or environment) to enable AI."
+        else:
+            st.session_state.voice_status = f"Engine: {msg}"
+            st.session_state.tool_output = f"ERROR:\n{msg}"
         autosave()
+
+# ============================================================
+# ACTION QUEUE (pre-widget mutations)
+# ============================================================
+def queue_action(action: str) -> None:
+    """Queue an engine action so mutations happen before widgets render."""
+    st.session_state.pending_action = action
+
+def run_pending_action() -> None:
+    action = st.session_state.get("pending_action")
+    if not action:
+        return
+    # Clear first to avoid loops if the action errors
+    st.session_state.pending_action = None
+    st.session_state.pending_action_extra = {}
+
+    if action == "__FIND_HINT__":
+        st.session_state.tool_output = "Find is wired via /find: in Junk Drawer."
+        st.session_state.voice_status = "Find: use /find: in Junk Drawer."
+        st.session_state.last_action = "Find (hint)"
+        autosave()
+        return
+
+    partner_action(action)
+
+# Run any queued action early (before the desk widgets instantiate)
+run_pending_action()
 
 # ============================================================
 # TOP BAR (work bays)
@@ -1671,19 +1759,19 @@ with left:
         st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
 
     with st.expander("📝 Synopsis"):
-        st.text_area("", key="synopsis", height=100, on_change=autosave)
+        st.text_area("Synopsis", key="synopsis", height=100, label_visibility="collapsed", on_change=autosave)
 
     with st.expander("🎭 Genre / Style Notes"):
-        st.text_area("", key="genre_style_notes", height=80, on_change=autosave)
+        st.text_area("Genre / Style Notes", key="genre_style_notes", height=80, label_visibility="collapsed", on_change=autosave)
 
     with st.expander("🌍 World Elements"):
-        st.text_area("", key="world", height=100, on_change=autosave)
+        st.text_area("World Elements", key="world", height=100, label_visibility="collapsed", on_change=autosave)
 
     with st.expander("👤 Characters"):
-        st.text_area("", key="characters", height=120, on_change=autosave)
+        st.text_area("Characters", key="characters", height=120, label_visibility="collapsed", on_change=autosave)
 
     with st.expander("🧱 Outline"):
-        st.text_area("", key="outline", height=160, on_change=autosave)
+        st.text_area("Outline", key="outline", height=160, label_visibility="collapsed", on_change=autosave)
 
 
 # ============================================================
@@ -1691,21 +1779,21 @@ with left:
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
-    st.text_area("", key="main_text", height=650, on_change=autosave)
+    st.text_area("Writing Desk", key="main_text", height=650, label_visibility="collapsed", on_change=autosave)
 
     b1 = st.columns(5)
-    if b1[0].button("Write", key="btn_write"): partner_action("Write")
-    if b1[1].button("Rewrite", key="btn_rewrite"): partner_action("Rewrite")
-    if b1[2].button("Expand", key="btn_expand"): partner_action("Expand")
-    if b1[3].button("Rephrase", key="btn_rephrase"): partner_action("Rephrase")
-    if b1[4].button("Describe", key="btn_describe"): partner_action("Describe")
+    b1[0].button("Write", key="btn_write", on_click=queue_action, args=("Write",))
+    b1[1].button("Rewrite", key="btn_rewrite", on_click=queue_action, args=("Rewrite",))
+    b1[2].button("Expand", key="btn_expand", on_click=queue_action, args=("Expand",))
+    b1[3].button("Rephrase", key="btn_rephrase", on_click=queue_action, args=("Rephrase",))
+    b1[4].button("Describe", key="btn_describe", on_click=queue_action, args=("Describe",))
 
     b2 = st.columns(5)
-    if b2[0].button("Spell", key="btn_spell"): partner_action("Spell")
-    if b2[1].button("Grammar", key="btn_grammar"): partner_action("Grammar")
-    if b2[2].button("Find", key="btn_find"): st.session_state.tool_output = "Find is wired via /find: in Junk Drawer."; autosave()
-    if b2[3].button("Synonym", key="btn_synonym"): partner_action("Synonym")
-    if b2[4].button("Sentence", key="btn_sentence"): partner_action("Sentence")
+    b2[0].button("Spell", key="btn_spell", on_click=queue_action, args=("Spell",))
+    b2[1].button("Grammar", key="btn_grammar", on_click=queue_action, args=("Grammar",))
+    b2[2].button("Find", key="btn_find", on_click=queue_action, args=("__FIND_HINT__",))
+    b2[3].button("Synonym", key="btn_synonym", on_click=queue_action, args=("Synonym",))
+    b2[4].button("Sentence", key="btn_sentence", on_click=queue_action, args=("Sentence",))
 
 # ============================================================
 # RIGHT — VOICE BIBLE (LOCKED UI — NO AI INTENSITY HERE)
