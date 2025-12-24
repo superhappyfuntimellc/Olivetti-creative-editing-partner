@@ -61,6 +61,8 @@ AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
 
 WORD_RE = re.compile(r"[A-Za-z']+")
 
+IMPORT_MERGE_MODES = ["Append", "Replace"]
+
 # ============================================================
 # UTILS
 # ============================================================
@@ -114,6 +116,29 @@ def clamp01(x: float) -> float:
     except Exception:
         v = 0.0
     return max(0.0, min(1.0, v))
+
+def _safe_extract_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    t = text.strip()
+    if "```" in t:
+        parts = t.split("```")
+        if len(parts) >= 3:
+            t = parts[1]
+            t = re.sub(r"^\s*json\s*\n", "", t.strip(), flags=re.IGNORECASE)
+    start = t.find("{")
+    end = t.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    chunk = t[start:end+1]
+    try:
+        return json.loads(chunk)
+    except Exception:
+        try:
+            chunk2 = chunk.replace("\u201c", '"').replace("\u201d", '"')
+            return json.loads(chunk2)
+        except Exception:
+            return {}
 
 # ============================================================
 # LANE DETECTION (lightweight)
@@ -170,7 +195,7 @@ def current_lane_from_draft(text: str) -> str:
     return detect_lane(paras[-1])
 
 # ============================================================
-# INTENSITY (GLOBAL AI AGGRESSION KNOB)
+# INTENSITY (GLOBAL)
 # ============================================================
 def intensity_profile(x: float) -> str:
     if x <= 0.25:
@@ -183,10 +208,10 @@ def intensity_profile(x: float) -> str:
 
 def temperature_from_intensity(x: float) -> float:
     x = clamp01(x)
-    return 0.15 + (x * 0.95)  # 0.0 -> 0.15, 1.0 -> 1.10
+    return 0.15 + (x * 0.95)
 
 # ============================================================
-# ACTION CONTROLS (per-button: on/off + intensity override + project lock)
+# ACTION CONTROLS
 # ============================================================
 def default_action_controls() -> Dict[str, Any]:
     items = {}
@@ -226,6 +251,38 @@ def effective_intensity_for_action(action: str) -> float:
 
 def action_is_enabled(action: str) -> bool:
     return bool(st.session_state.get(_ac_key(action, "enabled"), True))
+
+# ============================================================
+# IMPORT CONTROLS
+# ============================================================
+def default_import_controls() -> Dict[str, Any]:
+    return {
+        "use_ai": True,
+        "use_global_intensity": True,
+        "intensity": 0.65,
+        "merge_mode": "Append",
+    }
+
+def import_controls_from_session() -> Dict[str, Any]:
+    return {
+        "use_ai": bool(st.session_state.get("import_use_ai", True)),
+        "use_global_intensity": bool(st.session_state.get("import_use_global", True)),
+        "intensity": clamp01(st.session_state.get("import_intensity", 0.65)),
+        "merge_mode": st.session_state.get("import_merge_mode", "Append"),
+    }
+
+def apply_import_controls_to_session(ctrl: Dict[str, Any]) -> None:
+    ctrl = ctrl or default_import_controls()
+    st.session_state.import_use_ai = bool(ctrl.get("use_ai", True))
+    st.session_state.import_use_global = bool(ctrl.get("use_global_intensity", True))
+    st.session_state.import_intensity = clamp01(ctrl.get("intensity", 0.65))
+    mm = ctrl.get("merge_mode", "Append")
+    st.session_state.import_merge_mode = mm if mm in IMPORT_MERGE_MODES else "Append"
+
+def effective_import_intensity() -> float:
+    if bool(st.session_state.get("import_use_global", True)):
+        return clamp01(st.session_state.get("ai_intensity", 0.75))
+    return clamp01(st.session_state.get("import_intensity", 0.65))
 
 # ============================================================
 # PROJECT MODEL
@@ -281,6 +338,8 @@ def new_project_payload(title: str) -> Dict[str, Any]:
         "idea_bank": "",
         "voice_bible": default_voice_bible(),
         "action_controls": default_action_controls(),
+        "import_controls": default_import_controls(),
+        "imports_log": [],
         "locks": {
             "story_bible_lock": True,
             "voice_fingerprint_lock": True,
@@ -291,7 +350,7 @@ def new_project_payload(title: str) -> Dict[str, Any]:
     }
 
 # ============================================================
-# STORY BIBLE WORKSPACE (pre-project creation space)
+# STORY BIBLE WORKSPACE
 # ============================================================
 def default_workspace() -> Dict[str, Any]:
     return {
@@ -307,6 +366,8 @@ def default_workspace() -> Dict[str, Any]:
         "idea_bank": "",
         "voice_bible": default_voice_bible(),
         "action_controls": default_action_controls(),
+        "import_controls": default_import_controls(),
+        "imports_log": [],
     }
 
 # ============================================================
@@ -338,7 +399,7 @@ def init_state():
         "workspace": default_workspace(),
         "workspace_title": "",
 
-        # Voice Bible (flat)
+        # Voice Bible
         "vb_style_on": True,
         "vb_genre_on": True,
         "vb_trained_on": False,
@@ -374,6 +435,20 @@ def init_state():
         "promote_selected": [],
         "promote_target": "World",
         "promote_remove_from_ideas": False,
+
+        # Import UI
+        "import_paste": "",
+        "import_use_ai": True,
+        "import_use_global": True,
+        "import_intensity": 0.65,
+        "import_merge_mode": "Append",
+
+        # Desk project shortcuts (NEW)
+        "desk_new_project_title": "",
+        "desk_copy_story_bible": True,
+        "desk_copy_draft": False,
+        "desk_copy_idea_bank": False,
+        "desk_insert_section": "Synopsis",
 
         "last_saved_digest": "",
     }
@@ -442,6 +517,8 @@ def save_workspace_from_session() -> None:
     w["idea_bank"] = st.session_state.junk
     w["voice_bible"] = _vb_struct_from_session()
     w["action_controls"] = action_controls_struct_from_scalars()
+    w["import_controls"] = import_controls_from_session()
+    w.setdefault("imports_log", [])
     st.session_state.workspace = w
 
 def load_workspace_into_session() -> None:
@@ -458,15 +535,20 @@ def load_workspace_into_session() -> None:
     st.session_state.idea_bank_last = st.session_state.junk
     _vb_apply_to_session(w.get("voice_bible", default_voice_bible()))
     init_action_control_scalars_from_struct(w.get("action_controls", default_action_controls()))
+    apply_import_controls_to_session(w.get("import_controls", default_import_controls()))
 
 def reset_workspace_content(keep_templates: bool = True) -> None:
     w = st.session_state.workspace or default_workspace()
     vb = w.get("voice_bible", default_voice_bible())
     ac = w.get("action_controls", default_action_controls())
+    ic = w.get("import_controls", default_import_controls())
+
     st.session_state.workspace = default_workspace()
     if keep_templates:
         st.session_state.workspace["voice_bible"] = vb
         st.session_state.workspace["action_controls"] = ac
+        st.session_state.workspace["import_controls"] = ic
+
     st.session_state.workspace_title = ""
     if in_workspace_mode():
         load_workspace_into_session()
@@ -534,6 +616,7 @@ def load_project_into_session(pid: str) -> None:
     st.session_state.voices_seeded = True
 
     init_action_control_scalars_from_struct(p.get("action_controls", default_action_controls()))
+    apply_import_controls_to_session(p.get("import_controls", default_import_controls()))
 
 def save_session_into_project() -> None:
     pid = st.session_state.project_id
@@ -555,6 +638,8 @@ def save_session_into_project() -> None:
     p["idea_bank"] = st.session_state.junk
     p["voice_bible"] = _vb_struct_from_session()
     p["action_controls"] = action_controls_struct_from_scalars()
+    p["import_controls"] = import_controls_from_session()
+    p.setdefault("imports_log", [])
     p["locks"] = st.session_state.locks
     p["voices"] = compact_voice_vault(st.session_state.voices)
 
@@ -632,6 +717,7 @@ def start_project_from_workspace() -> Optional[str]:
     p["idea_bank"] = st.session_state.junk
     p["voice_bible"] = _vb_struct_from_session()
     p["action_controls"] = action_controls_struct_from_scalars()
+    p["import_controls"] = import_controls_from_session()
     p["voices"] = compact_voice_vault(st.session_state.voices)
 
     st.session_state.projects[p["id"]] = p
@@ -642,7 +728,52 @@ def start_project_from_workspace() -> Optional[str]:
     st.session_state.last_action = "Start Project"
 
     reset_workspace_content(keep_templates=True)
+    return p["id"]
 
+# ============================================================
+# DESK SHORTCUT: QUICK NEW PROJECT (NEW)
+# ============================================================
+def desk_create_new_project(title: str, copy_bible: bool, copy_draft: bool, copy_ideas: bool) -> Optional[str]:
+    # Save current context first
+    if in_workspace_mode():
+        save_workspace_from_session()
+    save_session_into_project()
+
+    t = (title or "").strip()
+    if not t:
+        t = _first_nonempty_line(st.session_state.synopsis) or f"New Project {now_ts()}"
+
+    p = new_project_payload(t)
+    p["bay"] = "NEW"
+
+    if copy_bible:
+        p["story_bible"] = {
+            "synopsis": st.session_state.synopsis,
+            "genre_style_notes": st.session_state.genre_style_notes,
+            "world": st.session_state.world,
+            "characters": st.session_state.characters,
+            "outline": st.session_state.outline,
+        }
+
+    if copy_draft:
+        p["draft"] = st.session_state.main_text or ""
+
+    if copy_ideas:
+        p["idea_bank"] = st.session_state.junk or ""
+
+    # Always copy the current working voice/action/import templates (serious workflow)
+    p["voice_bible"] = _vb_struct_from_session()
+    p["action_controls"] = action_controls_struct_from_scalars()
+    p["import_controls"] = import_controls_from_session()
+    p["voices"] = compact_voice_vault(st.session_state.voices)
+
+    st.session_state.projects[p["id"]] = p
+    st.session_state.active_project_by_bay["NEW"] = p["id"]
+    switch_bay("NEW")
+    load_project_into_session(p["id"])
+
+    st.session_state.voice_status = f"New Project created: {st.session_state.project_title}"
+    st.session_state.last_action = "Desk: New Project"
     return p["id"]
 
 # ============================================================
@@ -653,7 +784,7 @@ def _payload() -> Dict[str, Any]:
         save_workspace_from_session()
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-action-controls+promote-v1"},
+        "meta": {"saved_at": now_ts(), "version": "olivetti-storybible-locked-desklink-v1"},
         "workspace": st.session_state.workspace,
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
@@ -850,7 +981,7 @@ def call_openai(system_brief: str, user_task: str, text: str, intensity_x: float
         model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_brief},
-            {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
+            {"role": "user", "content": f"{user_task}\n\nTEXT:\n{text.strip()}"},
         ],
         temperature=temperature_from_intensity(intensity_x),
     )
@@ -916,7 +1047,6 @@ def local_find(term: str) -> str:
 # PROMOTE IDEAS → CANON
 # ============================================================
 def idea_lines_from_bank(bank_text: str) -> List[str]:
-    # Non-empty lines, trimmed, keep original order, drop exact duplicates
     lines_raw = [ln.strip() for ln in (bank_text or "").splitlines()]
     lines = [ln for ln in lines_raw if ln]
     seen = set()
@@ -929,15 +1059,13 @@ def idea_lines_from_bank(bank_text: str) -> List[str]:
     return out
 
 def _append_bullets(existing: str, bullets: List[str]) -> str:
-    existing = existing or ""
-    existing = existing.rstrip()
+    existing = (existing or "").rstrip()
     add_lines = [b.strip() for b in bullets if (b or "").strip()]
     if not add_lines:
         return existing
 
-    # de-dup vs existing text (simple contains)
-    filtered = []
     low = existing.lower()
+    filtered = []
     for b in add_lines:
         if b.lower() in low:
             continue
@@ -970,7 +1098,6 @@ def promote_selected_ideas(target: str, selected: List[str], remove_from_ideas: 
     elif t == "Outline":
         st.session_state.outline = _append_bullets(st.session_state.outline, selected)
     elif t == "Draft":
-        # Draft gets a clean note block (doesn't pretend it's prose)
         note_block = "\n".join([f"[IDEA → DRAFT NOTE] {s}" for s in selected])
         base = (st.session_state.main_text or "").rstrip()
         st.session_state.main_text = (base + ("\n\n" if base else "") + note_block).strip()
@@ -993,6 +1120,155 @@ def promote_selected_ideas(target: str, selected: List[str], remove_from_ideas: 
     st.session_state.voice_status = f"Promoted → {t}"
     st.session_state.last_action = f"Promote → {t}"
     autosave()
+
+# ============================================================
+# IMPORT DOCUMENT → STORY BIBLE
+# ============================================================
+def read_uploaded_text(upload) -> Tuple[str, str]:
+    if upload is None:
+        return ("", "")
+    name = getattr(upload, "name", "") or ""
+    suffix = name.lower().split(".")[-1] if "." in name else ""
+
+    data = upload.getvalue()
+    if suffix in ("txt", "md"):
+        try:
+            return (data.decode("utf-8"), name)
+        except Exception:
+            return (data.decode("latin-1", errors="ignore"), name)
+
+    if suffix == "docx":
+        try:
+            from docx import Document
+            import io
+            f = io.BytesIO(data)
+            doc = Document(f)
+            paras = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+            return ("\n".join(paras).strip(), name)
+        except Exception:
+            return ("", name)
+
+    return ("", name)
+
+_HEADING_MAP = {
+    "synopsis": "synopsis",
+    "summary": "synopsis",
+    "logline": "synopsis",
+    "genre": "genre_style_notes",
+    "style": "genre_style_notes",
+    "tone": "genre_style_notes",
+    "world": "world",
+    "setting": "world",
+    "locations": "world",
+    "location": "world",
+    "characters": "characters",
+    "cast": "characters",
+    "people": "characters",
+    "outline": "outline",
+    "plot": "outline",
+    "beats": "outline",
+    "structure": "outline",
+}
+
+def heuristic_breakdown(text: str) -> Dict[str, str]:
+    t = _normalize_text(text)
+    out = {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""}
+    if not t:
+        return out
+
+    lines = t.splitlines()
+    current_key = None
+
+    def detect_heading(line: str) -> Optional[str]:
+        s = line.strip()
+        if not s:
+            return None
+        s2 = re.sub(r"^#{1,6}\s*", "", s).strip()
+        s2 = re.sub(r":\s*$", "", s2).strip()
+        k = s2.lower()
+        k = re.sub(r"[^a-z ]+", "", k).strip()
+        if k in _HEADING_MAP:
+            return _HEADING_MAP[k]
+        return None
+
+    for ln in lines:
+        hk = detect_heading(ln)
+        if hk:
+            current_key = hk
+            continue
+        if current_key:
+            out[current_key] += (ln + "\n")
+
+    if not any(v.strip() for v in out.values()):
+        out["synopsis"] = t[:1200].strip()
+    else:
+        for k in list(out.keys()):
+            out[k] = _normalize_text(out[k])
+
+    return out
+
+def merge_story_bible_fields(breakdown: Dict[str, str], merge_mode: str) -> None:
+    merge_mode = merge_mode if merge_mode in IMPORT_MERGE_MODES else "Append"
+    stamp = now_ts()
+    prefix = f"--- IMPORT {stamp} ---\n"
+
+    def apply_field(field_key: str, new_text: str):
+        new_text = _normalize_text(new_text)
+        if not new_text:
+            return
+        current = getattr(st.session_state, field_key, "") or ""
+        if merge_mode == "Replace" or not current.strip():
+            setattr(st.session_state, field_key, new_text)
+            return
+        merged = (current.rstrip() + "\n\n" + prefix + new_text).strip()
+        setattr(st.session_state, field_key, merged)
+
+    apply_field("synopsis", breakdown.get("synopsis", ""))
+    apply_field("genre_style_notes", breakdown.get("genre_style_notes", ""))
+    apply_field("world", breakdown.get("world", ""))
+    apply_field("characters", breakdown.get("characters", ""))
+    apply_field("outline", breakdown.get("outline", ""))
+
+def log_import(filename: str, chars: int, mode: str, used_ai: bool) -> None:
+    entry = {"ts": now_ts(), "filename": filename or "(pasted)", "chars": int(chars), "mode": mode, "used_ai": bool(used_ai)}
+    if st.session_state.project_id:
+        p = st.session_state.projects.get(st.session_state.project_id, {})
+        p.setdefault("imports_log", [])
+        p["imports_log"].append(entry)
+    else:
+        w = st.session_state.workspace or default_workspace()
+        w.setdefault("imports_log", [])
+        w["imports_log"].append(entry)
+        st.session_state.workspace = w
+
+def ai_breakdown_to_story_bible(text: str, intensity_x: float) -> Dict[str, str]:
+    system = (
+        "You are Olivetti, a professional story-bible analyst.\n"
+        "Return ONLY valid JSON (no markdown, no commentary).\n"
+        "Keys required: synopsis, genre_style_notes, world, characters, outline\n"
+        "Values must be plain text.\n"
+        "Do not invent beyond what is implied. If unknown, leave empty string."
+    )
+    user = (
+        "Break this document into Story Bible sections.\n"
+        "Rules:\n"
+        "- synopsis: what the story is about (tight, professional)\n"
+        "- genre_style_notes: tone, genre signals, style constraints\n"
+        "- world: setting, rules, locations, time period, key lore\n"
+        "- characters: principal cast and roles\n"
+        "- outline: major beats in order if present; otherwise empty\n"
+        "Output JSON only."
+    )
+    out = call_openai(system, user, text, intensity_x)
+    obj = _safe_extract_json(out)
+    b = {
+        "synopsis": _normalize_text(str(obj.get("synopsis", ""))) if isinstance(obj, dict) else "",
+        "genre_style_notes": _normalize_text(str(obj.get("genre_style_notes", ""))) if isinstance(obj, dict) else "",
+        "world": _normalize_text(str(obj.get("world", ""))) if isinstance(obj, dict) else "",
+        "characters": _normalize_text(str(obj.get("characters", ""))) if isinstance(obj, dict) else "",
+        "outline": _normalize_text(str(obj.get("outline", ""))) if isinstance(obj, dict) else "",
+    }
+    return b
 
 # ============================================================
 # COMMANDS (Idea Bank)
@@ -1022,7 +1298,7 @@ def handle_idea_commands():
 
     cmd_raw = raw
     preserved = st.session_state.idea_bank_last or ""
-    st.session_state.junk = preserved  # restore ideas immediately
+    st.session_state.junk = preserved
 
     m = CMD_FIND.match(cmd_raw)
     if m:
@@ -1053,6 +1329,7 @@ def handle_idea_commands():
             p["idea_bank"] = st.session_state.junk
             p["voice_bible"] = _vb_struct_from_session()
             p["action_controls"] = action_controls_struct_from_scalars()
+            p["import_controls"] = import_controls_from_session()
             p["voices"] = compact_voice_vault(st.session_state.voices)
             st.session_state.projects[p["id"]] = p
             st.session_state.active_project_by_bay["NEW"] = p["id"]
@@ -1081,7 +1358,6 @@ def handle_idea_commands():
         autosave()
         return
 
-# Execute command handler each rerun
 handle_idea_commands()
 
 # ============================================================
@@ -1257,12 +1533,12 @@ with top:
 st.divider()
 
 # ============================================================
-# LOCKED LAYOUT (same ratios)
+# LOCKED LAYOUT
 # ============================================================
 left, center, right = st.columns([1.2, 3.2, 1.6])
 
 # ============================================================
-# LEFT — STORY BIBLE (creation space + linked per project)
+# LEFT — STORY BIBLE
 # ============================================================
 with left:
     st.subheader("📖 Story Bible")
@@ -1322,32 +1598,6 @@ with left:
             start_project_from_workspace()
             autosave()
 
-        if action_cols[0].button("Create Project (from Bible)", key="create_project_btn"):
-            if in_workspace_mode():
-                start_project_from_workspace()
-            else:
-                title_guess = _first_nonempty_line(st.session_state.synopsis) or "New Project"
-                p = new_project_payload(title_guess)
-                p["bay"] = "NEW"
-                p["draft"] = st.session_state.main_text
-                p["story_bible"] = {
-                    "synopsis": st.session_state.synopsis,
-                    "genre_style_notes": st.session_state.genre_style_notes,
-                    "world": st.session_state.world,
-                    "characters": st.session_state.characters,
-                    "outline": st.session_state.outline,
-                }
-                p["idea_bank"] = st.session_state.junk
-                p["voice_bible"] = _vb_struct_from_session()
-                p["action_controls"] = action_controls_struct_from_scalars()
-                p["voices"] = compact_voice_vault(st.session_state.voices)
-                st.session_state.projects[p["id"]] = p
-                st.session_state.active_project_by_bay["NEW"] = p["id"]
-                load_project_into_session(p["id"])
-                st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
-                st.session_state.last_action = "Create Project"
-            autosave()
-
         if action_cols[1].button("Promote → Rough", key="promote_new_to_rough"):
             if st.session_state.project_id:
                 save_session_into_project()
@@ -1378,6 +1628,57 @@ with left:
         on_change=autosave
     )
 
+    with st.expander("📥 Import Document → Story Bible", expanded=False):
+        st.caption("Paste or upload a document. Olivetti breaks it into Story Bible sections.")
+        up = st.file_uploader("Upload (.txt, .md, .docx)", type=["txt", "md", "docx"], key="import_upload")
+        st.text_area("Or paste document text", key="import_paste", height=140)
+
+        st.checkbox("Use AI Breakdown (recommended)", key="import_use_ai", on_change=autosave)
+        st.checkbox("Use Global Intensity", key="import_use_global", on_change=autosave)
+        st.slider(
+            "Import Intensity Override",
+            0.0, 1.0,
+            key="import_intensity",
+            disabled=bool(st.session_state.import_use_global),
+            help="Used only when Use Global Intensity is OFF.",
+            on_change=autosave
+        )
+        st.selectbox("Merge Mode", IMPORT_MERGE_MODES, key="import_merge_mode", on_change=autosave)
+
+        if st.button("Import → Break Down → Populate Story Bible", key="import_run"):
+            paste = (st.session_state.import_paste or "").strip()
+            file_text, fname = read_uploaded_text(up)
+            src_text = paste if paste else file_text
+            filename = fname if fname else ("(pasted)" if paste else "")
+
+            if not src_text.strip():
+                st.session_state.tool_output = "Import: no text provided."
+                st.session_state.voice_status = "Import blocked"
+                autosave()
+            else:
+                used_ai = bool(st.session_state.import_use_ai) and bool(OPENAI_API_KEY)
+                try:
+                    if used_ai:
+                        b = ai_breakdown_to_story_bible(src_text, effective_import_intensity())
+                    else:
+                        b = heuristic_breakdown(src_text)
+
+                    merge_story_bible_fields(b, st.session_state.import_merge_mode)
+                    log_import(filename, len(src_text), st.session_state.import_merge_mode, used_ai)
+
+                    st.session_state.tool_output = (
+                        f"Imported {len(src_text):,} chars from {filename}. "
+                        f"Mode={st.session_state.import_merge_mode}. "
+                        f"Breakdown={'AI' if used_ai else 'Heuristic'}."
+                    )
+                    st.session_state.voice_status = "Import complete"
+                    st.session_state.last_action = "Import → Story Bible"
+                    autosave()
+                except Exception as e:
+                    st.session_state.tool_output = f"Import ERROR:\n{e}"
+                    st.session_state.voice_status = "Import error"
+                    autosave()
+
     with st.expander("🧠 Idea Bank (Junk Drawer)"):
         st.text_area(
             "",
@@ -1387,48 +1688,19 @@ with left:
             help="Idea pool for this context. Commands: /find: term  |  /create: Title  |  /promote"
         )
 
-        # Promote UI (new)
         ideas = idea_lines_from_bank(st.session_state.junk or "")
         if ideas:
             st.caption("Promote selected idea lines into canon fields (one-click).")
-            st.multiselect(
-                "Select idea line(s)",
-                options=ideas,
-                key="promote_selected",
-            )
+            st.multiselect("Select idea line(s)", options=ideas, key="promote_selected")
             colsP = st.columns([1.2, 1.2, 1.6])
-            colsP[0].selectbox(
-                "Target",
-                ["Synopsis", "Genre/Style Notes", "World", "Characters", "Outline", "Draft"],
-                key="promote_target",
-            )
-            colsP[1].checkbox(
-                "Remove from Idea Bank",
-                key="promote_remove_from_ideas",
-                help="OFF by default. When ON, promoted lines are removed from the Idea Bank text.",
-            )
+            colsP[0].selectbox("Target", ["Synopsis", "Genre/Style Notes", "World", "Characters", "Outline", "Draft"], key="promote_target")
+            colsP[1].checkbox("Remove from Idea Bank", key="promote_remove_from_ideas", help="OFF by default.")
             if colsP[2].button("Promote Selected → Target", key="btn_promote_selected"):
                 promote_selected_ideas(
                     st.session_state.promote_target,
                     st.session_state.promote_selected,
                     bool(st.session_state.promote_remove_from_ideas),
                 )
-
-            # Quick one-click targets (no extra selects)
-            st.caption("Quick Promote:")
-            q = st.columns(6)
-            if q[0].button("→ Synopsis", key="q_prom_syn"):
-                promote_selected_ideas("Synopsis", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
-            if q[1].button("→ Genre", key="q_prom_gen"):
-                promote_selected_ideas("Genre/Style Notes", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
-            if q[2].button("→ World", key="q_prom_world"):
-                promote_selected_ideas("World", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
-            if q[3].button("→ Characters", key="q_prom_char"):
-                promote_selected_ideas("Characters", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
-            if q[4].button("→ Outline", key="q_prom_out"):
-                promote_selected_ideas("Outline", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
-            if q[5].button("→ Draft", key="q_prom_draft"):
-                promote_selected_ideas("Draft", st.session_state.promote_selected, bool(st.session_state.promote_remove_from_ideas))
         else:
             st.caption("Add idea lines above to enable Promote → Canon.")
 
@@ -1450,10 +1722,86 @@ with left:
         st.text_area("", key="outline", height=160, on_change=autosave)
 
 # ============================================================
-# CENTER — WRITING DESK
+# CENTER — WRITING DESK (EXPLICITLY LINKED)
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
+
+    # Link banner (NEW)
+    if st.session_state.project_id:
+        p = st.session_state.projects.get(st.session_state.project_id, {}) or {}
+        sbid = p.get("story_bible_id", "—")
+        sbts = p.get("story_bible_created_ts", "—")
+        st.caption(f"Linked To: **{st.session_state.active_bay} / {st.session_state.project_title}** • Story Bible ID: **{sbid}** • Created: **{sbts}**")
+    else:
+        st.caption("Linked To: **NEW / Story Bible workspace** (not yet a project)")
+
+    # Desk-level Story Bible Dock (NEW)
+    with st.expander("📌 Story Bible Dock (read-only while you write)", expanded=False):
+        tabs = st.tabs(["Synopsis", "Genre/Style", "World", "Characters", "Outline"])
+        with tabs[0]:
+            st.text_area("Synopsis (Canon)", value=st.session_state.synopsis or "", height=160, disabled=True)
+        with tabs[1]:
+            st.text_area("Genre/Style Notes (Canon)", value=st.session_state.genre_style_notes or "", height=160, disabled=True)
+        with tabs[2]:
+            st.text_area("World (Canon)", value=st.session_state.world or "", height=160, disabled=True)
+        with tabs[3]:
+            st.text_area("Characters (Canon)", value=st.session_state.characters or "", height=160, disabled=True)
+        with tabs[4]:
+            st.text_area("Outline (Canon)", value=st.session_state.outline or "", height=160, disabled=True)
+
+        st.divider()
+        st.caption("Optional: Insert canon into the draft as a note block (append).")
+        st.selectbox("Insert Section", ["Synopsis", "Genre/Style Notes", "World", "Characters", "Outline"], key="desk_insert_section")
+        if st.button("Insert Section → Draft (as note)", key="desk_insert_btn"):
+            sec = st.session_state.desk_insert_section
+            content = ""
+            if sec == "Synopsis":
+                content = st.session_state.synopsis or ""
+            elif sec == "Genre/Style Notes":
+                content = st.session_state.genre_style_notes or ""
+            elif sec == "World":
+                content = st.session_state.world or ""
+            elif sec == "Characters":
+                content = st.session_state.characters or ""
+            elif sec == "Outline":
+                content = st.session_state.outline or ""
+            content = _normalize_text(content)
+            if content:
+                note = f"[STORY BIBLE → {sec}]\n{content}"
+                base = (st.session_state.main_text or "").rstrip()
+                st.session_state.main_text = (base + ("\n\n" if base else "") + note).strip()
+                st.session_state.voice_status = f"Inserted Story Bible → {sec}"
+                st.session_state.last_action = f"Insert SB → {sec}"
+                autosave()
+
+    # Desk-level Project Controls (NEW)
+    with st.expander("⚙ Project Controls (from the desk)", expanded=False):
+        if in_workspace_mode():
+            st.caption("You are in the Story Bible workspace. Start a project without leaving the desk.")
+            st.text_input("Project Title", key="workspace_title", on_change=autosave)
+            if st.button("Start Project NOW (from workspace)", key="desk_start_project_now"):
+                start_project_from_workspace()
+                autosave()
+        else:
+            st.caption("Create another NEW project without leaving the desk.")
+
+        st.text_input("New Project Title", key="desk_new_project_title")
+        c1, c2, c3 = st.columns(3)
+        c1.checkbox("Copy Story Bible", key="desk_copy_story_bible", help="Copies current Story Bible into the new project.")
+        c2.checkbox("Copy Draft", key="desk_copy_draft", help="Copies current draft text into the new project.")
+        c3.checkbox("Copy Idea Bank", key="desk_copy_idea_bank", help="Copies current Idea Bank into the new project.")
+
+        if st.button("Create New Project (Desk Shortcut)", key="desk_create_project_btn"):
+            pid = desk_create_new_project(
+                st.session_state.desk_new_project_title,
+                bool(st.session_state.desk_copy_story_bible),
+                bool(st.session_state.desk_copy_draft),
+                bool(st.session_state.desk_copy_idea_bank),
+            )
+            autosave()
+
+    # Main drafting area (already linked by context)
     st.text_area("", key="main_text", height=650, on_change=autosave)
 
     b1 = st.columns(5)
@@ -1585,18 +1933,8 @@ with right:
         st.markdown("**Primary Buttons**")
         for a in ACTIONS_PRIMARY:
             cols = st.columns([1.2, 1.0, 1.6])
-            cols[0].checkbox(
-                f"{a} Enabled",
-                key=_ac_key(a, "enabled"),
-                disabled=_disabled(),
-                on_change=autosave
-            )
-            cols[1].checkbox(
-                "Use Global",
-                key=_ac_key(a, "use_global"),
-                disabled=_disabled(),
-                on_change=autosave
-            )
+            cols[0].checkbox(f"{a} Enabled", key=_ac_key(a, "enabled"), disabled=_disabled(), on_change=autosave)
+            cols[1].checkbox("Use Global", key=_ac_key(a, "use_global"), disabled=_disabled(), on_change=autosave)
             cols[2].slider(
                 "Intensity Override",
                 0.0, 1.0,
@@ -1609,18 +1947,8 @@ with right:
         st.markdown("**Secondary Buttons**")
         for a in ACTIONS_SECONDARY:
             cols = st.columns([1.2, 1.0, 1.6])
-            cols[0].checkbox(
-                f"{a} Enabled",
-                key=_ac_key(a, "enabled"),
-                disabled=_disabled(),
-                on_change=autosave
-            )
-            cols[1].checkbox(
-                "Use Global",
-                key=_ac_key(a, "use_global"),
-                disabled=_disabled(),
-                on_change=autosave
-            )
+            cols[0].checkbox(f"{a} Enabled", key=_ac_key(a, "enabled"), disabled=_disabled(), on_change=autosave)
+            cols[1].checkbox("Use Global", key=_ac_key(a, "use_global"), disabled=_disabled(), on_change=autosave)
             cols[2].slider(
                 "Intensity Override",
                 0.0, 1.0,
