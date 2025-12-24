@@ -6,6 +6,8 @@ import time
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
+from prompts import make_voice_learn_payload
+from ai import generate_json
 
 import streamlit as st
 
@@ -295,7 +297,7 @@ def default_voice_bible() -> Dict[str, Any]:
     }
 
 
-def default_action_controls() -> Dict[str, Any]:
+def default_action_controls() -> Dict[str, Any]:FF
     items = {}
     for a in ALL_ACTIONS:
         items[a] = {"enabled": True, "use_global": True, "intensity": 0.75}
@@ -1878,3 +1880,4 @@ with right:
 # End-of-run autosave (safe & cheap)
 # ============================================================
 autosave()
+
