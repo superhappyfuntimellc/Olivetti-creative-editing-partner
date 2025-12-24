@@ -51,6 +51,11 @@ st.markdown(
 # ============================================================
 LANES = ["Dialogue", "Narration", "Interiority", "Action"]
 BAYS = ["NEW", "ROUGH", "EDIT", "FINAL"]  # work bays
+
+ACTIONS_PRIMARY = ["Write", "Rewrite", "Expand", "Rephrase", "Describe"]
+ACTIONS_SECONDARY = ["Spell", "Grammar", "Find", "Synonym", "Sentence"]
+ALL_ACTIONS = ACTIONS_PRIMARY + ACTIONS_SECONDARY
+
 AUTOSAVE_DIR = "autosave"
 AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
 
@@ -103,6 +108,13 @@ def _first_nonempty_line(s: str) -> str:
             return line.strip()
     return ""
 
+def clamp01(x: float) -> float:
+    try:
+        v = float(x)
+    except Exception:
+        v = 0.0
+    return max(0.0, min(1.0, v))
+
 # ============================================================
 # LANE DETECTION (lightweight)
 # ============================================================
@@ -126,21 +138,26 @@ def detect_lane(paragraph: str) -> str:
     has_dialogue_punct = (p.startswith("—") or p.startswith("- ") or p.startswith("“") or p.startswith('"'))
 
     dialogue_score = 0.0
-    if quote_count >= 2: dialogue_score += 2.5
-    if has_dialogue_punct: dialogue_score += 1.5
+    if quote_count >= 2:
+        dialogue_score += 2.5
+    if has_dialogue_punct:
+        dialogue_score += 1.5
 
     toks = _tokenize(p)
     interior_score = 0.0
     if toks:
-        first_person = sum(1 for t in toks if t in ("i","me","my","mine","myself"))
+        first_person = sum(1 for t in toks if t in ("i", "me", "my", "mine", "myself"))
         thought_hits = sum(1 for t in toks if t in THOUGHT_WORDS)
-        if first_person >= 2 and thought_hits >= 1: interior_score += 2.2
+        if first_person >= 2 and thought_hits >= 1:
+            interior_score += 2.2
 
     action_score = 0.0
     if toks:
         verb_hits = sum(1 for t in toks if t in ACTION_VERBS)
-        if verb_hits >= 2: action_score += 1.6
-        if "!" in p: action_score += 0.3
+        if verb_hits >= 2:
+            action_score += 1.6
+        if "!" in p:
+            action_score += 0.3
 
     scores = {"Dialogue": dialogue_score, "Interiority": interior_score, "Action": action_score, "Narration": 0.25}
     lane = max(scores.items(), key=lambda kv: kv[1])[0]
@@ -154,7 +171,6 @@ def current_lane_from_draft(text: str) -> str:
 
 # ============================================================
 # INTENSITY (GLOBAL AI AGGRESSION KNOB)
-# NOTE: UI lives in STORY BIBLE panel, but affects ALL generations.
 # ============================================================
 def intensity_profile(x: float) -> str:
     if x <= 0.25:
@@ -166,8 +182,50 @@ def intensity_profile(x: float) -> str:
     return "MAX: aggressive originality and voice; still obey canon, no random derailments."
 
 def temperature_from_intensity(x: float) -> float:
-    x = max(0.0, min(1.0, float(x)))
+    x = clamp01(x)
     return 0.15 + (x * 0.95)  # 0.0 -> 0.15, 1.0 -> 1.10
+
+# ============================================================
+# ACTION CONTROLS (per-button: on/off + intensity override + project lock)
+# ============================================================
+def default_action_controls() -> Dict[str, Any]:
+    items = {}
+    for a in ALL_ACTIONS:
+        items[a] = {"enabled": True, "use_global": True, "intensity": 0.75}
+    return {"locked": False, "items": items}
+
+def _ac_key(action: str, field: str) -> str:
+    return f"ac__{action}__{field}"
+
+def init_action_control_scalars_from_struct(ac: Dict[str, Any]) -> None:
+    ac = ac or default_action_controls()
+    st.session_state.ac_locked = bool(ac.get("locked", False))
+    items = ac.get("items", {}) or {}
+    for a in ALL_ACTIONS:
+        it = items.get(a, {}) or {}
+        st.session_state[_ac_key(a, "enabled")] = bool(it.get("enabled", True))
+        st.session_state[_ac_key(a, "use_global")] = bool(it.get("use_global", True))
+        st.session_state[_ac_key(a, "intensity")] = clamp01(it.get("intensity", 0.75))
+
+def action_controls_struct_from_scalars() -> Dict[str, Any]:
+    items = {}
+    for a in ALL_ACTIONS:
+        items[a] = {
+            "enabled": bool(st.session_state.get(_ac_key(a, "enabled"), True)),
+            "use_global": bool(st.session_state.get(_ac_key(a, "use_global"), True)),
+            "intensity": clamp01(st.session_state.get(_ac_key(a, "intensity"), 0.75)),
+        }
+    return {"locked": bool(st.session_state.get("ac_locked", False)), "items": items}
+
+def effective_intensity_for_action(action: str) -> float:
+    global_x = clamp01(st.session_state.get("ai_intensity", 0.75))
+    use_global = bool(st.session_state.get(_ac_key(action, "use_global"), True))
+    if use_global:
+        return global_x
+    return clamp01(st.session_state.get(_ac_key(action, "intensity"), global_x))
+
+def action_is_enabled(action: str) -> bool:
+    return bool(st.session_state.get(_ac_key(action, "enabled"), True))
 
 # ============================================================
 # PROJECT MODEL
@@ -179,11 +237,34 @@ def default_voice_vault() -> Dict[str, Any]:
         "Voice B": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
     }
 
+def default_voice_bible() -> Dict[str, Any]:
+    return {
+        "vb_style_on": True,
+        "vb_genre_on": True,
+        "vb_trained_on": False,
+        "vb_match_on": False,
+        "vb_lock_on": False,
+        "writing_style": "Neutral",
+        "genre": "Literary",
+        "trained_voice": "— None —",
+        "voice_sample": "",
+        "voice_lock_prompt": "",
+        "style_intensity": 0.6,
+        "genre_intensity": 0.6,
+        "trained_intensity": 0.7,
+        "match_intensity": 0.8,
+        "lock_intensity": 1.0,
+        "pov": "Close Third",
+        "tense": "Past",
+        "ai_intensity": 0.75,
+    }
+
 def new_project_payload(title: str) -> Dict[str, Any]:
     ts = now_ts()
+    title = title.strip() if title.strip() else "Untitled Project"
     return {
         "id": hashlib.md5(f"{title}|{ts}".encode("utf-8")).hexdigest()[:12],
-        "title": title.strip() if title.strip() else "Untitled Project",
+        "title": title,
         "created_ts": ts,
         "updated_ts": ts,
         "bay": "NEW",
@@ -201,26 +282,9 @@ def new_project_payload(title: str) -> Dict[str, Any]:
         # Junk Drawer = Idea Bank (per project)
         "idea_bank": "",
         # Voice Bible persists per project
-        "voice_bible": {
-            "vb_style_on": True,
-            "vb_genre_on": True,
-            "vb_trained_on": False,
-            "vb_match_on": False,
-            "vb_lock_on": False,
-            "writing_style": "Neutral",
-            "genre": "Literary",
-            "trained_voice": "— None —",
-            "voice_sample": "",
-            "voice_lock_prompt": "",
-            "style_intensity": 0.6,
-            "genre_intensity": 0.6,
-            "trained_intensity": 0.7,
-            "match_intensity": 0.8,
-            "lock_intensity": 1.0,
-            "pov": "Close Third",
-            "tense": "Past",
-            "ai_intensity": 0.75,
-        },
+        "voice_bible": default_voice_bible(),
+        # Per-button controls (new)
+        "action_controls": default_action_controls(),
         "locks": {
             "story_bible_lock": True,
             "voice_fingerprint_lock": True,
@@ -232,7 +296,6 @@ def new_project_payload(title: str) -> Dict[str, Any]:
 
 # ============================================================
 # STORY BIBLE WORKSPACE (pre-project creation space)
-# This is where new projects start.
 # ============================================================
 def default_workspace() -> Dict[str, Any]:
     return {
@@ -246,6 +309,8 @@ def default_workspace() -> Dict[str, Any]:
             "outline": "",
         },
         "idea_bank": "",
+        "voice_bible": default_voice_bible(),
+        "action_controls": default_action_controls(),
     }
 
 # ============================================================
@@ -263,9 +328,7 @@ def init_state():
         "last_action": "—",
         "voice_status": "—",
 
-        # These UI fields bind either to:
-        #  - active project (when project_id is set)
-        #  - workspace (when NEW bay and no project selected)
+        # Editor fields
         "main_text": "",
         "synopsis": "",
         "genre_style_notes": "",
@@ -280,30 +343,26 @@ def init_state():
         "tool_output": "",
 
         "workspace": default_workspace(),
+        "workspace_title": "",
 
-        "workspace_title": "",  # title field for Story Bible workspace
-
+        # Voice Bible controls (flat scalars)
         "vb_style_on": True,
         "vb_genre_on": True,
         "vb_trained_on": False,
         "vb_match_on": False,
         "vb_lock_on": False,
-
         "writing_style": "Neutral",
         "genre": "Literary",
         "trained_voice": "— None —",
         "voice_sample": "",
         "voice_lock_prompt": "",
-
         "style_intensity": 0.6,
         "genre_intensity": 0.6,
         "trained_intensity": 0.7,
         "match_intensity": 0.8,
         "lock_intensity": 1.0,
-
         "pov": "Close Third",
         "tense": "Past",
-
         "ai_intensity": 0.75,
 
         "locks": {
@@ -316,17 +375,59 @@ def init_state():
         "voices": {},
         "voices_seeded": False,
 
+        # Action controls scalars
+        "ac_locked": False,
+
         "last_saved_digest": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
+    # Ensure action control scalars exist
+    for a in ALL_ACTIONS:
+        st.session_state.setdefault(_ac_key(a, "enabled"), True)
+        st.session_state.setdefault(_ac_key(a, "use_global"), True)
+        st.session_state.setdefault(_ac_key(a, "intensity"), 0.75)
+
 init_state()
 
+# ============================================================
+# MODE HELPERS
+# ============================================================
 def in_workspace_mode() -> bool:
-    # Workspace = NEW bay + no active project selected
     return st.session_state.active_bay == "NEW" and not st.session_state.project_id
+
+# ============================================================
+# WORKSPACE <-> SESSION SYNC
+# ============================================================
+def _vb_struct_from_session() -> Dict[str, Any]:
+    return {
+        "vb_style_on": bool(st.session_state.vb_style_on),
+        "vb_genre_on": bool(st.session_state.vb_genre_on),
+        "vb_trained_on": bool(st.session_state.vb_trained_on),
+        "vb_match_on": bool(st.session_state.vb_match_on),
+        "vb_lock_on": bool(st.session_state.vb_lock_on),
+        "writing_style": st.session_state.writing_style,
+        "genre": st.session_state.genre,
+        "trained_voice": st.session_state.trained_voice,
+        "voice_sample": st.session_state.voice_sample,
+        "voice_lock_prompt": st.session_state.voice_lock_prompt,
+        "style_intensity": float(st.session_state.style_intensity),
+        "genre_intensity": float(st.session_state.genre_intensity),
+        "trained_intensity": float(st.session_state.trained_intensity),
+        "match_intensity": float(st.session_state.match_intensity),
+        "lock_intensity": float(st.session_state.lock_intensity),
+        "pov": st.session_state.pov,
+        "tense": st.session_state.tense,
+        "ai_intensity": float(st.session_state.ai_intensity),
+    }
+
+def _vb_apply_to_session(vb: Dict[str, Any]) -> None:
+    vb = vb or default_voice_bible()
+    for k, v in vb.items():
+        if k in st.session_state:
+            st.session_state[k] = v
 
 def save_workspace_from_session() -> None:
     w = st.session_state.workspace or default_workspace()
@@ -340,6 +441,8 @@ def save_workspace_from_session() -> None:
         "outline": st.session_state.outline,
     }
     w["idea_bank"] = st.session_state.junk
+    w["voice_bible"] = _vb_struct_from_session()
+    w["action_controls"] = action_controls_struct_from_scalars()
     st.session_state.workspace = w
 
 def load_workspace_into_session() -> None:
@@ -354,11 +457,18 @@ def load_workspace_into_session() -> None:
     st.session_state.outline = sb.get("outline", "") or ""
     st.session_state.junk = w.get("idea_bank", "") or ""
     st.session_state.idea_bank_last = st.session_state.junk
+    _vb_apply_to_session(w.get("voice_bible", default_voice_bible()))
+    init_action_control_scalars_from_struct(w.get("action_controls", default_action_controls()))
 
-def clear_workspace() -> None:
+def reset_workspace_content(keep_templates: bool = True) -> None:
+    w = st.session_state.workspace or default_workspace()
+    vb = w.get("voice_bible", default_voice_bible())
+    ac = w.get("action_controls", default_action_controls())
     st.session_state.workspace = default_workspace()
+    if keep_templates:
+        st.session_state.workspace["voice_bible"] = vb
+        st.session_state.workspace["action_controls"] = ac
     st.session_state.workspace_title = ""
-    # only clear visible fields if we are in workspace mode
     if in_workspace_mode():
         load_workspace_into_session()
 
@@ -411,19 +521,11 @@ def load_project_into_session(pid: str) -> None:
     st.session_state.characters = sb.get("characters", "")
     st.session_state.outline = sb.get("outline", "")
 
-    # Idea Bank per project
     st.session_state.junk = p.get("idea_bank", "") or ""
     st.session_state.idea_bank_last = st.session_state.junk
 
-    vb = p.get("voice_bible", {}) or {}
-    for k in [
-        "vb_style_on","vb_genre_on","vb_trained_on","vb_match_on","vb_lock_on",
-        "writing_style","genre","trained_voice","voice_sample","voice_lock_prompt",
-        "style_intensity","genre_intensity","trained_intensity","match_intensity","lock_intensity",
-        "pov","tense","ai_intensity"
-    ]:
-        if k in vb:
-            st.session_state[k] = vb[k]
+    vb = p.get("voice_bible", {}) or default_voice_bible()
+    _vb_apply_to_session(vb)
 
     locks = p.get("locks", {}) or {}
     if isinstance(locks, dict):
@@ -431,6 +533,8 @@ def load_project_into_session(pid: str) -> None:
 
     st.session_state.voices = rebuild_vectors_in_voice_vault(p.get("voices", default_voice_vault()))
     st.session_state.voices_seeded = True
+
+    init_action_control_scalars_from_struct(p.get("action_controls", default_action_controls()))
 
 def save_session_into_project() -> None:
     pid = st.session_state.project_id
@@ -450,27 +554,8 @@ def save_session_into_project() -> None:
         "outline": st.session_state.outline,
     }
     p["idea_bank"] = st.session_state.junk
-
-    p["voice_bible"] = {
-        "vb_style_on": st.session_state.vb_style_on,
-        "vb_genre_on": st.session_state.vb_genre_on,
-        "vb_trained_on": st.session_state.vb_trained_on,
-        "vb_match_on": st.session_state.vb_match_on,
-        "vb_lock_on": st.session_state.vb_lock_on,
-        "writing_style": st.session_state.writing_style,
-        "genre": st.session_state.genre,
-        "trained_voice": st.session_state.trained_voice,
-        "voice_sample": st.session_state.voice_sample,
-        "voice_lock_prompt": st.session_state.voice_lock_prompt,
-        "style_intensity": st.session_state.style_intensity,
-        "genre_intensity": st.session_state.genre_intensity,
-        "trained_intensity": st.session_state.trained_intensity,
-        "match_intensity": st.session_state.match_intensity,
-        "lock_intensity": st.session_state.lock_intensity,
-        "pov": st.session_state.pov,
-        "tense": st.session_state.tense,
-        "ai_intensity": float(st.session_state.ai_intensity),
-    }
+    p["voice_bible"] = _vb_struct_from_session()
+    p["action_controls"] = action_controls_struct_from_scalars()
     p["locks"] = st.session_state.locks
     p["voices"] = compact_voice_vault(st.session_state.voices)
 
@@ -490,7 +575,6 @@ def ensure_bay_has_active_project(bay: str) -> None:
     st.session_state.active_project_by_bay[bay] = items[0][0] if items else None
 
 def switch_bay(target_bay: str) -> None:
-    # Save current context
     if in_workspace_mode():
         save_workspace_from_session()
     save_session_into_project()
@@ -503,7 +587,6 @@ def switch_bay(target_bay: str) -> None:
         load_project_into_session(pid)
         st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title}"
     else:
-        # Empty bay: NEW shows workspace, others show empty
         st.session_state.project_id = None
         st.session_state.project_title = "—"
         if target_bay == "NEW":
@@ -518,6 +601,7 @@ def switch_bay(target_bay: str) -> None:
             st.session_state.outline = ""
             st.session_state.junk = ""
             st.session_state.idea_bank_last = ""
+            st.session_state.tool_output = ""
             st.session_state.voice_status = f"{target_bay}: (empty)"
     st.session_state.last_action = f"Bay → {target_bay}"
 
@@ -529,7 +613,6 @@ def promote_project(pid: str, to_bay: str) -> None:
     p["updated_ts"] = now_ts()
 
 def start_project_from_workspace() -> Optional[str]:
-    # Create a NEW project from workspace, then reset workspace (new bible for next project)
     if not in_workspace_mode():
         return None
 
@@ -548,21 +631,18 @@ def start_project_from_workspace() -> Optional[str]:
         "outline": st.session_state.outline,
     }
     p["idea_bank"] = st.session_state.junk
-    p["voice_bible"]["voice_sample"] = st.session_state.voice_sample
-    p["voice_bible"]["ai_intensity"] = float(st.session_state.ai_intensity)
+    p["voice_bible"] = _vb_struct_from_session()
+    p["action_controls"] = action_controls_struct_from_scalars()
     p["voices"] = compact_voice_vault(st.session_state.voices)
 
     st.session_state.projects[p["id"]] = p
     st.session_state.active_project_by_bay["NEW"] = p["id"]
 
-    # Load the new project (Story Bible now linked to it forever)
     load_project_into_session(p["id"])
     st.session_state.voice_status = f"Started Project in NEW: {st.session_state.project_title}"
     st.session_state.last_action = "Start Project"
 
-    # Reset workspace for the next project
-    st.session_state.workspace = default_workspace()
-    st.session_state.workspace_title = ""
+    reset_workspace_content(keep_templates=True)
 
     return p["id"]
 
@@ -570,12 +650,11 @@ def start_project_from_workspace() -> Optional[str]:
 # AUTOSAVE ALL
 # ============================================================
 def _payload() -> Dict[str, Any]:
-    # Save workspace if we're in it
     if in_workspace_mode():
         save_workspace_from_session()
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-storybible-workspace-linked-v1"},
+        "meta": {"saved_at": now_ts(), "version": "olivetti-action-controls-v1"},
         "workspace": st.session_state.workspace,
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
@@ -607,13 +686,11 @@ def load_all_from_disk() -> None:
         with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
-        # workspace
         ws = payload.get("workspace")
         if isinstance(ws, dict):
             st.session_state.workspace = ws
-            st.session_state.workspace_title = (ws.get("title") or "")
+            st.session_state.workspace_title = ws.get("title", "") or ""
 
-        # projects
         projs = payload.get("projects", {})
         if isinstance(projs, dict):
             st.session_state.projects = projs
@@ -634,7 +711,6 @@ def load_all_from_disk() -> None:
         if pid:
             load_project_into_session(pid)
         else:
-            # NEW bay shows workspace
             switch_bay(ab)
 
         st.session_state.voice_status = f"Loaded autosave ({payload.get('meta', {}).get('saved_at','')})."
@@ -693,28 +769,33 @@ def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> Lis
 # ============================================================
 def _story_bible_text() -> str:
     sb = []
-    if st.session_state.synopsis.strip(): sb.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
-    if st.session_state.genre_style_notes.strip(): sb.append(f"GENRE/STYLE NOTES:\n{st.session_state.genre_style_notes.strip()}")
-    if st.session_state.world.strip(): sb.append(f"WORLD:\n{st.session_state.world.strip()}")
-    if st.session_state.characters.strip(): sb.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
-    if st.session_state.outline.strip(): sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
+    if st.session_state.synopsis.strip():
+        sb.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
+    if st.session_state.genre_style_notes.strip():
+        sb.append(f"GENRE/STYLE NOTES:\n{st.session_state.genre_style_notes.strip()}")
+    if st.session_state.world.strip():
+        sb.append(f"WORLD:\n{st.session_state.world.strip()}")
+    if st.session_state.characters.strip():
+        sb.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
+    if st.session_state.outline.strip():
+        sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
     return "\n\n".join(sb).strip() if sb else "— None provided —"
 
-def build_partner_brief(action_name: str, lane: str) -> str:
+def build_partner_brief(action_name: str, lane: str, intensity_x: float) -> str:
     story_bible = _story_bible_text()
     idea_bank = (st.session_state.junk or "").strip() or "— None —"
 
     vb = []
     if st.session_state.vb_style_on:
-        vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
+        vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {float(st.session_state.style_intensity):.2f})")
     if st.session_state.vb_genre_on:
-        vb.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
+        vb.append(f"Genre Influence: {st.session_state.genre} (intensity {float(st.session_state.genre_intensity):.2f})")
     if st.session_state.vb_trained_on and st.session_state.trained_voice and st.session_state.trained_voice != "— None —":
-        vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
-    if st.session_state.vb_match_on and st.session_state.voice_sample.strip():
-        vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
-    if st.session_state.vb_lock_on and st.session_state.voice_lock_prompt.strip():
-        vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
+        vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {float(st.session_state.trained_intensity):.2f})")
+    if st.session_state.vb_match_on and (st.session_state.voice_sample or "").strip():
+        vb.append(f"Match Sample (intensity {float(st.session_state.match_intensity):.2f}):\n{st.session_state.voice_sample.strip()}")
+    if st.session_state.vb_lock_on and (st.session_state.voice_lock_prompt or "").strip():
+        vb.append(f"VOICE LOCK (strength {float(st.session_state.lock_intensity):.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
     exemplars: List[str] = []
@@ -725,7 +806,7 @@ def build_partner_brief(action_name: str, lane: str) -> str:
         exemplars = retrieve_mixed_exemplars(tv, lane, query)
     ex_block = "\n\n---\n\n".join(exemplars) if exemplars else "— None —"
 
-    ai_x = float(st.session_state.ai_intensity)
+    intensity_x = clamp01(intensity_x)
 
     return f"""
 YOU ARE OLIVETTI: the author's personal writing and editing partner.
@@ -739,8 +820,8 @@ Use it only when relevant.
 
 LANE: {lane}
 
-AI INTENSITY: {ai_x:.2f}
-INTENSITY PROFILE: {intensity_profile(ai_x)}
+EFFECTIVE INTENSITY (this action): {intensity_x:.2f}
+PROFILE: {intensity_profile(intensity_x)}
 
 VOICE CONTROLS:
 {voice_controls}
@@ -757,7 +838,7 @@ IDEA BANK:
 ACTION: {action_name}
 """.strip()
 
-def call_openai(system_brief: str, user_task: str, text: str) -> str:
+def call_openai(system_brief: str, user_task: str, text: str, intensity_x: float) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not set")
     try:
@@ -772,7 +853,7 @@ def call_openai(system_brief: str, user_task: str, text: str) -> str:
             {"role": "system", "content": system_brief},
             {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
         ],
-        temperature=temperature_from_intensity(st.session_state.ai_intensity),
+        temperature=temperature_from_intensity(intensity_x),
     )
     return (resp.choices[0].message.content or "").strip()
 
@@ -833,24 +914,26 @@ def local_find(term: str) -> str:
     return out
 
 # ============================================================
-# COMMANDS (Idea Bank supports commands without losing ideas)
+# COMMANDS (Idea Bank)
 # ============================================================
-CMD_FIND    = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
-CMD_CREATE  = re.compile(r"^\s*/create\s*:\s*(.+)$", re.IGNORECASE)
+CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
+CMD_CREATE = re.compile(r"^\s*/create\s*:\s*(.+)$", re.IGNORECASE)
 CMD_PROMOTE = re.compile(r"^\s*/promote\s*$", re.IGNORECASE)
 
 def next_bay(bay: str) -> Optional[str]:
-    if bay == "NEW": return "ROUGH"
-    if bay == "ROUGH": return "EDIT"
-    if bay == "EDIT": return "FINAL"
+    if bay == "NEW":
+        return "ROUGH"
+    if bay == "ROUGH":
+        return "EDIT"
+    if bay == "EDIT":
+        return "FINAL"
     return None
 
-def handle_junk_commands():
+def handle_idea_commands():
     raw = (st.session_state.junk or "").strip()
     if not raw:
         return
 
-    # Not a command -> it's ideas
     is_cmd = raw.startswith("/") and (CMD_CREATE.match(raw) or CMD_PROMOTE.match(raw) or CMD_FIND.match(raw))
     if not is_cmd:
         st.session_state.idea_bank_last = st.session_state.junk
@@ -860,15 +943,22 @@ def handle_junk_commands():
     preserved = st.session_state.idea_bank_last or ""
     st.session_state.junk = preserved  # restore ideas immediately
 
+    m = CMD_FIND.match(cmd_raw)
+    if m:
+        term = m.group(1).strip()
+        st.session_state.tool_output = local_find(term)
+        st.session_state.voice_status = f"Find: '{term}'"
+        st.session_state.last_action = "Find"
+        autosave()
+        return
+
     m = CMD_CREATE.match(cmd_raw)
     if m:
-        # /create creates a project from current Story Bible editor state (workspace or project)
         title = m.group(1).strip()
         if in_workspace_mode():
             st.session_state.workspace_title = title
             start_project_from_workspace()
         else:
-            # Create a brand-new NEW project from the currently loaded project's Story Bible (fork)
             p = new_project_payload(title)
             p["bay"] = "NEW"
             p["draft"] = st.session_state.main_text
@@ -880,14 +970,14 @@ def handle_junk_commands():
                 "outline": st.session_state.outline,
             }
             p["idea_bank"] = st.session_state.junk
-            p["voice_bible"]["voice_sample"] = st.session_state.voice_sample
-            p["voice_bible"]["ai_intensity"] = float(st.session_state.ai_intensity)
+            p["voice_bible"] = _vb_struct_from_session()
+            p["action_controls"] = action_controls_struct_from_scalars()
             p["voices"] = compact_voice_vault(st.session_state.voices)
             st.session_state.projects[p["id"]] = p
             st.session_state.active_project_by_bay["NEW"] = p["id"]
             switch_bay("NEW")
             load_project_into_session(p["id"])
-            st.session_state.voice_status = f"Created project in NEW: {st.session_state.project_title}"
+            st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
             st.session_state.last_action = "Create Project"
         autosave()
         return
@@ -910,24 +1000,22 @@ def handle_junk_commands():
         autosave()
         return
 
-    m = CMD_FIND.match(cmd_raw)
-    if m:
-        term = m.group(1).strip()
-        st.session_state.tool_output = local_find(term)
-        st.session_state.voice_status = f"Find: '{term}'"
-        st.session_state.last_action = "Find"
-        autosave()
-        return
-
-handle_junk_commands()
+handle_idea_commands()
 
 # ============================================================
 # PARTNER ACTIONS
 # ============================================================
 def partner_action(action: str):
+    if not action_is_enabled(action):
+        st.session_state.voice_status = f"{action}: disabled"
+        st.session_state.tool_output = f"{action} is disabled in Action Controls for this context."
+        autosave()
+        return
+
     text = st.session_state.main_text or ""
     lane = current_lane_from_draft(text)
-    brief = build_partner_brief(action, lane=lane)
+    intensity_x = effective_intensity_for_action(action)
+    brief = build_partner_brief(action, lane=lane, intensity_x=intensity_x)
     use_ai = bool(OPENAI_API_KEY)
 
     def apply_replace(result: str):
@@ -953,7 +1041,7 @@ def partner_action(action: str):
                     "Use Story Bible + Idea Bank when relevant. "
                     "No recap. No planning. Just prose."
                 )
-                out = call_openai(brief, task, text if text.strip() else "Start the opening.")
+                out = call_openai(brief, task, text if text.strip() else "Start the opening.", intensity_x)
                 apply_append(out)
             else:
                 apply_replace(text)
@@ -962,7 +1050,7 @@ def partner_action(action: str):
         if action == "Rewrite":
             if use_ai:
                 task = f"Rewrite for professional quality in lane ({lane}). Preserve meaning and canon. Return full revised text."
-                out = call_openai(brief, task, text)
+                out = call_openai(brief, task, text, intensity_x)
                 apply_replace(out)
             else:
                 apply_replace(local_cleanup(text))
@@ -971,7 +1059,7 @@ def partner_action(action: str):
         if action == "Expand":
             if use_ai:
                 task = f"Expand with meaningful depth in lane ({lane}). No padding. Preserve canon. Return full revised text."
-                out = call_openai(brief, task, text)
+                out = call_openai(brief, task, text, intensity_x)
                 apply_replace(out)
             else:
                 apply_replace(text)
@@ -979,8 +1067,8 @@ def partner_action(action: str):
 
         if action == "Rephrase":
             if use_ai:
-                task = f"Replace the final sentence with a stronger one (same meaning) in lane ({lane}). Return full text."
-                out = call_openai(brief, task, text)
+                task = f"Rewrite the final paragraph for maximum strength (same meaning) in lane ({lane}). Return full text."
+                out = call_openai(brief, task, text, intensity_x)
                 apply_replace(out)
             else:
                 apply_replace(text)
@@ -989,7 +1077,7 @@ def partner_action(action: str):
         if action == "Describe":
             if use_ai:
                 task = f"Add vivid controlled description in lane ({lane}). Preserve pace and canon. Return full revised text."
-                out = call_openai(brief, task, text)
+                out = call_openai(brief, task, text, intensity_x)
                 apply_replace(out)
             else:
                 apply_replace(text)
@@ -999,10 +1087,46 @@ def partner_action(action: str):
             cleaned = local_cleanup(text)
             if use_ai:
                 task = "Copyedit spelling/grammar/punctuation. Preserve voice. Return full revised text."
-                out = call_openai(brief, task, cleaned)
+                out = call_openai(brief, task, cleaned, intensity_x)
                 apply_replace(out if out else cleaned)
             else:
                 apply_replace(cleaned)
+            return
+
+        if action == "Synonym":
+            if not use_ai:
+                st.session_state.tool_output = "Synonym: requires OpenAI key."
+                autosave()
+                return
+            task = (
+                "Provide 10 strong synonym options for the SINGLE most important verb in the final paragraph. "
+                "Output as a clean bullet list only."
+            )
+            out = call_openai(brief, task, text[-1200:] if text else "No text.", intensity_x)
+            st.session_state.tool_output = out
+            st.session_state.last_action = "Synonym"
+            autosave()
+            return
+
+        if action == "Sentence":
+            if not use_ai:
+                st.session_state.tool_output = "Sentence: requires OpenAI key."
+                autosave()
+                return
+            task = (
+                f"Generate 8 alternative sentences that could REPLACE the final sentence, same meaning, lane ({lane}). "
+                "Return as numbered list."
+            )
+            out = call_openai(brief, task, text[-1200:] if text else "No text.", intensity_x)
+            st.session_state.tool_output = out
+            st.session_state.last_action = "Sentence"
+            autosave()
+            return
+
+        if action == "Find":
+            st.session_state.tool_output = "Use /find: term in Idea Bank (Junk Drawer)."
+            st.session_state.last_action = "Find"
+            autosave()
             return
 
         apply_replace(text)
@@ -1041,7 +1165,7 @@ with top:
             Bay: <b>{st.session_state.active_bay}</b>
             &nbsp;•&nbsp; Project: <b>{st.session_state.project_title}</b>
             &nbsp;•&nbsp; Autosave: {st.session_state.autosave_time or '—'}
-            <br/>AI Intensity: {float(st.session_state.ai_intensity):.2f}
+            <br/>Last Action: {st.session_state.last_action}
             &nbsp;•&nbsp; Status: {st.session_state.voice_status}
         </div>
         """,
@@ -1063,8 +1187,13 @@ with left:
 
     bay = st.session_state.active_bay
     bay_projects = list_projects_in_bay(bay)
-    labels = ["— (Story Bible workspace) —"] + [f"{title}" for _, title in bay_projects]
-    ids = [None] + [pid for pid, _ in bay_projects]
+
+    if bay == "NEW":
+        labels = ["— (Story Bible workspace) —"] + [f"{title}" for _, title in bay_projects]
+        ids = [None] + [pid for pid, _ in bay_projects]
+    else:
+        labels = ["— (none) —"] + [f"{title}" for _, title in bay_projects]
+        ids = [None] + [pid for pid, _ in bay_projects]
 
     current_pid = st.session_state.project_id if (st.session_state.project_id in ids) else None
     current_idx = ids.index(current_pid) if current_pid in ids else 0
@@ -1073,7 +1202,6 @@ with left:
     sel_pid = ids[labels.index(sel)] if sel in labels else None
 
     if sel_pid != st.session_state.project_id:
-        # switching context
         if in_workspace_mode():
             save_workspace_from_session()
         save_session_into_project()
@@ -1083,7 +1211,6 @@ with left:
             load_project_into_session(sel_pid)
             st.session_state.voice_status = f"{bay}: {st.session_state.project_title}"
         else:
-            # workspace mode only truly lives in NEW; other bays are "empty"
             st.session_state.project_id = None
             st.session_state.project_title = "—"
             if bay == "NEW":
@@ -1098,32 +1225,25 @@ with left:
                 st.session_state.outline = ""
                 st.session_state.junk = ""
                 st.session_state.idea_bank_last = ""
+                st.session_state.tool_output = ""
                 st.session_state.voice_status = f"{bay}: (empty)"
         st.session_state.last_action = "Select Context"
         autosave()
 
     action_cols = st.columns([1, 1])
 
-    # ✅ NEW: Start Project button (Story Bible workspace -> NEW project)
     if bay == "NEW":
         if in_workspace_mode():
             st.text_input("Workspace Title", key="workspace_title", on_change=autosave)
 
         if action_cols[0].button("Start Project", key="start_project_btn", disabled=not in_workspace_mode()):
-            pid = start_project_from_workspace()
-            if pid:
-                st.session_state.active_project_by_bay["NEW"] = pid
+            start_project_from_workspace()
             autosave()
 
-        # Keep existing button (never remove). It still creates a NEW project from current bible state.
         if action_cols[0].button("Create Project (from Bible)", key="create_project_btn"):
             if in_workspace_mode():
-                pid = start_project_from_workspace()
-                if pid:
-                    st.session_state.active_project_by_bay["NEW"] = pid
-                    autosave()
+                start_project_from_workspace()
             else:
-                # create a new project from current project bible (fork)
                 title_guess = _first_nonempty_line(st.session_state.synopsis) or "New Project"
                 p = new_project_payload(title_guess)
                 p["bay"] = "NEW"
@@ -1136,15 +1256,15 @@ with left:
                     "outline": st.session_state.outline,
                 }
                 p["idea_bank"] = st.session_state.junk
-                p["voice_bible"]["voice_sample"] = st.session_state.voice_sample
-                p["voice_bible"]["ai_intensity"] = float(st.session_state.ai_intensity)
+                p["voice_bible"] = _vb_struct_from_session()
+                p["action_controls"] = action_controls_struct_from_scalars()
                 p["voices"] = compact_voice_vault(st.session_state.voices)
                 st.session_state.projects[p["id"]] = p
                 st.session_state.active_project_by_bay["NEW"] = p["id"]
                 load_project_into_session(p["id"])
                 st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
                 st.session_state.last_action = "Create Project"
-                autosave()
+            autosave()
 
         if action_cols[1].button("Promote → Rough", key="promote_new_to_rough"):
             if st.session_state.project_id:
@@ -1168,12 +1288,11 @@ with left:
                 st.session_state.last_action = f"Promote → {nb}"
                 autosave()
 
-    # AI Intensity stays in Story Bible panel
     st.slider(
-        "AI Intensity",
+        "AI Intensity (Global)",
         0.0, 1.0,
         key="ai_intensity",
-        help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to every AI generation.",
+        help="Global knob. Per-button overrides live in Action Controls (right panel).",
         on_change=autosave
     )
 
@@ -1183,9 +1302,9 @@ with left:
             key="junk",
             height=140,
             on_change=autosave,
-            help="Idea pool for this context (workspace or project). Commands: /create: Title  |  /promote  |  /find: term"
+            help="Idea pool for this context. Commands: /find: term  |  /create: Title  |  /promote"
         )
-        st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
+        st.text_area("Tool Output", key="tool_output", height=160, disabled=True)
 
     with st.expander("📝 Synopsis"):
         st.text_area("", key="synopsis", height=100, on_change=autosave)
@@ -1219,14 +1338,12 @@ with center:
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"): partner_action("Spell")
     if b2[1].button("Grammar", key="btn_grammar"): partner_action("Grammar")
-    if b2[2].button("Find", key="btn_find"):
-        st.session_state.tool_output = "Find is wired via /find: term in Idea Bank."
-        autosave()
+    if b2[2].button("Find", key="btn_find"): partner_action("Find")
     if b2[3].button("Synonym", key="btn_synonym"): partner_action("Synonym")
     if b2[4].button("Sentence", key="btn_sentence"): partner_action("Sentence")
 
 # ============================================================
-# RIGHT — VOICE BIBLE (locked UI)
+# RIGHT — VOICE BIBLE + ACTION CONTROLS
 # ============================================================
 with right:
     st.subheader("🎙 Voice Bible")
@@ -1291,7 +1408,6 @@ with right:
         key="voice_sample",
         height=100,
         disabled=not st.session_state.vb_match_on,
-        help="(Voice import wiring remains in your full build.)",
         on_change=autosave
     )
     st.slider(
@@ -1322,6 +1438,69 @@ with right:
 
     st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov", on_change=autosave)
     st.selectbox("Tense", ["Past", "Present"], key="tense", on_change=autosave)
+
+    st.divider()
+
+    with st.expander("🧰 Action Controls (Per Button)"):
+        locked = st.checkbox(
+            "Lock Action Controls (this context)",
+            key="ac_locked",
+            help="When locked, you can still run buttons, but settings cannot be edited.",
+            on_change=autosave,
+        )
+
+        def _disabled() -> bool:
+            return bool(locked)
+
+        st.caption("Each button has: Enable + Use Global Intensity + Override Intensity (when enabled).")
+
+        st.markdown("**Primary Buttons**")
+        for a in ACTIONS_PRIMARY:
+            cols = st.columns([1.2, 1.0, 1.6])
+            cols[0].checkbox(
+                f"{a} Enabled",
+                key=_ac_key(a, "enabled"),
+                disabled=_disabled(),
+                on_change=autosave
+            )
+            cols[1].checkbox(
+                "Use Global",
+                key=_ac_key(a, "use_global"),
+                disabled=_disabled(),
+                on_change=autosave
+            )
+            cols[2].slider(
+                "Intensity Override",
+                0.0, 1.0,
+                key=_ac_key(a, "intensity"),
+                disabled=_disabled() or bool(st.session_state.get(_ac_key(a, "use_global"), True)),
+                help="Used only when Use Global is OFF.",
+                on_change=autosave
+            )
+
+        st.markdown("**Secondary Buttons**")
+        for a in ACTIONS_SECONDARY:
+            cols = st.columns([1.2, 1.0, 1.6])
+            cols[0].checkbox(
+                f"{a} Enabled",
+                key=_ac_key(a, "enabled"),
+                disabled=_disabled(),
+                on_change=autosave
+            )
+            cols[1].checkbox(
+                "Use Global",
+                key=_ac_key(a, "use_global"),
+                disabled=_disabled(),
+                on_change=autosave
+            )
+            cols[2].slider(
+                "Intensity Override",
+                0.0, 1.0,
+                key=_ac_key(a, "intensity"),
+                disabled=_disabled() or bool(st.session_state.get(_ac_key(a, "use_global"), True)),
+                help="Used only when Use Global is OFF.",
+                on_change=autosave
+            )
 
 # ============================================================
 # SAFETY NET SAVE EVERY RERUN
