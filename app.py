@@ -1,7 +1,7 @@
 import os
 import re
 import math
-import json
+import jsonF
 import hashlib
 from io import BytesIO
 from datetime import datetime
@@ -2054,14 +2054,14 @@ with left:
             st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
             st.session_state.last_action = "Create Project"
             autosave()
-            st.rerun()
+            
 
         if in_workspace_mode() and action_cols[1].button("New Story Bible (fresh ID)", key="new_workspace_bible_btn"):
             reset_workspace_story_bible(keep_templates=True)
             st.session_state.voice_status = "Workspace: new Story Bible minted"
             st.session_state.last_action = "New Story Bible"
             autosave()
-            st.rerun()
+            
 
         if action_cols[1].button("Promote → Rough", key="promote_new_to_rough"):
             if st.session_state.project_id:
@@ -2072,7 +2072,7 @@ with left:
                 st.session_state.voice_status = f"Promoted → ROUGH: {st.session_state.project_title}"
                 st.session_state.last_action = "Promote → ROUGH"
                 autosave()
-                st.rerun()
+                
     elif bay in ("ROUGH", "EDIT"):
         nb = next_bay(bay)
         if action_cols[1].button(f"Promote → {nb.title()}", key=f"promote_{bay.lower()}"):
@@ -2084,7 +2084,7 @@ with left:
                 st.session_state.voice_status = f"Promoted → {nb}: {st.session_state.project_title}"
                 st.session_state.last_action = f"Promote → {nb}"
                 autosave()
-                st.rerun()
+                
 
     # Import / Export hub (restored)
     with st.expander("📦 Import / Export", expanded=False):
@@ -2247,7 +2247,7 @@ with left:
                                     load_project_into_session(pid)
                                     st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
                                     autosave()
-                                    st.rerun()
+                                    
                             else:
                                 st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
                                 autosave()
@@ -2307,36 +2307,36 @@ with center:
     b1 = st.columns(5)
     if b1[0].button("Write", key="btn_write"):
         queue_action("Write")
-        st.rerun()
+        
     if b1[1].button("Rewrite", key="btn_rewrite"):
         queue_action("Rewrite")
-        st.rerun()
+        
     if b1[2].button("Expand", key="btn_expand"):
         queue_action("Expand")
-        st.rerun()
+        
     if b1[3].button("Rephrase", key="btn_rephrase"):
         queue_action("Rephrase")
-        st.rerun()
+        
     if b1[4].button("Describe", key="btn_describe"):
         queue_action("Describe")
-        st.rerun()
+        
 
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"):
         queue_action("Spell")
-        st.rerun()
+        
     if b2[1].button("Grammar", key="btn_grammar"):
         queue_action("Grammar")
-        st.rerun()
+        
     if b2[2].button("Find", key="btn_find"):
         queue_action("__FIND_HINT__")
-        st.rerun()
+        
     if b2[3].button("Synonym", key="btn_synonym"):
         queue_action("Synonym")
-        st.rerun()
+        
     if b2[4].button("Sentence", key="btn_sentence"):
         queue_action("Sentence")
-        st.rerun()
+        
 
 
 # ============================================================
@@ -2383,14 +2383,14 @@ with right:
             if delete_last_style_sample(st_style, st_lane):
                 st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
                 autosave()
-                st.rerun()
+                
             else:
                 st.warning("Nothing to delete for that style/lane.")
 
         if c3.button("Clear trainer text", key="style_train_clear"):
             st.session_state.ui_notice = "Style trainer text cleared."
             queue_action("__STYLE_CLEAR_PASTE__")
-            st.rerun()
+            
 
         st.caption("Lane sample counts:")
         bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
@@ -2402,7 +2402,7 @@ with right:
             clear_style_lane(st_style, st_lane)
             st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
             autosave()
-            st.rerun()
+            
 
     st.divider()
 
@@ -2453,7 +2453,7 @@ with right:
             if create_custom_voice(new_name):
                 st.session_state.voice_status = f"Voice created: {new_name.strip()}"
                 autosave()
-                st.rerun()
+                
             else:
                 st.warning("Could not create that voice (empty or already exists).")
 
@@ -2465,7 +2465,7 @@ with right:
                 st.session_state.ui_notice = f"Added sample → {vault_voice} • {lane}"
                 queue_action("__VAULT_CLEAR_SAMPLE__")
                 autosave()
-                st.rerun()
+                
             else:
                 st.warning("No sample text found.")
 
@@ -2478,7 +2478,7 @@ with right:
             if delete_voice_sample(vault_voice, lane, index_from_end=0):
                 st.session_state.voice_status = f"Deleted last sample → {vault_voice} • {lane}"
                 autosave()
-                st.rerun()
+                
             else:
                 st.warning("Nothing to delete for that lane.")
 
@@ -2516,3 +2516,4 @@ with right:
 # SAFETY NET SAVE EVERY RERUN
 # ============================================================
 save_all_to_disk()
+
