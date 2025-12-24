@@ -1318,10 +1318,46 @@ def partner_action(action: str):
             else:
                 apply_replace(cleaned)
             return
+        if action == "Synonym":
+            if not use_ai:
+                st.session_state.tool_output = "Synonym: requires OPENAI_API_KEY."
+                st.session_state.voice_status = "Synonym: missing API key."
+                st.session_state.last_action = "Synonym (blocked)"
+                autosave()
+                return
+            task = (
+                "Provide 12 strong synonym options for the SINGLE most important verb in the final paragraph. "
+                "Return as a clean bullet list only."
+            )
+            out = call_openai(brief, task, text[-1500:] if text else "No text.")
+            st.session_state.tool_output = out
+            st.session_state.voice_status = "Synonym complete"
+            st.session_state.last_action = "Synonym"
+            autosave()
+            return
+
+        if action == "Sentence":
+            if not use_ai:
+                st.session_state.tool_output = "Sentence: requires OPENAI_API_KEY."
+                st.session_state.voice_status = "Sentence: missing API key."
+                st.session_state.last_action = "Sentence (blocked)"
+                autosave()
+                return
+            task = (
+                f"Generate 10 alternative sentences that could REPLACE the final sentence, same meaning, lane ({lane}). "
+                "Return as a numbered list only."
+            )
+            out = call_openai(brief, task, text[-1500:] if text else "No text.")
+            st.session_state.tool_output = out
+            st.session_state.voice_status = "Sentence options ready"
+            st.session_state.last_action = "Sentence"
+            autosave()
+            return
 
         apply_replace(text)
 
     except Exception as e:
+
         msg = str(e)
         if ("insufficient_quota" in msg) or ("exceeded your current quota" in msg.lower()):
             st.session_state.voice_status = "Engine: OpenAI quota exceeded."
