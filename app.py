@@ -1,18 +1,20 @@
 import os
 import re
+import json
+import math
+import hashlib
 import streamlit as st
 from datetime import datetime
+from typing import Dict, List, Tuple
 
 # ============================================================
-# ENV / METADATA HYGIENE (prevents "undefined" app-id artifacts)
+# ENV / METADATA HYGIENE
 # ============================================================
 os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
-# Optional: set your model + key via Streamlit Secrets or env vars
-# In Streamlit Cloud: Settings -> Secrets -> OPENAI_API_KEY="..."
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # change if you want
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 # ============================================================
 # CONFIG
@@ -29,22 +31,17 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Writing desk typography + comfort */
     div[data-testid="stTextArea"] textarea {
       font-size: 18px !important;
       line-height: 1.65 !important;
       padding: 18px !important;
-      resize: vertical !important;   /* central writing window expandable */
+      resize: vertical !important;
       min-height: 520px !important;
     }
-
-    /* Button ergonomics */
     button[kind="secondary"], button[kind="primary"] {
       font-size: 16px !important;
       padding: 0.6rem 0.9rem !important;
     }
-
-    /* Control labels readability */
     label, .stSelectbox label, .stSlider label {
       font-size: 14px !important;
     }
@@ -52,6 +49,29 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+# ============================================================
+# STORAGE (My Voice Vault)
+# ============================================================
+APP_DIR = os.path.join(os.getcwd(), ".olivetti")
+VOICES_PATH = os.path.join(APP_DIR, "voices.json")
+
+def _ensure_storage():
+    os.makedirs(APP_DIR, exist_ok=True)
+    if not os.path.exists(VOICES_PATH):
+        with open(VOICES_PATH, "w", encoding="utf-8") as f:
+            json.dump({"voices": {}}, f)
+
+def load_voices() -> Dict[str, dict]:
+    _ensure_storage()
+    with open(VOICES_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("voices", {})
+
+def save_voices(voices: Dict[str, dict]):
+    _ensure_storage()
+    with open(VOICES_PATH, "w", encoding="utf-8") as f:
+        json.dump({"voices": voices}, f, ensure_ascii=False, indent=2)
 
 # ============================================================
 # SESSION STATE INIT
@@ -98,20 +118,21 @@ def init_state():
         # UI
         "focus_mode": False,
 
-        # Partner engine state
-        "stage": "Rough",          # Rough | Edit | Final
+        # Partner engine
+        "stage": "Rough",
         "last_action": "—",
-        "revisions": [],           # list of dicts: {ts, action, text}
-    }
+        "revisions": [],
 
+        # My Voice runtime cache
+        "voice_status": "—",
+        "voices_cache": None,
+    }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 init_state()
-
-# Free writing always: permanently disable hard focus behavior
-st.session_state.focus_mode = False
+st.session_state.focus_mode = False  # free writing always
 
 # ============================================================
 # AUTOSAVE
@@ -120,17 +141,15 @@ def autosave():
     st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
 
 # ============================================================
-# REVISION VAULT (non-destructive)
+# REVISION VAULT
 # ============================================================
 def push_revision(action_name: str):
-    """Store snapshot BEFORE applying a transformation."""
     snap = {
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "action": action_name,
         "text": st.session_state.main_text,
     }
     st.session_state.revisions.append(snap)
-    # Keep last 50 snapshots
     if len(st.session_state.revisions) > 50:
         st.session_state.revisions = st.session_state.revisions[-50:]
 
@@ -138,10 +157,168 @@ def set_last_action(action_name: str):
     st.session_state.last_action = action_name
 
 # ============================================================
-# PARTNER CORE — Context Assembly (Story Bible + Voice Bible)
+# MY VOICE — Lightweight fingerprint + retrieval (works without OpenAI)
 # ============================================================
-def build_partner_brief() -> str:
-    """Builds authoritative instruction set. No UI changes."""
+WORD_RE = re.compile(r"[A-Za-z']+")
+def _tokenize(text: str) -> List[str]:
+    return [w.lower() for w in WORD_RE.findall(text or "")]
+
+def _hash_vec(text: str, dims: int = 512) -> List[float]:
+    """
+    Cheap embedding: hashed bag-of-words + log-scaling.
+    Deterministic, no external deps. Good enough for local retrieval.
+    """
+    vec = [0.0] * dims
+    toks = _tokenize(text)
+    for t in toks:
+        h = int(hashlib.md5(t.encode("utf-8")).hexdigest(), 16)
+        idx = h % dims
+        vec[idx] += 1.0
+    # log scale
+    for i, v in enumerate(vec):
+        if v > 0:
+            vec[i] = 1.0 + math.log(v)
+    return vec
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    dot = sum(x*y for x, y in zip(a, b))
+    na = math.sqrt(sum(x*x for x in a))
+    nb = math.sqrt(sum(y*y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+def _fingerprint(text: str) -> Dict[str, float]:
+    """
+    Simple stylistic fingerprint for prompt anchoring.
+    """
+    t = (text or "").strip()
+    if not t:
+        return {"avg_sentence_len": 0, "comma_rate": 0, "dash_rate": 0, "dialogue_rate": 0}
+
+    sentences = re.split(r"(?<=[.!?])\s+", t)
+    words = _tokenize(t)
+    avg_sentence_len = (len(words) / max(1, len(sentences)))
+
+    comma_rate = t.count(",") / max(1, len(words))
+    dash_rate = (t.count("—") + t.count("--")) / max(1, len(words))
+    dialogue_rate = t.count('"') / max(1, len(t))  # crude signal
+
+    return {
+        "avg_sentence_len": round(avg_sentence_len, 2),
+        "comma_rate": round(comma_rate, 4),
+        "dash_rate": round(dash_rate, 4),
+        "dialogue_rate": round(dialogue_rate, 6),
+    }
+
+def _normalize_sample(sample: str) -> str:
+    s = (sample or "").strip()
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+def voice_save(name: str, sample: str) -> str:
+    name = (name or "").strip()
+    sample = _normalize_sample(sample)
+    if not name:
+        return "Voice name missing."
+    if len(sample) < 200:
+        return "Paste at least ~200 characters of your writing before saving."
+    voices = load_voices()
+    v = voices.get(name, {"samples": []})
+    v["samples"].append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "text": sample,
+        "fp": _fingerprint(sample),
+        "vec": _hash_vec(sample),
+    })
+    # keep last 200 samples per voice
+    if len(v["samples"]) > 200:
+        v["samples"] = v["samples"][-200:]
+    voices[name] = v
+    save_voices(voices)
+    return f"Saved sample to voice: {name}"
+
+def voice_delete(name: str) -> str:
+    voices = load_voices()
+    if name in voices:
+        del voices[name]
+        save_voices(voices)
+        return f"Deleted voice: {name}"
+    return "Voice not found."
+
+def voice_list() -> List[str]:
+    voices = load_voices()
+    return sorted(list(voices.keys()))
+
+def voice_retrieve(name: str, query_text: str, k: int = 3) -> Tuple[List[str], Dict[str, float]]:
+    voices = load_voices()
+    v = voices.get(name)
+    if not v or not v.get("samples"):
+        return [], {}
+    qv = _hash_vec(query_text)
+    scored = []
+    for s in v["samples"]:
+        sv = s.get("vec") or []
+        scored.append((_cosine(qv, sv), s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [item[1]["text"] for item in scored[:k] if item[0] > 0.0]
+    # aggregate fingerprint (rough average)
+    fps = [item[1].get("fp", {}) for item in scored[: min(10, len(scored))]]
+    if not fps:
+        return top, {}
+    agg = {}
+    keys = fps[0].keys()
+    for key in keys:
+        vals = [fp.get(key, 0) for fp in fps]
+        agg[key] = round(sum(vals) / max(1, len(vals)), 4)
+    return top, agg
+
+# ============================================================
+# COMMANDS in Style Example (no UI changes)
+# ============================================================
+CMD_SAVE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
+CMD_DELETE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
+CMD_LIST = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
+
+def handle_voice_commands():
+    """
+    If the Style Example begins with a command, execute it and clear the box.
+    This keeps UI locked: no new buttons, no new panels.
+    """
+    raw = st.session_state.voice_sample or ""
+    first_line = raw.strip().splitlines()[0] if raw.strip() else ""
+    if not first_line:
+        return
+
+    m = CMD_SAVE.match(first_line)
+    if m:
+        name = m.group(1).strip()
+        # everything after first line is the sample
+        sample = "\n".join(raw.splitlines()[1:]).strip()
+        st.session_state.voice_status = voice_save(name, sample)
+        st.session_state.voice_sample = ""
+        st.session_state.voices_cache = None
+        return
+
+    m = CMD_DELETE.match(first_line)
+    if m:
+        name = m.group(1).strip()
+        st.session_state.voice_status = voice_delete(name)
+        st.session_state.voice_sample = ""
+        st.session_state.voices_cache = None
+        return
+
+    if CMD_LIST.match(first_line):
+        names = voice_list()
+        st.session_state.voice_status = "Voices: " + (", ".join(names) if names else "— none —")
+        st.session_state.voice_sample = ""
+        return
+
+# ============================================================
+# PARTNER BRIEF (Story Bible + Voice Bible + My Voice Retrieval)
+# ============================================================
+def build_partner_brief(action_name: str) -> str:
+    # Story Bible
     sb = []
     if st.session_state.synopsis.strip():
         sb.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
@@ -155,127 +332,95 @@ def build_partner_brief() -> str:
         sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
     story_bible = "\n\n".join(sb).strip()
 
-    vb = []
+    # Voice Bible controls
+    vb_lines = []
     if st.session_state.vb_style_on:
-        vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
+        vb_lines.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
     if st.session_state.vb_genre_on:
-        vb.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
-    if st.session_state.vb_trained_on and st.session_state.trained_voice != "— None —":
-        vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
+        vb_lines.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
     if st.session_state.vb_match_on and st.session_state.voice_sample.strip():
-        vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
+        vb_lines.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
     if st.session_state.vb_lock_on and st.session_state.voice_lock_prompt.strip():
-        vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
-    voice_bible = "\n\n".join(vb).strip()
+        vb_lines.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
+    voice_controls = "\n\n".join(vb_lines).strip() if vb_lines else "— None enabled —"
+
+    # Trained Voice retrieval (your “My Voice”)
+    exemplars = []
+    fp = {}
+    trained_name = st.session_state.trained_voice
+    if st.session_state.vb_trained_on and trained_name and trained_name != "— None —":
+        ctx = (st.session_state.main_text or "")[-2500:]  # last chunk of current draft
+        exemplars, fp = voice_retrieve(trained_name, ctx if ctx.strip() else st.session_state.synopsis, k=3)
+
+    # Dominance rules (explicit, enforced)
+    dominance = f"""
+DOMINANCE RULES:
+- If Voice Lock is ON: obey it as a hard constraint.
+- If Trained Voice is ON: mimic the author's fingerprint and exemplar patterns; do not drift.
+- Match Sample affects micro-style and texture; do not change plot facts.
+- Genre/Style influence structure/tropes, but do not overwrite the author's voice.
+""".strip()
 
     stage = st.session_state.stage
     pov = st.session_state.pov
     tense = st.session_state.tense
 
+    exemplar_block = "— None —"
+    if exemplars:
+        exemplar_block = "\n\n---\n\n".join(exemplars[:3])
+
+    fp_block = "— None —"
+    if fp:
+        fp_block = json.dumps(fp, ensure_ascii=False)
+
     brief = f"""
 YOU ARE OLIVETTI: the author's personal writing and editing partner.
-This is professional production work. Be decisive, specific, and useful.
+This is professional production. Produce usable prose and usable edits.
 
 ABSOLUTE RULES:
-- Never change UI. Never mention UI.
-- Never output meta-commentary.
-- Do not remove meaning or voice.
-- Avoid clichés unless the author’s Voice Bible explicitly demands them.
-- When editing, preserve intent and specificity. Tighten, don't sterilize.
+- Never mention UI. Never explain your process.
+- Preserve meaning and intent. No generic filler.
+- Avoid clichés unless the author’s voice clearly uses them.
+- Be specific, sensory, and controlled.
 
 WORKING MODE: {stage}
 POV: {pov}
 TENSE: {tense}
 
-VOICE BIBLE (controls):
-{voice_bible if voice_bible else "— None enabled —"}
+{dominance}
+
+VOICE CONTROLS:
+{voice_controls}
+
+TRAINED VOICE:
+Name: {trained_name}
+Fingerprint (guide): {fp_block}
+Exemplars (mimic patterns, not content):
+{exemplar_block}
 
 STORY BIBLE (canon/constraints):
 {story_bible if story_bible else "— None provided —"}
+
+ACTION: {action_name}
 """.strip()
     return brief
 
 # ============================================================
-# PARTNER CORE — Text Utilities (for local fallback)
-# ============================================================
-def _split_paragraphs(text: str):
-    # Keep paragraph breaks
-    return re.split(r"\n\s*\n", text.strip(), flags=re.MULTILINE) if text.strip() else []
-
-def _join_paragraphs(paras):
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
-
-def _last_sentence(text: str) -> str:
-    t = text.strip()
-    if not t:
-        return ""
-    # crude sentence split that respects common punctuation
-    parts = re.split(r"(?<=[.!?])\s+", t)
-    return parts[-1].strip() if parts else t
-
-def _local_cleanup(text: str) -> str:
-    """Professional mechanical cleanup: spacing, quotes, dashes, repeated whitespace."""
-    t = text
-
-    # Normalize line endings
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
-
-    # Collapse trailing spaces
-    t = re.sub(r"[ \t]+\n", "\n", t)
-
-    # Collapse excessive blank lines (keep max 2)
-    t = re.sub(r"\n{4,}", "\n\n\n", t)
-
-    # Smart-ish punctuation spacing
-    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
-    t = re.sub(r"([,.;:!?])([A-Za-z0-9])", r"\1 \2", t)
-
-    # Convert triple dots to ellipsis
-    t = re.sub(r"\.\.\.", "…", t)
-
-    # Normalize dashes (space em dash)
-    t = re.sub(r"\s*--\s*", " — ", t)
-
-    # Tighten multiple spaces
-    t = re.sub(r"[ \t]{2,}", " ", t)
-
-    return t.strip()
-
-def _local_rephrase_sentence(sentence: str) -> str:
-    """Lightweight rephrase: tighten filler and strengthen verbs (heuristic)."""
-    s = sentence.strip()
-    if not s:
-        return s
-    # Remove some common weak openers/fillers (conservative)
-    s = re.sub(r"^(Just|Really|Basically|Actually|Suddenly|Very)\s+", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\b(seems to|started to|began to)\b", " ", s, flags=re.IGNORECASE)
-    s = re.sub(r"\b(very)\b\s+", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s{2,}", " ", s)
-    return s.strip()
-
-# ============================================================
-# PARTNER CORE — OpenAI (optional)
+# OPTIONAL AI CALL
 # ============================================================
 def _call_openai(system_brief: str, user_task: str, text: str) -> str:
-    """
-    Optional AI partner. If OPENAI_API_KEY isn't set, we won't call this.
-    Uses the official OpenAI Python SDK if available; otherwise raises.
-    """
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not set")
-
     try:
         from openai import OpenAI
     except Exception as e:
         raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
 
     client = OpenAI(api_key=OPENAI_API_KEY)
-
     messages = [
         {"role": "system", "content": system_brief},
         {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
     ]
-
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=messages,
@@ -284,150 +429,110 @@ def _call_openai(system_brief: str, user_task: str, text: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 # ============================================================
-# PARTNER CORE — Actions (wired to existing buttons)
+# LOCAL COPYEDIT (fallback still pro)
+# ============================================================
+def _local_cleanup(text: str) -> str:
+    t = (text or "")
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    t = re.sub(r"\n{4,}", "\n\n\n", t)
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"([,.;:!?])([A-Za-z0-9])", r"\1 \2", t)
+    t = re.sub(r"\.\.\.", "…", t)
+    t = re.sub(r"\s*--\s*", " — ", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+def _last_sentence(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    return parts[-1].strip() if parts else t
+
+# ============================================================
+# PARTNER ACTIONS (wired to existing buttons)
 # ============================================================
 def partner_action(action: str):
-    """
-    Applies action to main_text.
-    Non-destructive: stores previous snapshot first.
-    """
     text = st.session_state.main_text or ""
-    brief = build_partner_brief()
-
-    # Authoritative tasks per stage
-    stage = st.session_state.stage
-
-    # If no AI key/sdk, do local fallback for certain actions.
-    use_ai = bool(OPENAI_API_KEY)
-
-    def apply_result(result: str):
-        if result and result.strip():
-            st.session_state.main_text = result.strip()
-            autosave()
-            set_last_action(action)
-
-    # Always snapshot before change
     push_revision(action)
 
-    # --- WRITE (continue or start) ---
+    # Handle voice commands if user is using Style Example as command line
+    handle_voice_commands()
+
+    # If no AI configured, still deliver something useful
+    use_ai = bool(OPENAI_API_KEY)
+
+    brief = build_partner_brief(action)
+
+    def apply_result(result: str, mode: str = "replace"):
+        if not result or not result.strip():
+            return
+        if mode == "append" and (st.session_state.main_text or "").strip():
+            st.session_state.main_text = (st.session_state.main_text.rstrip() + "\n\n" + result.strip()).strip()
+        else:
+            st.session_state.main_text = result.strip()
+        autosave()
+        set_last_action(action)
+
     if action == "Write":
         if use_ai:
-            task = (
-                "Continue the draft in the same voice and momentum. "
-                "Add 1–3 paragraphs. Do not recap. Do not explain. Just produce prose."
-            )
+            task = "Continue the draft. Add 1–3 paragraphs. No recap. No explanation. Just prose."
             out = _call_openai(brief, task, text if text.strip() else "Start the opening.")
-            # Append to preserve what already exists
-            if text.strip():
-                apply_result((text.rstrip() + "\n\n" + out).strip())
-            else:
-                apply_result(out)
+            apply_result(out, mode="append" if text.strip() else "replace")
         else:
-            # Local fallback: do nothing destructive; nudge user with a clean starter line
-            if not text.strip():
-                apply_result("—")
-            else:
-                apply_result(text)
+            # safe, non-toy fallback: do nothing destructive
+            apply_result(text)
         return
 
-    # --- REWRITE (tighten last paragraph; preserve meaning) ---
     if action == "Rewrite":
-        paras = _split_paragraphs(text)
-        if not paras:
-            return
         if use_ai:
-            target = paras[-1]
-            task = (
-                f"Rewrite ONLY the final paragraph for {stage.lower()} quality. "
-                "Preserve intent, facts, and voice. Improve clarity, rhythm, and specificity. "
-                "Return ONLY the rewritten paragraph."
-            )
-            out = _call_openai(brief, task, target)
-            paras[-1] = out if out else target
-            apply_result(_join_paragraphs(paras))
+            task = "Rewrite the final paragraph for professional quality. Preserve meaning and voice. Return full text."
+            out = _call_openai(brief, task, text)
+            apply_result(out)
         else:
-            # Local fallback: mechanical cleanup on last paragraph
-            paras[-1] = _local_cleanup(paras[-1])
-            apply_result(_join_paragraphs(paras))
+            apply_result(_local_cleanup(text))
         return
 
-    # --- EXPAND (deepen last paragraph with detail) ---
     if action == "Expand":
-        paras = _split_paragraphs(text)
-        if not paras:
-            return
         if use_ai:
-            target = paras[-1]
-            task = (
-                "Expand the final paragraph with concrete sensory detail, subtext, and precision. "
-                "Do NOT bloat. Add 2–6 sentences. Preserve voice. Return ONLY the expanded paragraph."
-            )
-            out = _call_openai(brief, task, target)
-            paras[-1] = out if out else target
-            apply_result(_join_paragraphs(paras))
-        else:
-            apply_result(text)  # safe no-op if no AI
-        return
-
-    # --- REPHRASE (rewrite last sentence; keep meaning) ---
-    if action == "Rephrase":
-        if not text.strip():
-            return
-        if use_ai:
-            sent = _last_sentence(text)
-            task = (
-                "Rephrase the final sentence 3 different ways, all faithful to meaning and voice. "
-                "Pick the strongest ONE and return ONLY that final chosen sentence."
-            )
-            out = _call_openai(brief, task, sent)
-            if out:
-                # Replace only the final sentence (approx)
-                new_text = re.sub(re.escape(sent) + r"\s*$", out.strip(), text.strip(), flags=re.DOTALL)
-                apply_result(new_text)
-        else:
-            sent = _last_sentence(text)
-            repl = _local_rephrase_sentence(sent)
-            if repl and repl != sent:
-                new_text = re.sub(re.escape(sent) + r"\s*$", repl, text.strip(), flags=re.DOTALL)
-                apply_result(new_text)
-        return
-
-    # --- DESCRIBE (add descriptive pass to last paragraph) ---
-    if action == "Describe":
-        paras = _split_paragraphs(text)
-        if not paras:
-            return
-        if use_ai:
-            target = paras[-1]
-            task = (
-                "Add vivid, specific description to the final paragraph without changing events. "
-                "Sharpen nouns and verbs. Avoid purple prose unless Voice Bible demands it. "
-                "Return ONLY the revised paragraph."
-            )
-            out = _call_openai(brief, task, target)
-            paras[-1] = out if out else target
-            apply_result(_join_paragraphs(paras))
+            task = "Expand the final paragraph with concrete detail, subtext, and precision. Return full text."
+            out = _call_openai(brief, task, text)
+            apply_result(out)
         else:
             apply_result(text)
         return
 
-    # --- SPELL / GRAMMAR (professional cleanup passes) ---
+    if action == "Rephrase":
+        sent = _last_sentence(text)
+        if use_ai:
+            task = "Rephrase the final sentence 3 ways, pick strongest ONE. Return full text with that final sentence replaced."
+            out = _call_openai(brief, task, text)
+            apply_result(out)
+        else:
+            apply_result(text)
+        return
+
+    if action == "Describe":
+        if use_ai:
+            task = "Add vivid, specific description without changing events. Return full text."
+            out = _call_openai(brief, task, text)
+            apply_result(out)
+        else:
+            apply_result(text)
+        return
+
     if action in ("Spell", "Grammar"):
-        # Local cleanup always runs; AI optionally improves beyond mechanics
         cleaned = _local_cleanup(text)
         if use_ai:
-            task = (
-                "Perform a professional copyedit pass: fix spelling/grammar/punctuation, "
-                "remove clutter, preserve voice. Do not change meaning. Return the full revised text."
-            )
+            task = "Copyedit: spelling/grammar/punctuation; preserve voice; do not change meaning. Return full text."
             out = _call_openai(brief, task, cleaned)
             apply_result(out if out else cleaned)
         else:
             apply_result(cleaned)
         return
 
-    # --- FIND / SYNONYM / SENTENCE (placeholders that do not alter text) ---
-    # These are kept inert intentionally until you decide their exact behavior.
+    # Find / Synonym / Sentence: intentionally inert until you define behavior
     apply_result(text)
 
 # ============================================================
@@ -437,14 +542,12 @@ top = st.container()
 with top:
     cols = st.columns([1, 1, 1, 1, 2])
 
-    # "New" clears writing only (non-destructive snapshot first)
     if cols[0].button("🆕 New", key="new_project"):
         push_revision("New")
         st.session_state.main_text = ""
         autosave()
         set_last_action("New")
 
-    # Stage controls (wired to your existing buttons)
     if cols[1].button("✏️ Rough", key="rough"):
         st.session_state.stage = "Rough"
         set_last_action("Stage: Rough")
@@ -461,6 +564,7 @@ with top:
             Stage: <b>{st.session_state.stage}</b>
             &nbsp;•&nbsp; Last: {st.session_state.last_action}
             &nbsp;•&nbsp; Autosave: {st.session_state.autosave_time or '—'}
+            <br/>Voice: {st.session_state.voice_status}
         </div>
         """,
         unsafe_allow_html=True
@@ -498,19 +602,13 @@ with left:
         st.text_area("", key="outline", height=160)
 
 # ============================================================
-# CENTER — WRITING DESK (ALWAYS ON)
+# CENTER — WRITING DESK
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
 
-    st.text_area(
-        "",
-        key="main_text",
-        height=650,
-        on_change=autosave
-    )
+    st.text_area("", key="main_text", height=650, on_change=autosave)
 
-    # Bottom bar — writing (wired)
     b1 = st.columns(5)
     if b1[0].button("Write", key="btn_write"):
         partner_action("Write")
@@ -523,15 +621,14 @@ with center:
     if b1[4].button("Describe", key="btn_describe"):
         partner_action("Describe")
 
-    # Bottom bar — editing (wired)
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"):
         partner_action("Spell")
     if b2[1].button("Grammar", key="btn_grammar"):
         partner_action("Grammar")
-    b2[2].button("Find", key="btn_find")        # intentionally inert for now
-    b2[3].button("Synonym", key="btn_synonym")  # intentionally inert for now
-    b2[4].button("Sentence", key="btn_sentence")# intentionally inert for now
+    b2[2].button("Find", key="btn_find")
+    b2[3].button("Synonym", key="btn_synonym")
+    b2[4].button("Sentence", key="btn_sentence")
 
 # ============================================================
 # RIGHT — VOICE BIBLE (TOP → BOTTOM, EXACT)
@@ -547,12 +644,7 @@ with right:
         key="writing_style",
         disabled=not st.session_state.vb_style_on
     )
-    st.slider(
-        "Style Intensity",
-        0.0, 1.0,
-        key="style_intensity",
-        disabled=not st.session_state.vb_style_on
-    )
+    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on)
 
     st.divider()
 
@@ -564,75 +656,54 @@ with right:
         key="genre",
         disabled=not st.session_state.vb_genre_on
     )
-    st.slider(
-        "Genre Intensity",
-        0.0, 1.0,
-        key="genre_intensity",
-        disabled=not st.session_state.vb_genre_on
-    )
+    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on)
 
     st.divider()
 
-    # 3. Trained Voices
+    # 3. Trained Voices (auto-loaded from vault)
     st.checkbox("Enable Trained Voice", key="vb_trained_on")
+
+    if st.session_state.voices_cache is None:
+        st.session_state.voices_cache = voice_list()
+
+    trained_options = ["— None —"] + (st.session_state.voices_cache or [])
     st.selectbox(
         "Trained Voice",
-        ["— None —", "Voice A", "Voice B"],
+        trained_options,
         key="trained_voice",
         disabled=not st.session_state.vb_trained_on
     )
-    st.slider(
-        "Trained Voice Intensity",
-        0.0, 1.0,
-        key="trained_intensity",
-        disabled=not st.session_state.vb_trained_on
-    )
+    st.slider("Trained Voice Intensity", 0.0, 1.0, key="trained_intensity", disabled=not st.session_state.vb_trained_on)
 
     st.divider()
 
-    # 4. Match My Style
+    # 4. Match My Style (also serves as command console for saving voices)
     st.checkbox("Enable Match My Style", key="vb_match_on")
     st.text_area(
         "Style Example",
         key="voice_sample",
         height=100,
-        disabled=not st.session_state.vb_match_on
+        disabled=not st.session_state.vb_match_on,
+        help="Commands: /savevoice Name (first line), /listvoices, /deletevoice Name"
     )
-    st.slider(
-        "Match Intensity",
-        0.0, 1.0,
-        key="match_intensity",
-        disabled=not st.session_state.vb_match_on
-    )
+    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on)
 
     st.divider()
 
     # 5. Voice Lock
     st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on")
-    st.text_area(
-        "Voice Lock Prompt",
-        key="voice_lock_prompt",
-        height=80,
-        disabled=not st.session_state.vb_lock_on
-    )
-    st.slider(
-        "Lock Strength",
-        0.0, 1.0,
-        key="lock_intensity",
-        disabled=not st.session_state.vb_lock_on
-    )
+    st.text_area("Voice Lock Prompt", key="voice_lock_prompt", height=80, disabled=not st.session_state.vb_lock_on)
+    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on)
 
     st.divider()
 
-    # POV / Tense
     st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov")
     st.selectbox("Tense", ["Past", "Present"], key="tense")
 
-    # Focus Mode stays visible, but it does nothing (free writing always)
     st.button("🔒 Focus Mode", disabled=True)
 
 # ============================================================
-# FOCUS MODE — HARD LOCK (PERMANENTLY DISABLED)
+# FOCUS MODE — PERMANENTLY DISABLED
 # ============================================================
 if st.session_state.focus_mode:
     st.markdown(
