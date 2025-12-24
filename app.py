@@ -235,4 +235,63 @@ with right:
         "Trained Voice Intensity",
         0.0, 1.0,
         key="trained_intensity",
-        disabled=not st.session_state.vb_trained_on_
+        disabled=not st.session_state.vb_trained_on
+    )
+
+    st.divider()
+
+    # 4. Match My Style
+    st.checkbox("Enable Match My Style", key="vb_match_on")
+    st.text_area(
+        "Style Example",
+        key="voice_sample",
+        height=100,
+        disabled=not st.session_state.vb_match_on
+    )
+    st.slider(
+        "Match Intensity",
+        0.0, 1.0,
+        key="match_intensity",
+        disabled=not st.session_state.vb_match_on
+    )
+
+    st.divider()
+
+    # 5. Voice Lock
+    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on")
+    st.text_area(
+        "Voice Lock Prompt",
+        key="voice_lock_prompt",
+        height=80,
+        disabled=not st.session_state.vb_lock_on
+    )
+    st.slider(
+        "Lock Strength",
+        0.0, 1.0,
+        key="lock_intensity",
+        disabled=not st.session_state.vb_lock_on
+    )
+
+    st.divider()
+
+    # POV / Tense
+    st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov")
+    st.selectbox("Tense", ["Past", "Present"], key="tense")
+
+    # Focus Mode stays visible, but it does nothing (free writing always)
+    st.button("🔒 Focus Mode", disabled=True)
+
+# ============================================================
+# FOCUS MODE — HARD LOCK (PERMANENTLY DISABLED)
+# ============================================================
+# Intentionally inert: st.session_state.focus_mode is forced False above.
+if st.session_state.focus_mode:
+    st.markdown(
+        """
+        <style>
+        header, footer, aside, .stSidebar {display:none !important;}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    st.info("Focus Mode enabled. Refresh page to exit.")
