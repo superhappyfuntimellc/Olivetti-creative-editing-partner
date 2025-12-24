@@ -4,7 +4,7 @@ import math
 import hashlib
 import streamlit as st
 from datetime import datetime
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 # ============================================================
 # ENV / METADATA HYGIENE
@@ -63,6 +63,8 @@ st.markdown(
 # ============================================================
 # SESSION STATE INIT
 # ============================================================
+LANES = ["Dialogue", "Narration", "Interiority", "Action"]
+
 def init_state():
     defaults = {
         # Main writing
@@ -123,7 +125,7 @@ def init_state():
         "last_captured_hash": "",
 
         # Session-only Voice Vault (distinct voices, selectable at will)
-        # voices[name] = {"samples":[{"text":..., "vec":[...], "ts":...}], "created_ts":...}
+        # voices[name] = {"created_ts":..., "lanes": {"Dialogue":[sample...], ...}}
         "voices": {},
         "voices_seeded": False,
     }
@@ -138,18 +140,252 @@ init_state()
 st.session_state.focus_mode = False
 
 # ============================================================
+# CORE UTILS
+# ============================================================
+WORD_RE = re.compile(r"[A-Za-z']+")
+
+def _tokenize(text: str) -> List[str]:
+    return [w.lower() for w in WORD_RE.findall(text or "")]
+
+def _hash_vec(text: str, dims: int = 512) -> List[float]:
+    vec = [0.0] * dims
+    toks = _tokenize(text)
+    for t in toks:
+        h = int(hashlib.md5(t.encode("utf-8")).hexdigest(), 16)
+        vec[h % dims] += 1.0
+    for i, v in enumerate(vec):
+        if v > 0:
+            vec[i] = 1.0 + math.log(v)
+    return vec
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+def _normalize_text(s: str) -> str:
+    t = (s or "").strip()
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+def _split_paragraphs(text: str) -> List[str]:
+    t = _normalize_text(text)
+    if not t:
+        return []
+    return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
+
+def _join_paragraphs(paras: List[str]) -> str:
+    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
+
+# ============================================================
+# LANE DETECTION (Dialogue / Narration / Interiority / Action)
+# ============================================================
+THOUGHT_WORDS = set([
+    "think", "thought", "felt", "wondered", "realized", "remembered",
+    "knew", "noticed", "decided", "hoped", "feared", "wanted", "imagined",
+    "could", "should", "would"
+])
+
+ACTION_VERBS = set([
+    "run","ran","walk","walked","grab","grabbed","push","pushed","pull","pulled",
+    "slam","slammed","hit","struck","kick","kicked","turn","turned","spin","spun",
+    "snap","snapped","dive","dived","duck","ducked","rush","rushed","lunge","lunged",
+    "climb","climbed","drop","dropped","throw","threw","fire","fired","aim","aimed",
+    "break","broke","shatter","shattered","step","stepped","move","moved","reach","reached"
+])
+
+def detect_lane(paragraph: str) -> str:
+    p = (paragraph or "").strip()
+    if not p:
+        return "Narration"
+
+    # Dialogue signals
+    quote_count = p.count('"') + p.count("“") + p.count("”")
+    has_dialogue_punct = ("—" in p[:2]) or (p.startswith("- ")) or (p.startswith("“")) or (p.startswith('"'))
+    dialogue_score = 0.0
+    if quote_count >= 2:
+        dialogue_score += 2.5
+    if has_dialogue_punct:
+        dialogue_score += 1.5
+    # Many short lines often indicate dialogue blocks
+    if p.count("\n") >= 2:
+        short_lines = sum(1 for ln in p.splitlines() if len(ln.strip()) <= 60)
+        if short_lines >= 2:
+            dialogue_score += 1.0
+
+    # Interiority signals
+    toks = _tokenize(p)
+    interior_score = 0.0
+    if toks:
+        first_person = sum(1 for t in toks if t in ("i","me","my","mine","myself"))
+        thought_hits = sum(1 for t in toks if t in THOUGHT_WORDS)
+        if first_person >= 2 and thought_hits >= 1:
+            interior_score += 2.2
+        if "?" in p and thought_hits >= 1:
+            interior_score += 0.6
+        # italics markers (common in some drafts)
+        if "*" in p or "_" in p:
+            interior_score += 0.3
+
+    # Action signals
+    action_score = 0.0
+    if toks:
+        verb_hits = sum(1 for t in toks if t in ACTION_VERBS)
+        # short, punchy sentences + verbs = action
+        sent_count = max(1, len(re.split(r"[.!?]+", p)) - 1)
+        avg_len = len(toks) / sent_count if sent_count else len(toks)
+        if verb_hits >= 2:
+            action_score += 1.6
+        if avg_len <= 14 and verb_hits >= 1:
+            action_score += 1.0
+        if "!" in p:
+            action_score += 0.3
+
+    # Default narration if none dominates
+    # Resolve by max score; require a little dominance
+    scores = {
+        "Dialogue": dialogue_score,
+        "Interiority": interior_score,
+        "Action": action_score,
+        "Narration": 0.25,  # baseline
+    }
+    lane = max(scores.items(), key=lambda kv: kv[1])[0]
+    # If all are weak, keep Narration
+    if scores[lane] < 0.9:
+        return "Narration"
+    return lane
+
+def current_lane_from_draft(text: str) -> str:
+    paras = _split_paragraphs(text)
+    if not paras:
+        return "Narration"
+    return detect_lane(paras[-1])
+
+# ============================================================
 # TEMP VOICE VAULT — seed default voices (keeps existing options)
 # ============================================================
 def seed_default_voices():
     if st.session_state.voices_seeded:
         return
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Keep the original “Voice A / Voice B” concepts as real vault entries
-    st.session_state.voices.setdefault("Voice A", {"samples": [], "created_ts": now})
-    st.session_state.voices.setdefault("Voice B", {"samples": [], "created_ts": now})
+
+    def make_voice():
+        return {"created_ts": now, "lanes": {ln: [] for ln in LANES}}
+
+    st.session_state.voices.setdefault("Voice A", make_voice())
+    st.session_state.voices.setdefault("Voice B", make_voice())
     st.session_state.voices_seeded = True
 
 seed_default_voices()
+
+def ensure_voice(name: str):
+    nm = (name or "").strip()
+    if not nm:
+        return
+    if nm not in st.session_state.voices:
+        st.session_state.voices[nm] = {"created_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                       "lanes": {ln: [] for ln in LANES}}
+
+def voice_names_for_selector() -> List[str]:
+    base = ["— None —", "Voice A", "Voice B"]
+    customs = sorted([k for k in st.session_state.voices.keys() if k not in ("Voice A", "Voice B")])
+    return base + customs
+
+def _cap_lane_samples(voice_name: str, lane: str, cap: int = 160):
+    v = st.session_state.voices.get(voice_name)
+    if not v:
+        return
+    v["lanes"][lane] = v["lanes"][lane][-cap:]
+
+def add_sample_to_voice_lane(voice_name: str, lane: str, sample_text: str) -> None:
+    ensure_voice(voice_name)
+    lane = lane if lane in LANES else "Narration"
+    txt = _normalize_text(sample_text)
+    if not txt:
+        return
+    st.session_state.voices[voice_name]["lanes"][lane].append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "text": txt,
+        "vec": _hash_vec(txt),
+    })
+    _cap_lane_samples(voice_name, lane)
+
+def import_samples_to_voice(voice_name: str, big_sample: str) -> Tuple[int, Dict[str, int]]:
+    ensure_voice(voice_name)
+    text = _normalize_text(big_sample)
+    paras = _split_paragraphs(text)
+
+    # Chunking: merge very short paras to make better exemplars
+    merged: List[str] = []
+    buf = ""
+    for p in paras:
+        if len(p) < 160:
+            buf = (buf + "\n\n" + p).strip() if buf else p
+            continue
+        if buf:
+            merged.append(buf.strip())
+            buf = ""
+        merged.append(p)
+    if buf:
+        merged.append(buf.strip())
+
+    counts = {ln: 0 for ln in LANES}
+    imported = 0
+    for p in merged:
+        if len(p) < 180:
+            continue
+        lane = detect_lane(p)
+        add_sample_to_voice_lane(voice_name, lane, p)
+        counts[lane] += 1
+        imported += 1
+
+    # keep voice light overall (across lanes)
+    # (cap per lane already; this is just extra safety)
+    for ln in LANES:
+        _cap_lane_samples(voice_name, ln, cap=160)
+
+    return imported, counts
+
+def delete_voice(name: str) -> str:
+    nm = (name or "").strip()
+    if nm in ("Voice A", "Voice B"):
+        # clear base voices instead of deleting
+        for ln in LANES:
+            st.session_state.voices[nm]["lanes"][ln] = []
+        return f"Cleared samples for {nm}."
+    if nm in st.session_state.voices:
+        del st.session_state.voices[nm]
+        return f"Deleted voice: {nm}"
+    return "Voice not found."
+
+def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
+    v = st.session_state.voices.get(voice_name)
+    if not v:
+        return []
+    lane = lane if lane in LANES else "Narration"
+    pool = v["lanes"].get(lane, [])
+    if not pool:
+        return []
+    qv = _hash_vec(query_text)
+    scored = [(_cosine(qv, s.get("vec", [])), s.get("text", "")) for s in pool[-140:]]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [txt for score, txt in scored[:k] if score > 0.0 and txt]
+    return top[:k]
+
+def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> List[str]:
+    # Lane-first exemplars + one narration fallback if needed
+    lane_ex = retrieve_exemplars(voice_name, lane, query_text, k=2)
+    if lane == "Narration":
+        return lane_ex if lane_ex else retrieve_exemplars(voice_name, "Narration", query_text, k=3)
+
+    nar_ex = retrieve_exemplars(voice_name, "Narration", query_text, k=1)
+    out = lane_ex + [x for x in nar_ex if x not in lane_ex]
+    return out[:3]
 
 # ============================================================
 # AUTOSAVE
@@ -225,9 +461,9 @@ def handle_junk_commands():
         st.session_state.junk = ""
         return
     if CMD_STATUS.match(raw):
-        voice_names = sorted([k for k in st.session_state.voices.keys()])
-        st.session_state.voice_status = f"Status: Voices={len(voice_names)} • Revisions={len(st.session_state.revisions)}"
-        st.session_state.tool_output = "VOICES:\n" + ("\n".join(voice_names) if voice_names else "— none —")
+        names = sorted(st.session_state.voices.keys())
+        st.session_state.voice_status = f"Status: Voices={len(names)} • Revisions={len(st.session_state.revisions)}"
+        st.session_state.tool_output = "VOICES:\n" + ("\n".join(names) if names else "— none —")
         st.session_state.junk = ""
         return
     if CMD_CLEAR.match(raw):
@@ -236,134 +472,27 @@ def handle_junk_commands():
         st.session_state.voice_status = "Cleared."
         return
 
-    # Tool command priming
-    m = CMD_FIND.match(raw)
-    if m:
-        st.session_state.voice_status = "Find primed."
-        st.session_state.tool_output = f"Find query primed: {m.group(1).strip()}"
-        return
-    m = CMD_SYN.match(raw)
-    if m:
-        st.session_state.voice_status = "Synonym primed."
-        st.session_state.tool_output = f"Synonym query primed: {m.group(1).strip()}"
-        return
-    m = CMD_SENT.match(raw)
-    if m:
-        st.session_state.voice_status = "Sentence tool primed."
-        st.session_state.tool_output = f"Sentence directive primed: {m.group(1).strip()}"
-        return
-
-# Run command handler each rerun (OS-like)
+# Run handler every rerun (OS-like)
 handle_junk_commands()
 
 # ============================================================
-# VOICE VAULT ENGINE (session-only) — import samples + choose voices at will
+# VOICE IMPORT COMMANDS (use existing Style Example box)
 # ============================================================
-WORD_RE = re.compile(r"[A-Za-z']+")
-
-def _tokenize(text: str) -> List[str]:
-    return [w.lower() for w in WORD_RE.findall(text or "")]
-
-def _hash_vec(text: str, dims: int = 512) -> List[float]:
-    vec = [0.0] * dims
-    toks = _tokenize(text)
-    for t in toks:
-        h = int(hashlib.md5(t.encode("utf-8")).hexdigest(), 16)
-        vec[h % dims] += 1.0
-    for i, v in enumerate(vec):
-        if v > 0:
-            vec[i] = 1.0 + math.log(v)
-    return vec
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
-
-def _normalize_sample(s: str) -> str:
-    t = (s or "").strip()
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    t = re.sub(r"[ \t]{2,}", " ", t)
-    return t.strip()
-
-def voice_names_for_selector() -> List[str]:
-    # Keep original options + add any custom voices
-    base = ["— None —"]
-    names = sorted([k for k in st.session_state.voices.keys() if k not in ("Voice A", "Voice B")])
-    return base + ["Voice A", "Voice B"] + names
-
-def ensure_voice(name: str):
-    name = (name or "").strip()
-    if not name:
-        return
-    if name not in st.session_state.voices:
-        st.session_state.voices[name] = {
-            "samples": [],
-            "created_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-def add_sample_to_voice(name: str, sample: str) -> str:
-    name = (name or "").strip()
-    sample = _normalize_sample(sample)
-    if not name:
-        return "Voice name missing."
-    if len(sample) < 200:
-        return "Paste at least ~200 characters before importing a sample."
-    ensure_voice(name)
-    st.session_state.voices[name]["samples"].append({
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": sample,
-        "vec": _hash_vec(sample),
-    })
-    # cap to keep session light
-    if len(st.session_state.voices[name]["samples"]) > 200:
-        st.session_state.voices[name]["samples"] = st.session_state.voices[name]["samples"][-200:]
-    return f"Imported sample → Voice: {name} (total samples: {len(st.session_state.voices[name]['samples'])})"
-
-def delete_voice(name: str) -> str:
-    name = (name or "").strip()
-    if name in ("Voice A", "Voice B"):
-        # keep base voices; allow clearing instead of deleting
-        st.session_state.voices[name]["samples"] = []
-        return f"Cleared samples for {name}."
-    if name in st.session_state.voices:
-        del st.session_state.voices[name]
-        return f"Deleted voice: {name}"
-    return "Voice not found."
-
-def retrieve_voice_exemplars(query_text: str, voice: str, k: int = 3) -> List[str]:
-    v = st.session_state.voices.get(voice)
-    if not v or not v.get("samples"):
-        return []
-    pool = v["samples"][-120:]
-    qv = _hash_vec(query_text)
-    scored = []
-    for s in pool:
-        scored.append((_cosine(qv, s.get("vec", [])), s.get("text", "")))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [txt for score, txt in scored[:k] if score > 0.0 and txt]
-    return top[:k]
-
-# --- Voice import commands typed into Style Example (NO new UI elements) ---
 CMD_SAVEVOICE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
 CMD_DELETEVOICE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
 CMD_LISTVOICES = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
 
 def handle_voice_sample_commands():
     """
-    Use the existing Style Example box as your import channel.
+    Use Voice Bible -> Style Example as the import channel.
 
-    Format:
-    First line:  /savevoice My New Voice
-    Then paste writing sample underneath.
+    Create/import:
+      First line: /savevoice Name
+      Then paste 1–12 pages underneath (the system will split + lane-tag paragraphs).
 
-    Also:
-    /listvoices
-    /deletevoice My New Voice
+    Manage:
+      /listvoices
+      /deletevoice Name
     """
     raw = st.session_state.voice_sample or ""
     if not raw.strip():
@@ -392,28 +521,27 @@ def handle_voice_sample_commands():
     if m:
         name = m.group(1).strip()
         sample = "\n".join(lines[1:]).strip()
-        msg = add_sample_to_voice(name, sample)
+        if len(sample) < 200:
+            st.session_state.voice_status = "Paste at least ~200 characters under /savevoice Name."
+            st.session_state.tool_output = st.session_state.voice_status
+            st.session_state.voice_sample = ""
+            return
+        imported, counts = import_samples_to_voice(name, sample)
+        msg = f"Imported → {name}: {imported} lane-tagged chunks | " + " • ".join([f"{k}={v}" for k, v in counts.items()])
         st.session_state.voice_status = msg
         st.session_state.tool_output = msg
         st.session_state.voice_sample = ""
         return
 
-# Process voice commands every rerun (so it feels OS-like)
 handle_voice_sample_commands()
 
 # ============================================================
-# “TRAINED VOICE” passive training from your current draft (session-only)
+# “TRAINED VOICE” passive training from current draft (session-only)
 # ============================================================
-def _split_paragraphs(text: str) -> List[str]:
-    t = (text or "").strip()
-    if not t:
-        return []
-    return re.split(r"\n\s*\n", t, flags=re.MULTILINE)
-
 def capture_voice_snippet_from_draft():
     """
-    If Trained Voice is ON and a voice is selected, it learns passively from your draft.
-    This builds distinct voices over long sessions.
+    If Trained Voice is ON and a voice is selected,
+    it learns passively from your draft into the appropriate lane.
     """
     if not st.session_state.vb_trained_on:
         return
@@ -433,16 +561,9 @@ def capture_voice_snippet_from_draft():
         return
     st.session_state.last_captured_hash = h
 
-    ensure_voice(tv)
-    st.session_state.voices[tv]["samples"].append({
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "text": last,
-        "vec": _hash_vec(last),
-    })
-    if len(st.session_state.voices[tv]["samples"]) > 200:
-        st.session_state.voices[tv]["samples"] = st.session_state.voices[tv]["samples"][-200:]
-
-    st.session_state.voice_status = f"Trained {tv}: +1 paragraph"
+    lane = detect_lane(last)
+    add_sample_to_voice_lane(tv, lane, last)
+    st.session_state.voice_status = f"Trained {tv} [{lane}]: +1 paragraph"
 
 # ============================================================
 # STORY BIBLE AS CANON + IDEA BANK (MANDATORY)
@@ -461,7 +582,7 @@ def _story_bible_text() -> str:
         sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
     return "\n\n".join(sb).strip() if sb else "— None provided —"
 
-def build_partner_brief(action_name: str) -> str:
+def build_partner_brief(action_name: str, lane: str) -> str:
     story_bible = _story_bible_text()
 
     idea_directive = """
@@ -480,6 +601,16 @@ DOMINANCE RULES (do not violate):
 - Genre influence shapes structure/tropes but must not override the author’s voice.
 """.strip()
 
+    lane_directive = f"""
+LANE (MODE) ENFORCEMENT:
+- Current lane: {lane}
+- If lane is Dialogue: prioritize spoken rhythm, subtext, interruptions, and clean beats.
+- If lane is Interiority: prioritize thought texture, honesty, distance, and sentence music.
+- If lane is Action: prioritize clarity, impact, momentum, and concrete motion.
+- If lane is Narration: prioritize scene texture, specificity, pacing, and viewpoint control.
+Keep the output in the same lane unless the draft naturally transitions.
+""".strip()
+
     # Voice controls (existing toggles/sliders; nothing removed)
     vb = []
     if st.session_state.vb_style_on:
@@ -494,12 +625,13 @@ DOMINANCE RULES (do not violate):
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
-    # Trained voice exemplars (from selected voice)
-    exemplars = []
+    # Trained voice exemplars (lane-aware)
+    exemplars: List[str] = []
     tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv and tv != "— None —":
         ctx = (st.session_state.main_text or "")[-2500:]
-        exemplars = retrieve_voice_exemplars(ctx if ctx.strip() else st.session_state.synopsis, tv, k=3)
+        query = ctx if ctx.strip() else st.session_state.synopsis
+        exemplars = retrieve_mixed_exemplars(tv, lane, query)
 
     ex_block = "— None —"
     if exemplars:
@@ -526,10 +658,12 @@ TENSE: {tense}
 
 {dominance}
 
+{lane_directive}
+
 VOICE CONTROLS:
 {voice_controls}
 
-TRAINED VOICE EXEMPLARS (mimic patterns, not content):
+TRAINED VOICE EXEMPLARS (lane-aware; mimic patterns, not content):
 {ex_block}
 
 STORY BIBLE (canon/constraints + idea bank):
@@ -561,7 +695,7 @@ def call_openai(system_brief: str, user_task: str, text: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 # ============================================================
-# LOCAL COPYEDIT (fallback still pro)
+# LOCAL COPYEDIT + LOCAL FIND (fallback)
 # ============================================================
 def local_cleanup(text: str) -> str:
     t = (text or "")
@@ -609,9 +743,6 @@ def _read_query_from_junk(default: str = "") -> str:
 
     return default
 
-def _join_paragraphs(paras: List[str]) -> str:
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
-
 # ============================================================
 # PARTNER ACTIONS (wired to ALL bottom bar buttons)
 # ============================================================
@@ -619,7 +750,8 @@ def partner_action(action: str):
     text = st.session_state.main_text or ""
     push_revision(action)
 
-    brief = build_partner_brief(action)
+    lane = current_lane_from_draft(text)
+    brief = build_partner_brief(action, lane=lane)
     use_ai = bool(OPENAI_API_KEY)
 
     def apply_replace(result: str):
@@ -638,11 +770,11 @@ def partner_action(action: str):
             st.session_state.last_action = action
 
     try:
-        # === GENERATIVE WRITING TOOLS (Story Bible + Project Voice) ===
+        # === GENERATIVE WRITING TOOLS (Story Bible + Lane-aware Trained Voice) ===
         if action == "Write":
             if use_ai:
                 task = (
-                    "Continue decisively. Add 1–3 paragraphs that advance the scene. "
+                    f"Continue decisively in the current lane ({lane}). Add 1–3 paragraphs that advance the scene. "
                     "MANDATORY: incorporate at least 2 Story Bible specifics. "
                     "No recap. No planning. No explanation. Just prose."
                 )
@@ -655,7 +787,7 @@ def partner_action(action: str):
         if action == "Rewrite":
             if use_ai:
                 task = (
-                    "Rewrite for professional quality. Tighten, sharpen, commit. "
+                    f"Rewrite for professional quality in the current lane ({lane}). Tighten, sharpen, commit. "
                     "Preserve meaning and voice. Preserve Story Bible canon. Return full revised text."
                 )
                 out = call_openai(brief, task, text)
@@ -667,7 +799,7 @@ def partner_action(action: str):
         if action == "Expand":
             if use_ai:
                 task = (
-                    "Expand with meaningful depth: concrete detail, specificity, subtext. "
+                    f"Expand with meaningful depth in the current lane ({lane}): concrete detail, specificity, subtext. "
                     "No padding. Preserve canon. Return full revised text."
                 )
                 out = call_openai(brief, task, text)
@@ -679,7 +811,7 @@ def partner_action(action: str):
         if action == "Rephrase":
             if use_ai:
                 task = (
-                    "Replace the final sentence with a stronger one (same meaning). "
+                    f"Replace the final sentence with a stronger one in the same lane ({lane}) (same meaning). "
                     "Preserve voice and canon. Return full text with that change applied."
                 )
                 out = call_openai(brief, task, text)
@@ -691,7 +823,7 @@ def partner_action(action: str):
         if action == "Describe":
             if use_ai:
                 task = (
-                    "Add vivid description with control: sharpen nouns/verbs, add sensory detail, keep pace. "
+                    f"Add vivid description with control in the current lane ({lane}): sharpen nouns/verbs, add sensory detail, keep pace. "
                     "Preserve canon. Return full revised text."
                 )
                 out = call_openai(brief, task, text)
@@ -700,12 +832,12 @@ def partner_action(action: str):
                 apply_replace(text)
             return
 
-        # === TEXT CHECKING / EDITING TOOLS (also project-aware) ===
+        # === TEXT CHECKING / EDITING TOOLS (project-aware) ===
         if action in ("Spell", "Grammar"):
             cleaned = local_cleanup(text)
             if use_ai:
                 task = (
-                    "Production copyedit: spelling/grammar/punctuation. Preserve voice and meaning. "
+                    f"Production copyedit in the current lane ({lane}): spelling/grammar/punctuation. Preserve voice and meaning. "
                     "Do not flatten style. Preserve canon. Return full revised text."
                 )
                 out = call_openai(brief, task, cleaned)
@@ -742,7 +874,7 @@ def partner_action(action: str):
             if use_ai:
                 task = (
                     f"Provide 12 strong replacements for: '{query}'. "
-                    "Rank by fit for this project voice and tone. "
+                    "Rank by fit for this project's voice and the current lane. "
                     "Avoid thesaurus weirdness. If nuance changes, label it."
                 )
                 out = call_openai(brief, task, query)
@@ -765,7 +897,7 @@ def partner_action(action: str):
             if use_ai:
                 task = (
                     f"Perform a sentence-level pass on the FINAL paragraph with directive: '{directive}'. "
-                    "Be decisive. Preserve meaning, voice, and canon. "
+                    f"Keep it in the same lane ({lane}). Be decisive. Preserve meaning, voice, and canon. "
                     "Improve rhythm, clarity, and force. Return ONLY the revised final paragraph."
                 )
                 out = call_openai(brief, task, paras[-1])
@@ -925,10 +1057,9 @@ with right:
 
     st.divider()
 
-    # 3. Trained Voices (selector upgraded: still includes Voice A/B, PLUS imported voices)
+    # 3. Trained Voices (selector upgraded: Voice A/B + imported voices)
     st.checkbox("Enable Trained Voice", key="vb_trained_on")
     trained_options = voice_names_for_selector()
-    # Keep user's current selection if it still exists
     if st.session_state.trained_voice not in trained_options:
         st.session_state.trained_voice = "— None —"
     st.selectbox(
@@ -948,7 +1079,7 @@ with right:
         key="voice_sample",
         height=100,
         disabled=not st.session_state.vb_match_on,
-        help="Import voice sample (session-only): First line '/savevoice Name' then paste sample. Also: /listvoices, /deletevoice Name"
+        help="Import a distinct voice (session-only): first line '/savevoice Name' then paste pages underneath. Also: /listvoices, /deletevoice Name"
     )
     st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on)
 
@@ -980,4 +1111,4 @@ if st.session_state.focus_mode:
         """,
         unsafe_allow_html=True
     )
-    st.info("Focus Mode enabled. Refresh page to exit.")
+    st.info("Auto-Save All")
