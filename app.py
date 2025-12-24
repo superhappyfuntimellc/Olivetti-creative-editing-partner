@@ -343,6 +343,7 @@ def default_voice_bible() -> Dict[str, Any]:
         "vb_trained_on": False,
         "vb_match_on": False,
         "vb_lock_on": False,
+        "use_global_voice": False,
 
         "writing_style": "Neutral",
         "genre": "Literary",
@@ -493,6 +494,7 @@ def vb_struct_from_session() -> Dict[str, Any]:
         "vb_trained_on": bool(st.session_state.vb_trained_on),
         "vb_match_on": bool(st.session_state.vb_match_on),
         "vb_lock_on": bool(st.session_state.vb_lock_on),
+        "use_global_voice": bool(st.session_state.get("use_global_voice", False)),
 
         "writing_style": st.session_state.writing_style,
         "genre": st.session_state.genre,
@@ -1001,7 +1003,7 @@ def build_partner_brief(action_name: str, lane: str, intensity_x: float) -> str:
     idea_bank = (st.session_state.junk or "").strip() or "— None —"
 
     vb_lines = []
-    if bool(st.session_state.get("global_voice_on", True)) and st.session_state.global_voice and st.session_state.global_voice != "— None —":
+    if bool(st.session_state.get("global_voice_on", True)) and bool(st.session_state.get("use_global_voice", False)) and st.session_state.global_voice and st.session_state.global_voice != "— None —":
         vb_lines.append(f"Global Voice: {st.session_state.global_voice} (strength {float(st.session_state.global_voice_strength):.2f})")
     if st.session_state.vb_style_on:
         vb_lines.append(f"Writing Style: {st.session_state.writing_style} (intensity {float(st.session_state.style_intensity):.2f})")
@@ -1027,7 +1029,7 @@ def build_partner_brief(action_name: str, lane: str, intensity_x: float) -> str:
 
     global_exemplars: List[str] = []
     gv = st.session_state.global_voice
-    if bool(st.session_state.get("global_voice_on", True)) and gv and gv != "— None —":
+    if bool(st.session_state.get("global_voice_on", True)) and bool(st.session_state.get("use_global_voice", False)) and gv and gv != "— None —":
         ctx2 = (st.session_state.main_text or "")[-2500:]
         query2 = ctx2 if ctx2.strip() else st.session_state.synopsis
         global_exemplars = retrieve_mixed_exemplars(gv, lane, query2)
@@ -1973,6 +1975,7 @@ with right:
 
     with st.expander("🌐 Global Voice (trainable)", expanded=False):
         st.checkbox("Enable Global Voice", key="global_voice_on", on_change=autosave)
+        st.checkbox("Use Global Voice (this project)", key="use_global_voice", disabled=not st.session_state.global_voice_on, on_change=autosave)
         gv_profiles = ["— None —"] + [global_label(n) for n in global_voice_names_for_selector()]
         if st.session_state.global_voice not in gv_profiles:
             st.session_state.global_voice = gv_profiles[1] if len(gv_profiles) > 1 else "— None —"
