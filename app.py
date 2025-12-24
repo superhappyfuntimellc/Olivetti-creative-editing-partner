@@ -2,23 +2,22 @@ import os
 import re
 import math
 import json
+import time
 import hashlib
-from io import BytesIO
 from datetime import datetime
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 import streamlit as st
 
-# ============================================================
-# OLIVETTI DESK — one file, production-stable, paste+click
-# ============================================================
+# =========================
+# Olivetti — Base Engine
+# Single-file Streamlit app
+# =========================
 
-# ============================================================
-# ENV / METADATA HYGIENE
-# ============================================================
-os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
-os.environ.setdefault("ms-appid", "olivetti-writing-desk")
+# --- Stability: disable file watcher issues in some deployments ---
+os.environ.setdefault("STREAMLIT_WATCH_FILES", "false")
 
+# --- OpenAI config (optional) ---
 DEFAULT_MODEL = "gpt-4.1-mini"
 try:
     OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")  # type: ignore[attr-defined]
@@ -27,194 +26,148 @@ except Exception:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
-# ============================================================
-# CONFIG
-# ============================================================
-st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
+# --- App config ---
+st.set_page_config(page_title="Olivetti", layout="wide", initial_sidebar_state="expanded")
 
-# Sexy, readable UI skin — no feature changes
+# --- Sexy & shiny skin (no layout change) ---
 st.markdown(
     """
-<style>
-:root{
-  --bg0:#07090d;
-  --bg1:#0b0f16;
-  --panel:rgba(17,21,28,.82);
-  --panel2:rgba(22,28,38,.78);
-  --stroke:rgba(202,168,106,.22);
-  --stroke2:rgba(255,255,255,.08);
-  --accent:#caa86a;
-  --text:#e9edf5;
-  --muted:rgba(233,237,245,.72);
-  --paper:#fbf7ee;
-  --ink:#14161a;
-}
+    <style>
+    :root{
+      --o-brass:#c7a24c;
+      --o-brass2:#e2c26d;
+      --o-steel:#15181f;
+      --o-graph:#0f1218;
+      --o-paper:#f6f2e8;
+      --o-ink:#111213;
+      --o-ink2:#2a2d34;
+      --o-shadow: 0 10px 30px rgba(0,0,0,.30);
+      --o-shadow2: 0 6px 18px rgba(0,0,0,.22);
+      --o-radius: 18px;
+    }
 
-html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-}
-h1, h2, h3, h4, h5, .stSubheader{
-  font-family: ui-serif, Georgia, "Palatino Linotype", Palatino, serif;
-}
+    /* Page background */
+    .stApp {
+      background: radial-gradient(1200px 700px at 20% 10%, rgba(199,162,76,.10), transparent 55%),
+                  radial-gradient(900px 520px at 85% 35%, rgba(226,194,109,.08), transparent 60%),
+                  linear-gradient(180deg, #0b0d12 0%, #0d1017 55%, #0b0d12 100%);
+      color: #f2f3f5;
+    }
 
-.stApp{
-  background:
-    radial-gradient(1200px 800px at 20% 0%, rgba(109,214,255,.10), transparent 60%),
-    radial-gradient(900px 700px at 90% 10%, rgba(202,168,106,.12), transparent 55%),
-    linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
-  color: var(--text);
-}
+    /* Make expanders/cards feel like a console */
+    div[data-testid="stExpander"] > details {
+      border-radius: var(--o-radius);
+      background: linear-gradient(180deg, rgba(21,24,31,.95), rgba(10,12,16,.92));
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: var(--o-shadow2);
+      overflow: hidden;
+    }
+    div[data-testid="stExpander"] > details > summary {
+      font-weight: 600;
+      letter-spacing: .2px;
+    }
 
-header[data-testid="stHeader"]{ background: transparent; }
+    /* Buttons: brass */
+    button[kind="primary"]{
+      background: linear-gradient(180deg, rgba(226,194,109,1), rgba(199,162,76,1)) !important;
+      color: #121212 !important;
+      border: 1px solid rgba(0,0,0,.35) !important;
+      box-shadow: 0 6px 18px rgba(199,162,76,.25);
+      border-radius: 14px !important;
+      transition: transform .08s ease, filter .08s ease;
+    }
+    button[kind="primary"]:hover{ transform: translateY(-1px); filter: brightness(1.03); }
 
-[data-testid="stSidebar"]{
-  background: linear-gradient(180deg, rgba(13,16,23,.92), rgba(10,12,18,.86));
-  border-right: 1px solid var(--stroke);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.03) inset, 10px 0 40px rgba(0,0,0,.35);
-}
-[data-testid="stSidebar"] *{ color: var(--text); }
+    /* Secondary buttons: steel */
+    button[kind="secondary"]{
+      background: linear-gradient(180deg, rgba(40,45,56,.95), rgba(20,24,32,.95)) !important;
+      border: 1px solid rgba(255,255,255,.12) !important;
+      border-radius: 14px !important;
+      box-shadow: var(--o-shadow2);
+      transition: transform .08s ease, filter .08s ease;
+    }
+    button[kind="secondary"]:hover{ transform: translateY(-1px); filter: brightness(1.05); }
 
-section.main > div.block-container{
-  padding-top: 1.25rem;
-  padding-bottom: 2rem;
-  max-width: 1500px;
-}
+    /* Writing paper */
+    div[data-testid="stTextArea"] textarea{
+      background: linear-gradient(180deg, rgba(246,242,232,1), rgba(241,236,224,1)) !important;
+      color: var(--o-ink) !important;
+      border-radius: 16px !important;
+      border: 1px solid rgba(0,0,0,.18) !important;
+      box-shadow: var(--o-shadow2);
+      font-size: 18px !important;
+      line-height: 1.65 !important;
+      padding: 18px !important;
+      min-height: 520px !important;
+      resize: vertical !important;
+    }
 
-details[data-testid="stExpander"]{
-  background: var(--panel);
-  border: 1px solid var(--stroke2);
-  border-radius: 16px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset, 0 12px 30px rgba(0,0,0,.28);
-  overflow: hidden;
-}
-details[data-testid="stExpander"] > summary{
-  padding: 0.65rem 0.9rem !important;
-  font-size: 0.95rem !important;
-  letter-spacing: .2px;
-  color: var(--text);
-  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,0));
-  border-bottom: 1px solid rgba(255,255,255,.06);
-}
-details[data-testid="stExpander"][open] > summary{ border-bottom: 1px solid rgba(202,168,106,.16); }
+    /* Inputs */
+    input, select{
+      border-radius: 14px !important;
+    }
 
-div[data-testid="stTextArea"] textarea{
-  font-size: 18px !important;
-  line-height: 1.65 !important;
-  padding: 18px !important;
-  resize: vertical !important;
-  min-height: 520px !important;
-  background: var(--paper) !important;
-  color: var(--ink) !important;
-  border: 1px solid rgba(20,22,26,.18) !important;
-  box-shadow: 0 1px 0 rgba(255,255,255,.55) inset, 0 10px 24px rgba(0,0,0,.18) !important;
-}
-div[data-testid="stTextArea"] textarea:focus{
-  outline: none !important;
-  border: 1px solid rgba(202,168,106,.55) !important;
-  box-shadow: 0 0 0 3px rgba(202,168,106,.18), 0 10px 24px rgba(0,0,0,.20) !important;
-}
-
-button[kind="secondary"], button[kind="primary"]{
-  font-size: 16px !important;
-  padding: 0.62rem 0.95rem !important;
-  border-radius: 14px !important;
-  border: 1px solid rgba(255,255,255,.10) !important;
-  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, filter .12s ease;
-}
-button[kind="primary"]{
-  background: linear-gradient(180deg, rgba(202,168,106,.95), rgba(150,118,64,.92)) !important;
-  color: #161616 !important;
-  box-shadow: 0 10px 24px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.22) inset !important;
-}
-button[kind="secondary"]{
-  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)) !important;
-  color: var(--text) !important;
-  box-shadow: 0 8px 18px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.25) inset !important;
-}
-button:hover{
-  transform: translateY(-1px);
-  border-color: rgba(202,168,106,.35) !important;
-  box-shadow: 0 12px 28px rgba(0,0,0,.30), 0 0 0 1px rgba(202,168,106,.20) inset !important;
-  filter: brightness(1.03);
-}
-
-[data-testid="stTabs"] [data-baseweb="tab-list"]{ gap: 8px; }
-[data-testid="stTabs"] button[role="tab"]{
-  border-radius: 999px !important;
-  padding: 0.35rem 0.8rem !important;
-  background: rgba(255,255,255,.04) !important;
-  border: 1px solid rgba(255,255,255,.08) !important;
-  color: var(--text) !important;
-}
-[data-testid="stTabs"] button[aria-selected="true"]{
-  background: rgba(202,168,106,.18) !important;
-  border-color: rgba(202,168,106,.28) !important;
-}
-</style>
-""",
+    /* Tighten margins a bit */
+    .block-container{ padding-top: 1.1rem; padding-bottom: 1.1rem; }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
 # ============================================================
-# GLOBALS
+# Constants
 # ============================================================
-LANES = ["Dialogue", "Narration", "Interiority", "Action"]
 BAYS = ["NEW", "ROUGH", "EDIT", "FINAL"]
+LANES = ["Dialogue", "Narration", "Interiority", "Action"]
 
+ACTIONS_PRIMARY = ["Write", "Rewrite", "Expand", "Rephrase", "Describe"]
+ACTIONS_SECONDARY = ["Spell", "Grammar", "Find", "Synonym", "Sentence"]
+ALL_ACTIONS = ACTIONS_PRIMARY + ACTIONS_SECONDARY
 
 ENGINE_STYLES = ["NARRATIVE", "DESCRIPTIVE", "EMOTIONAL", "LYRICAL"]
+ENGINE_GENRES = ["Romance", "Thriller", "Fantasy", "Science Fiction", "Comedy"]
+
+MAX_UPLOAD_BYTES = 10_000_000  # 10MB safety
+MAX_BANK_SAMPLES_PER_LANE = 250
+RETRIEVE_WINDOW = 160
+
 AUTOSAVE_DIR = "autosave"
-AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB guardrail
+AUTOSAVE_FILE = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
+AUTOSAVE_BAK = os.path.join(AUTOSAVE_DIR, "olivetti_state.bak.json")
 
 WORD_RE = re.compile(r"[A-Za-z']+")
 
-
 # ============================================================
-# UTILS
+# Utilities
 # ============================================================
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def clamp01(x: float) -> float:
+    try:
+        v = float(x)
+    except Exception:
+        v = 0.0
+    return max(0.0, min(1.0, v))
 
-def _normalize_text(s: str) -> str:
-    t = (s or "").strip()
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
+def normalize_text(s: str) -> str:
+    t = (s or "").replace("\r\n", "\n").replace("\r", "\n")
     t = re.sub(r"\n{3,}", "\n\n", t)
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
-
-def _split_paragraphs(text: str) -> List[str]:
-    t = _normalize_text(text)
+def split_paragraphs(text: str) -> List[str]:
+    t = normalize_text(text)
     if not t:
         return []
     return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
 
-
-def _safe_filename(s: str, fallback: str = "olivetti") -> str:
-    s = re.sub(r"[^\w\- ]+", "", (s or "").strip()).strip()
-    s = re.sub(r"\s+", "_", s)
-    return s[:80] if s else fallback
-
-
-def _clamp_text(s: str, max_chars: int = 12000) -> str:
-    s = s or ""
-    if len(s) <= max_chars:
-        return s
-    return s[: max_chars - 40] + "\n\n… (truncated) …"
-
-
-# ============================================================
-# VECTOR / VOICE VAULT (lightweight, no external deps)
-# ============================================================
-def _tokenize(text: str) -> List[str]:
+def tokenize(text: str) -> List[str]:
     return [w.lower() for w in WORD_RE.findall(text or "")]
 
-
-def _hash_vec(text: str, dims: int = 512) -> List[float]:
+def hash_vec(text: str, dims: int = 512) -> List[float]:
     vec = [0.0] * dims
-    toks = _tokenize(text)
+    toks = tokenize(text)
     for t in toks:
         h = int(hashlib.md5(t.encode("utf-8")).hexdigest(), 16)
         vec[h % dims] += 1.0
@@ -223,8 +176,7 @@ def _hash_vec(text: str, dims: int = 512) -> List[float]:
             vec[i] = 1.0 + math.log(v)
     return vec
 
-
-def _cosine(a: List[float], b: List[float]) -> float:
+def cosine(a: List[float], b: List[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
@@ -232,225 +184,54 @@ def _cosine(a: List[float], b: List[float]) -> float:
         return 0.0
     return dot / (na * nb)
 
-
-def default_voice_vault() -> Dict[str, Any]:
-    ts = now_ts()
-    return {
-        "Voice A": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
-        "Voice B": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
-    }
-
-
-def rebuild_vectors_in_voice_vault(compact_voices: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    for vname, v in (compact_voices or {}).items():
-        created_ts = v.get("created_ts") or now_ts()
-        lanes_in = v.get("lanes", {}) or {}
-        lanes_out: Dict[str, Any] = {ln: [] for ln in LANES}
-        for ln in LANES:
-            samples = lanes_in.get(ln, []) or []
-            for s in samples:
-                txt = _normalize_text(s.get("text", ""))
-                if not txt:
-                    continue
-                lanes_out[ln].append({
-                    "ts": s.get("ts") or now_ts(),
-                    "text": txt,
-                    "vec": _hash_vec(txt),
-                })
-        out[vname] = {"created_ts": created_ts, "lanes": lanes_out}
-    return out
-
-
-def compact_voice_vault(voices: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    for vname, v in (voices or {}).items():
-        lanes_out: Dict[str, Any] = {}
-        for ln in LANES:
-            samples = (v.get("lanes", {}) or {}).get(ln, []) or []
-            lanes_out[ln] = [
-                {"ts": s.get("ts"), "text": s.get("text", "")}
-                for s in samples
-                if (s.get("text") or "").strip()
-            ]
-        out[vname] = {"created_ts": v.get("created_ts"), "lanes": lanes_out}
-    return out
-
-
-def voice_names_for_selector() -> List[str]:
-    base = ["— None —", "Voice A", "Voice B"]
-    customs = sorted([k for k in (st.session_state.voices or {}).keys() if k not in ("Voice A", "Voice B")])
-    return base + customs
-
-
-def create_custom_voice(name: str) -> bool:
-    n = (name or "").strip()
-    if not n:
-        return False
-    if n in (st.session_state.voices or {}):
-        return False
-    st.session_state.voices[n] = {"created_ts": now_ts(), "lanes": {ln: [] for ln in LANES}}
-    return True
-
-
-def add_voice_sample(voice_name: str, lane: str, text: str) -> bool:
-    vn = (voice_name or "").strip()
-    if not vn:
-        return False
-    lane = lane if lane in LANES else "Narration"
-    t = _normalize_text(text)
-    if not t:
-        return False
-    v = (st.session_state.voices or {}).get(vn)
-    if not v:
-        # auto-create
-        create_custom_voice(vn)
-        v = st.session_state.voices.get(vn)
-    v.setdefault("lanes", {ln: [] for ln in LANES})
-    v["lanes"].setdefault(lane, [])
-    v["lanes"][lane].append({"ts": now_ts(), "text": t, "vec": _hash_vec(t)})
-    # cap per lane (keeps app fast)
-    if len(v["lanes"][lane]) > 60:
-        v["lanes"][lane] = v["lanes"][lane][-60:]
-    st.session_state.voices[vn] = v
-    return True
-
-
-def delete_voice_sample(voice_name: str, lane: str, index_from_end: int = 0) -> bool:
-    vn = (voice_name or "").strip()
-    v = (st.session_state.voices or {}).get(vn)
-    if not v:
-        return False
-    lane = lane if lane in LANES else "Narration"
-    arr = (v.get("lanes", {}) or {}).get(lane, []) or []
-    if not arr:
-        return False
-    idx = len(arr) - 1 - int(index_from_end)
-    if idx < 0 or idx >= len(arr):
-        return False
-    arr.pop(idx)
-    v["lanes"][lane] = arr
-    st.session_state.voices[vn] = v
-    return True
-
-
-def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
-    v = (st.session_state.voices or {}).get(voice_name)
-    if not v:
-        return []
-    lane = lane if lane in LANES else "Narration"
-    pool = v.get("lanes", {}).get(lane, []) or []
-    if not pool:
-        return []
-    qv = _hash_vec(query_text)
-    scored = [(_cosine(qv, s.get("vec", [])), s.get("text", "")) for s in pool[-140:]]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [txt for score, txt in scored[:k] if score > 0.0 and txt][:k]
-
-
-def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> List[str]:
-    lane_ex = retrieve_exemplars(voice_name, lane, query_text, k=2)
-    if lane == "Narration":
-        return lane_ex if lane_ex else retrieve_exemplars(voice_name, "Narration", query_text, k=3)
-    nar_ex = retrieve_exemplars(voice_name, "Narration", query_text, k=1)
-    out = lane_ex + [x for x in nar_ex if x not in lane_ex]
-    return out[:3]
-
+def safe_extract_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    t = text.strip()
+    if "```" in t:
+        parts = t.split("```")
+        if len(parts) >= 3:
+            t = parts[1]
+            t = re.sub(r"^\s*json\s*\n", "", t.strip(), flags=re.IGNORECASE)
+    start = t.find("{")
+    end = t.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    chunk = t[start:end+1]
+    try:
+        return json.loads(chunk)
+    except Exception:
+        return {}
 
 # ============================================================
-# LANE DETECTION (lightweight)
+# Lane detection (lightweight)
 # ============================================================
 THOUGHT_WORDS = {
-    "think",
-    "thought",
-    "felt",
-    "wondered",
-    "realized",
-    "remembered",
-    "knew",
-    "noticed",
-    "decided",
-    "hoped",
-    "feared",
-    "wanted",
-    "imagined",
-    "could",
-    "should",
-    "would",
+    "think","thought","felt","wondered","realized","remembered","knew","noticed","decided",
+    "hoped","feared","wanted","imagined","could","should","would"
 }
 ACTION_VERBS = {
-    "run",
-    "ran",
-    "walk",
-    "walked",
-    "grab",
-    "grabbed",
-    "push",
-    "pushed",
-    "pull",
-    "pulled",
-    "slam",
-    "slammed",
-    "hit",
-    "struck",
-    "kick",
-    "kicked",
-    "turn",
-    "turned",
-    "snap",
-    "snapped",
-    "dive",
-    "dived",
-    "duck",
-    "ducked",
-    "rush",
-    "rushed",
-    "lunge",
-    "lunged",
-    "climb",
-    "climbed",
-    "drop",
-    "dropped",
-    "throw",
-    "threw",
-    "fire",
-    "fired",
-    "aim",
-    "aimed",
-    "break",
-    "broke",
-    "shatter",
-    "shattered",
-    "step",
-    "stepped",
-    "move",
-    "moved",
-    "reach",
-    "reached",
+    "run","ran","walk","walked","grab","grabbed","push","pushed","pull","pulled","slam","slammed",
+    "hit","struck","kick","kicked","turn","turned","snap","snapped","dive","dived","duck","ducked",
+    "rush","rushed","lunge","lunged","climb","climbed","drop","dropped","throw","threw","fire","fired",
+    "aim","aimed","break","broke","shatter","shattered","step","stepped","move","moved","reach","reached"
 }
-
 
 def detect_lane(paragraph: str) -> str:
     p = (paragraph or "").strip()
     if not p:
         return "Narration"
-
     quote_count = p.count('"') + p.count("“") + p.count("”")
     has_dialogue_punct = p.startswith(("—", "- ", "“", '"'))
+    dialogue_score = (2.5 if quote_count >= 2 else 0.0) + (1.5 if has_dialogue_punct else 0.0)
 
-    dialogue_score = 0.0
-    if quote_count >= 2:
-        dialogue_score += 2.5
-    if has_dialogue_punct:
-        dialogue_score += 1.5
-
-    toks = _tokenize(p)
+    toks = tokenize(p)
     interior_score = 0.0
     if toks:
         first_person = sum(1 for t in toks if t in ("i", "me", "my", "mine", "myself"))
         thought_hits = sum(1 for t in toks if t in THOUGHT_WORDS)
         if first_person >= 2 and thought_hits >= 1:
-            interior_score += 2.2
+            interior_score = 2.2
 
     action_score = 0.0
     if toks:
@@ -464,1210 +245,1014 @@ def detect_lane(paragraph: str) -> str:
     lane = max(scores.items(), key=lambda kv: kv[1])[0]
     return "Narration" if scores[lane] < 0.9 else lane
 
-
 def current_lane_from_draft(text: str) -> str:
-    paras = _split_paragraphs(text)
-    if not paras:
-        return "Narration"
-    return detect_lane(paras[-1])
-
+    paras = split_paragraphs(text)
+    return detect_lane(paras[-1]) if paras else "Narration"
 
 # ============================================================
-# INTENSITY (GLOBAL AI AGGRESSION KNOB)
+# Data model defaults
 # ============================================================
-def intensity_profile(x: float) -> str:
-    if x <= 0.25:
-        return "LOW: conservative, literal, minimal invention, prioritize continuity and clarity."
-    if x <= 0.60:
-        return "MED: balanced creativity, stronger phrasing, controlled invention within canon."
-    if x <= 0.85:
-        return "HIGH: bolder choices, richer specificity; still obey canon and lane."
-    return "MAX: aggressive originality and voice; still obey canon, no derailments."
+def default_story_bible() -> Dict[str, str]:
+    return {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""}
 
-
-def temperature_from_intensity(x: float) -> float:
-    x = max(0.0, min(1.0, float(x)))
-    return 0.15 + (x * 0.95)
-
-
-# ============================================================
-# PROJECT MODEL
-# ============================================================
-def _fingerprint_story_bible(sb: Dict[str, str]) -> str:
-    parts = [
-        (sb.get("synopsis", "") or "").strip(),
-        (sb.get("genre_style_notes", "") or "").strip(),
-        (sb.get("world", "") or "").strip(),
-        (sb.get("characters", "") or "").strip(),
-        (sb.get("outline", "") or "").strip(),
-    ]
-    blob = "\n\n---\n\n".join(parts)
-    return hashlib.md5(blob.encode("utf-8")).hexdigest()
-
-
-def new_project_payload(title: str) -> Dict[str, Any]:
-    ts = now_ts()
-    title = title.strip() if title.strip() else "Untitled Project"
-    story_bible_id = hashlib.md5(f"sb|{title}|{ts}".encode("utf-8")).hexdigest()[:12]
+def default_voice_bible() -> Dict[str, Any]:
     return {
-        "id": hashlib.md5(f"{title}|{ts}".encode("utf-8")).hexdigest()[:12],
-        "title": title,
-        "created_ts": ts,
-        "updated_ts": ts,
-        "bay": "NEW",
-        "draft": "",
-        "story_bible_id": story_bible_id,
-        "story_bible_created_ts": ts,
-        "story_bible_binding": {"locked": True, "locked_ts": ts, "source": "system", "source_story_bible_id": None},
-        "story_bible_fingerprint": "",
-        "story_bible": {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""},
-        "voice_bible": {
-            "vb_style_on": True,
-            "vb_genre_on": True,
-            "vb_trained_on": False,
-            "vb_match_on": False,
-            "vb_lock_on": False,
-            "writing_style": "Neutral",
-            "genre": "Literary",
-            "trained_voice": "— None —",
-            "voice_sample": "",
-            "voice_lock_prompt": "",
-            "style_intensity": 0.6,
-            "genre_intensity": 0.6,
-            "trained_intensity": 0.7,
-            "match_intensity": 0.8,
-            "lock_intensity": 1.0,
-            "pov": "Close Third",
-            "tense": "Past",
-            "ai_intensity": 0.75,
-        },
-        "locks": {
-            "story_bible_lock": True,  # relationship lock
-            "sb_edit_unlocked": False,  # hard lock for edits (content)
-            "voice_fingerprint_lock": True,
-            "lane_lock": False,
-            "forced_lane": "Narration",
-        },
-        "voices": default_voice_vault(),
-        "style_banks": default_style_banks(),
-    }
-
-
-# ============================================================
-
-# ============================================================
-# ENGINE STYLE BANKS (project/workspace) — trainable writing styles
-# ============================================================
-def default_style_banks() -> Dict[str, Any]:
-    ts = now_ts()
-    return {s: {"created_ts": ts, "lanes": {ln: [] for ln in LANES}} for s in ENGINE_STYLES}
-
-
-def rebuild_vectors_in_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
-    src = banks or {}
-    out: Dict[str, Any] = {}
-    for style in ENGINE_STYLES:
-        b = (src.get(style) or {}) if isinstance(src, dict) else {}
-        lanes = b.get("lanes") or {}
-        new_lanes: Dict[str, List[Dict[str, Any]]] = {}
-        for ln in LANES:
-            samples = (lanes.get(ln) or []) if isinstance(lanes, dict) else []
-            rebuilt: List[Dict[str, Any]] = []
-            for it in samples:
-                if isinstance(it, str):
-                    t = it.strip()
-                    if not t:
-                        continue
-                    rebuilt.append({"ts": now_ts(), "text": t, "vec": _hash_vec(t)})
-                    continue
-                if not isinstance(it, dict):
-                    continue
-                t = (it.get("text") or "").strip()
-                if not t:
-                    continue
-                vec = it.get("vec") if isinstance(it.get("vec"), list) else None
-                if not vec:
-                    vec = _hash_vec(t)
-                rebuilt.append({"ts": it.get("ts") or now_ts(), "text": t, "vec": vec})
-            new_lanes[ln] = rebuilt
-        out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": new_lanes}
-    return out if out else default_style_banks()
-
-
-def compact_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(banks, dict):
-        return default_style_banks()
-    out: Dict[str, Any] = {}
-    for style in ENGINE_STYLES:
-        b = banks.get(style) or {}
-        lanes = b.get("lanes") or {}
-        c_lanes: Dict[str, List[Dict[str, Any]]] = {}
-        for ln in LANES:
-            ss = (lanes.get(ln) or []) if isinstance(lanes, dict) else []
-            cleaned: List[Dict[str, Any]] = []
-            for it in ss:
-                if not isinstance(it, dict):
-                    continue
-                t = (it.get("text") or "").strip()
-                if not t:
-                    continue
-                cleaned.append({"ts": it.get("ts") or now_ts(), "text": _clamp_text(t, 9000)})
-            c_lanes[ln] = cleaned
-        out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": c_lanes}
-    return out
-
-
-def add_style_samples(style: str, lane: str, raw_text: str, split_mode: str = "Paragraphs", cap_per_lane: int = 250) -> int:
-    style = (style or "").strip().upper()
-    if style not in ENGINE_STYLES:
-        return 0
-    lane = lane if lane in LANES else "Narration"
-    t = _normalize_text(raw_text)
-    if not t.strip():
-        return 0
-
-    parts = _split_paragraphs(t) if split_mode == "Paragraphs" else [t.strip()]
-    parts = [p for p in parts if len(p.strip()) >= 40]
-
-    sb = st.session_state.get("style_banks")
-    if not isinstance(sb, dict) or style not in sb:
-        sb = rebuild_vectors_in_style_banks(default_style_banks())
-        st.session_state.style_banks = sb
-
-    bank = sb.get(style) or {}
-    lanes = bank.get("lanes") or {}
-    lane_list = list((lanes.get(lane) or [])) if isinstance(lanes, dict) else []
-
-    added = 0
-    for p in parts:
-        p = _clamp_text(p.strip(), 9000)
-        lane_list.append({"ts": now_ts(), "text": p, "vec": _hash_vec(p)})
-        added += 1
-
-    # cap: keep newest
-    lane_list = lane_list[-cap_per_lane:]
-    lanes[lane] = lane_list
-    bank["lanes"] = lanes
-    sb[style] = bank
-    st.session_state.style_banks = sb
-    return added
-
-
-def delete_last_style_sample(style: str, lane: str) -> bool:
-    style = (style or "").strip().upper()
-    if style not in ENGINE_STYLES:
-        return False
-    lane = lane if lane in LANES else "Narration"
-    sb = st.session_state.get("style_banks") or {}
-    bank = (sb.get(style) or {})
-    lanes = bank.get("lanes") or {}
-    lane_list = (lanes.get(lane) or [])
-    if not lane_list:
-        return False
-    lane_list.pop()
-    lanes[lane] = lane_list
-    bank["lanes"] = lanes
-    sb[style] = bank
-    st.session_state.style_banks = sb
-    return True
-
-
-def clear_style_lane(style: str, lane: str) -> None:
-    style = (style or "").strip().upper()
-    if style not in ENGINE_STYLES:
-        return
-    lane = lane if lane in LANES else "Narration"
-    sb = st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks())
-    bank = sb.get(style) or {}
-    lanes = bank.get("lanes") or {}
-    lanes[lane] = []
-    bank["lanes"] = lanes
-    sb[style] = bank
-    st.session_state.style_banks = sb
-
-
-def retrieve_style_exemplars(style: str, lane: str, query: str, k: int = 2) -> List[str]:
-    style = (style or "").strip().upper()
-    if style not in ENGINE_STYLES:
-        return []
-    lane = lane if lane in LANES else "Narration"
-    sb = st.session_state.get("style_banks") or {}
-    bank = sb.get(style) or {}
-    lanes = bank.get("lanes") or {}
-    pool = (lanes.get(lane) or [])
-    if not pool:
-        # fallback: all lanes pooled
-        pool = []
-        for ln in LANES:
-            pool.extend(lanes.get(ln) or [])
-    if not pool:
-        return []
-    # favor newest slice for speed
-    pool = pool[-160:]
-    qv = _hash_vec(query or "")
-    scored = []
-    for it in pool:
-        if not isinstance(it, dict):
-            continue
-        vec = it.get("vec")
-        if not isinstance(vec, list):
-            continue
-        scored.append((_cosine(qv, vec), it.get("text") or ""))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    out = [t.strip() for _, t in scored[: max(0, k)] if (t or "").strip()]
-    return out
-
-
-_ENGINE_STYLE_GUIDE = {
-    "NARRATIVE": "Narrative clarity, clean cause→effect, confident pacing. Prioritize story logic and readability.",
-    "DESCRIPTIVE": "Sensory precision, spatial clarity, vivid concrete nouns, controlled detail density (no purple bloat).",
-    "EMOTIONAL": "Interior depth, subtext, emotional specificity. Show the feeling through behavior, sensation, and thought.",
-    "LYRICAL": "Rhythm, musical syntax, image-forward language, elegant metaphor with restraint. Make prose sing without obscuring meaning.",
-}
-
-
-def engine_style_directive(style: str, intensity: float, lane: str) -> str:
-    style = (style or "").strip().upper()
-    base = _ENGINE_STYLE_GUIDE.get(style, "")
-    x = float(intensity)
-    if x <= 0.33:
-        mod = "Keep it subtle and controlled. Minimal overt stylization."
-    elif x <= 0.66:
-        mod = "Medium stylization. Let the style clearly shape diction and cadence."
-    else:
-        mod = "High stylization. Strong stylistic fingerprint, but still professional and coherent."
-    return f"{base}\\nLane: {lane}\\n{mod}"
-
-
-# STORY BIBLE WORKSPACE (pre-project creation space)
-# ============================================================
-def default_story_bible_workspace() -> Dict[str, Any]:
-    ts = now_ts()
-    return {
-        "workspace_story_bible_id": hashlib.md5(f"wsb|{ts}".encode("utf-8")).hexdigest()[:12],
-        "workspace_story_bible_created_ts": ts,
-        "title": "",
-        "draft": "",
-        "story_bible": {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""},
-        "voice_sample": "",
-        "ai_intensity": 0.75,
-        "voices": default_voice_vault(),
-        "style_banks": default_style_banks(),
-    }
-
-
-def in_workspace_mode() -> bool:
-    return (st.session_state.active_bay == "NEW") and (st.session_state.project_id is None)
-
-
-def save_workspace_from_session() -> None:
-    w = st.session_state.sb_workspace or default_story_bible_workspace()
-    w["title"] = st.session_state.get("workspace_title", w.get("title", ""))
-    w["draft"] = st.session_state.main_text
-    w["story_bible"] = {
-        "synopsis": st.session_state.synopsis,
-        "genre_style_notes": st.session_state.genre_style_notes,
-        "world": st.session_state.world,
-        "characters": st.session_state.characters,
-        "outline": st.session_state.outline,
-    }
-    w["voice_sample"] = st.session_state.voice_sample
-    w["ai_intensity"] = float(st.session_state.ai_intensity)
-    w["voices"] = compact_voice_vault(st.session_state.voices)
-    w["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
-    st.session_state.sb_workspace = w
-
-
-def load_workspace_into_session() -> None:
-    w = st.session_state.sb_workspace or default_story_bible_workspace()
-    sb = w.get("story_bible", {}) or {}
-    st.session_state.project_id = None
-    st.session_state.project_title = "—"
-    st.session_state.main_text = w.get("draft", "") or ""
-    st.session_state.synopsis = sb.get("synopsis", "") or ""
-    st.session_state.genre_style_notes = sb.get("genre_style_notes", "") or ""
-    st.session_state.world = sb.get("world", "") or ""
-    st.session_state.characters = sb.get("characters", "") or ""
-    st.session_state.outline = sb.get("outline", "") or ""
-    st.session_state.voice_sample = w.get("voice_sample", "") or ""
-    st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
-    st.session_state.voices = rebuild_vectors_in_voice_vault(w.get("voices", default_voice_vault()))
-    st.session_state.voices_seeded = True
-    st.session_state.style_banks = rebuild_vectors_in_style_banks(w.get("style_banks", default_style_banks()))
-    st.session_state.workspace_title = w.get("title", "") or ""
-
-
-def reset_workspace_story_bible(keep_templates: bool = True) -> None:
-    old = st.session_state.sb_workspace or default_story_bible_workspace()
-    neww = default_story_bible_workspace()
-    if keep_templates:
-        neww["voice_sample"] = old.get("voice_sample", "")
-        neww["ai_intensity"] = float(old.get("ai_intensity", 0.75))
-        neww["voices"] = old.get("voices", default_voice_vault())
-        neww["style_banks"] = old.get("style_banks", default_style_banks())
-    st.session_state.sb_workspace = neww
-    if in_workspace_mode():
-        load_workspace_into_session()
-
-
-# ============================================================
-# SESSION INIT
-# ============================================================
-def init_state() -> None:
-    defaults: Dict[str, Any] = {
-        "active_bay": "NEW",
-        "projects": {},
-        "active_project_by_bay": {b: None for b in BAYS},
-        "sb_workspace": default_story_bible_workspace(),
-        "workspace_title": "",
-        "project_id": None,
-        "project_title": "—",
-        "autosave_time": None,
-        "last_action": "—",
-        "voice_status": "—",
-        "main_text": "",
-        "synopsis": "",
-        "genre_style_notes": "",
-        "world": "",
-        "characters": "",
-        "outline": "",
-        "junk": "",
-        "tool_output": "",
-        "pending_action": None,
+        # Tabs / modules (always add-only)
         "vb_style_on": True,
         "vb_genre_on": True,
         "vb_trained_on": False,
         "vb_match_on": False,
         "vb_lock_on": False,
-        "writing_style": "Neutral",
-        "genre": "Literary",
+        "vb_pov_on": True,
+        "vb_tense_on": True,
+
+        # Selections
+        "writing_style": "NARRATIVE",
+        "genre": "Romance",
         "trained_voice": "— None —",
-        "voice_sample": "",
-        "voice_lock_prompt": "",
-        "style_intensity": 0.6,
-        "genre_intensity": 0.6,
-        "trained_intensity": 0.7,
-        "match_intensity": 0.8,
-        "lock_intensity": 1.0,
         "pov": "Close Third",
         "tense": "Past",
+
+        # Prompts / exemplars
+        "voice_sample": "",
+        "voice_lock_prompt": "",
+
+        # Intensities (0–1)
+        "style_intensity": 0.65,
+        "genre_intensity": 0.65,
+        "trained_intensity": 0.70,
+        "match_intensity": 0.80,
+        "lock_intensity": 1.00,
+        "pov_strength": 0.90,
+        "tense_strength": 0.90,
+
+        # Global intensity (main left slider remains authoritative)
         "ai_intensity": 0.75,
-        "locks": {
-            "story_bible_lock": True,
-            "sb_edit_unlocked": False,
-            "voice_fingerprint_lock": True,
-            "lane_lock": False,
-            "forced_lane": "Narration",
-        },
-        "voices": {},
-        "voices_seeded": False,
-        "style_banks": rebuild_vectors_in_style_banks(default_style_banks()),
-        "last_saved_digest": "",
 
-        # internal UI helpers (not widgets)
-        "ui_notice": "",
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-
-init_state()
-
-
-# ============================================================
-# PROJECT <-> SESSION SYNC
-# ============================================================
-def load_project_into_session(pid: str) -> None:
-    p = (st.session_state.projects or {}).get(pid)
-    if not p:
-        return
-
-    st.session_state.project_id = pid
-    st.session_state.project_title = p.get("title", "Untitled Project")
-    st.session_state.main_text = p.get("draft", "")
-
-    sb = p.get("story_bible", {}) or {}
-    st.session_state.synopsis = sb.get("synopsis", "")
-    st.session_state.genre_style_notes = sb.get("genre_style_notes", "")
-    st.session_state.world = sb.get("world", "")
-    st.session_state.characters = sb.get("characters", "")
-    st.session_state.outline = sb.get("outline", "")
-
-    vb = p.get("voice_bible", {}) or {}
-    for k in [
-        "vb_style_on",
-        "vb_genre_on",
-        "vb_trained_on",
-        "vb_match_on",
-        "vb_lock_on",
-        "writing_style",
-        "genre",
-        "trained_voice",
-        "voice_sample",
-        "voice_lock_prompt",
-        "style_intensity",
-        "genre_intensity",
-        "trained_intensity",
-        "match_intensity",
-        "lock_intensity",
-        "pov",
-        "tense",
-        "ai_intensity",
-    ]:
-        if k in vb:
-            st.session_state[k] = vb[k]
-
-    locks = p.get("locks", {}) or {}
-    if isinstance(locks, dict):
-        # ensure new keys exist
-        locks.setdefault("sb_edit_unlocked", False)
-        st.session_state.locks = locks
-
-    st.session_state.voices = rebuild_vectors_in_voice_vault(p.get("voices", default_voice_vault()))
-    st.session_state.voices_seeded = True
-
-
-def save_session_into_project() -> None:
-    pid = st.session_state.project_id
-    if not pid:
-        return
-    p = (st.session_state.projects or {}).get(pid)
-    if not p:
-        return
-
-    p["updated_ts"] = now_ts()
-    p["draft"] = st.session_state.main_text
-    p["story_bible"] = {
-        "synopsis": st.session_state.synopsis,
-        "genre_style_notes": st.session_state.genre_style_notes,
-        "world": st.session_state.world,
-        "characters": st.session_state.characters,
-        "outline": st.session_state.outline,
-    }
-    p["voice_bible"] = {
-        "vb_style_on": st.session_state.vb_style_on,
-        "vb_genre_on": st.session_state.vb_genre_on,
-        "vb_trained_on": st.session_state.vb_trained_on,
-        "vb_match_on": st.session_state.vb_match_on,
-        "vb_lock_on": st.session_state.vb_lock_on,
-        "writing_style": st.session_state.writing_style,
-        "genre": st.session_state.genre,
-        "trained_voice": st.session_state.trained_voice,
-        "voice_sample": st.session_state.voice_sample,
-        "voice_lock_prompt": st.session_state.voice_lock_prompt,
-        "style_intensity": st.session_state.style_intensity,
-        "genre_intensity": st.session_state.genre_intensity,
-        "trained_intensity": st.session_state.trained_intensity,
-        "match_intensity": st.session_state.match_intensity,
-        "lock_intensity": st.session_state.lock_intensity,
-        "pov": st.session_state.pov,
-        "tense": st.session_state.tense,
-        "ai_intensity": float(st.session_state.ai_intensity),
-    }
-    p["locks"] = st.session_state.locks
-    p["voices"] = compact_voice_vault(st.session_state.voices)
-    p["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
-    # keep fingerprint up to date
-    try:
-        p["story_bible_fingerprint"] = _fingerprint_story_bible(p["story_bible"])
-    except Exception:
-        pass
-
-
-def list_projects_in_bay(bay: str) -> List[Tuple[str, str]]:
-    items: List[Tuple[str, str]] = []
-    for pid, p in (st.session_state.projects or {}).items():
-        if isinstance(p, dict) and p.get("bay") == bay:
-            items.append((pid, p.get("title", "Untitled")))
-    items.sort(key=lambda x: (x[1] or "").lower())
-    return items
-
-
-def ensure_bay_has_active_project(bay: str) -> None:
-    pid = (st.session_state.active_project_by_bay or {}).get(bay)
-    if pid and pid in (st.session_state.projects or {}) and (st.session_state.projects[pid].get("bay") == bay):
-        return
-    items = list_projects_in_bay(bay)
-    st.session_state.active_project_by_bay[bay] = items[0][0] if items else None
-
-
-def switch_bay(target_bay: str) -> None:
-    if in_workspace_mode():
-        save_workspace_from_session()
-    else:
-        save_session_into_project()
-
-    st.session_state.active_bay = target_bay
-    ensure_bay_has_active_project(target_bay)
-    pid = st.session_state.active_project_by_bay.get(target_bay)
-
-    if pid:
-        load_project_into_session(pid)
-        st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title}"
-    else:
-        st.session_state.project_id = None
-        st.session_state.project_title = "—"
-        if target_bay == "NEW":
-            load_workspace_into_session()
-            st.session_state.voice_status = "NEW: (Story Bible workspace)"
-        else:
-            st.session_state.main_text = ""
-            st.session_state.synopsis = ""
-            st.session_state.genre_style_notes = ""
-            st.session_state.world = ""
-            st.session_state.characters = ""
-            st.session_state.outline = ""
-            st.session_state.voice_sample = ""
-            st.session_state.ai_intensity = 0.75
-            st.session_state.voices = rebuild_vectors_in_voice_vault(default_voice_vault())
-            st.session_state.voices_seeded = True
-            st.session_state.voice_status = f"{target_bay}: (empty)"
-
-    st.session_state.last_action = f"Bay → {target_bay}"
-
-
-def create_project_from_current_bible(title: str) -> str:
-    title = title.strip() if title.strip() else f"New Project {now_ts()}"
-    source = "workspace" if in_workspace_mode() else "clone"
-
-    source_story_bible_id = None
-    source_story_bible_created_ts = None
-    if source == "workspace":
-        w = st.session_state.sb_workspace or default_story_bible_workspace()
-        source_story_bible_id = w.get("workspace_story_bible_id")
-        source_story_bible_created_ts = w.get("workspace_story_bible_created_ts")
-    else:
-        pid = st.session_state.project_id
-        if pid and pid in (st.session_state.projects or {}):
-            source_story_bible_id = st.session_state.projects[pid].get("story_bible_id")
-
-    p = new_project_payload(title)
-    p["bay"] = "NEW"
-    p["draft"] = st.session_state.main_text
-    p["story_bible"] = {
-        "synopsis": st.session_state.synopsis,
-        "genre_style_notes": st.session_state.genre_style_notes,
-        "world": st.session_state.world,
-        "characters": st.session_state.characters,
-        "outline": st.session_state.outline,
+        # Global Voice (optional): master in global settings + per-project toggle here
+        "use_global_voice": False,
+        "global_voice_strength": 0.65,
     }
 
-    if source == "workspace" and source_story_bible_id:
-        p["story_bible_id"] = source_story_bible_id
-        if source_story_bible_created_ts:
-            p["story_bible_created_ts"] = source_story_bible_created_ts
 
-    p["story_bible_binding"] = {
-        "locked": True,
-        "locked_ts": now_ts(),
-        "source": source,
-        "source_story_bible_id": source_story_bible_id,
-    }
-    p["story_bible_fingerprint"] = _fingerprint_story_bible(p["story_bible"])
+def default_action_controls() -> Dict[str, Any]:
+    items = {}
+    for a in ALL_ACTIONS:
+        items[a] = {"enabled": True, "use_global": True, "intensity": 0.75}
+    return {"locked": False, "items": items}
 
-    # Voice templates + intensity
-    p["voice_bible"]["voice_sample"] = st.session_state.voice_sample
-    p["voice_bible"]["ai_intensity"] = float(st.session_state.ai_intensity)
-    p["voices"] = compact_voice_vault(st.session_state.voices)
-    p["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
+def default_import_controls() -> Dict[str, Any]:
+    return {"use_ai": True, "use_global_intensity": True, "intensity": 0.65, "merge_mode": "Append"}
 
-    st.session_state.projects[p["id"]] = p
-    st.session_state.active_project_by_bay["NEW"] = p["id"]
+def _default_lane_bank() -> Dict[str, List[Dict[str, Any]]]:
+    return {ln: [] for ln in LANES}
 
-    if source == "workspace":
-        reset_workspace_story_bible(keep_templates=True)
+def default_style_banks() -> Dict[str, Any]:
+    # engine styles: per-lane exemplars
+    return {style: {"created_ts": now_ts(), "lanes": _default_lane_bank()} for style in ENGINE_STYLES}
 
-    return p["id"]
+def default_genre_banks() -> Dict[str, Any]:
+    return {g: {"created_ts": now_ts(), "lanes": _default_lane_bank()} for g in ENGINE_GENRES}
 
-
-def promote_project(pid: str, to_bay: str) -> None:
-    p = (st.session_state.projects or {}).get(pid)
-    if not p:
-        return
-    p["bay"] = to_bay
-    p["updated_ts"] = now_ts()
-
-
-def next_bay(bay: str) -> Optional[str]:
-    if bay == "NEW":
-        return "ROUGH"
-    if bay == "ROUGH":
-        return "EDIT"
-    if bay == "EDIT":
-        return "FINAL"
-    return None
-
-
-# ============================================================
-# AUTOSAVE (atomic + backup)
-# ============================================================
-def _payload() -> Dict[str, Any]:
-    if in_workspace_mode():
-        save_workspace_from_session()
-    else:
-        save_session_into_project()
+def default_global_voice() -> Dict[str, Any]:
+    # Global voice is optional and controlled by a master toggle + strength slider
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-prod-stable-v1"},
-        "active_bay": st.session_state.active_bay,
-        "active_project_by_bay": st.session_state.active_project_by_bay,
-        "sb_workspace": st.session_state.sb_workspace,
-        "projects": st.session_state.projects,
+        "enabled": False,
+        "strength": 0.65,
+        "created_ts": now_ts(),
+        "lanes": _default_lane_bank(),
     }
 
+def new_project_payload(title: str) -> Dict[str, Any]:
+    ts = now_ts()
+    title = (title or "").strip() or "Untitled Project"
+    pid = hashlib.md5(f"{title}|{ts}".encode("utf-8")).hexdigest()[:12]
+    sbid = hashlib.md5(f"sb|{title}|{ts}".encode("utf-8")).hexdigest()[:12]
+    return {
+        "id": pid,
+        "title": title,
+        "created_ts": ts,
+        "updated_ts": ts,
+        "bay": "NEW",
+        "draft": "",
+        "idea_bank": "",
+        "story_bible_id": sbid,
+        "story_bible_created_ts": ts,
+        "story_bible_locked_ts": "",  # set when project starts from workspace
+        "story_bible_lock_reason": "",
+        "story_bible_edit_unlocked": False,  # hard-lock behavior
+        "story_bible": default_story_bible(),
+        "voice_bible": default_voice_bible(),
+        "action_controls": default_action_controls(),
+        "import_controls": default_import_controls(),
+        "imports_log": [],
+        "style_banks": compact_banks(rebuild_banks(default_style_banks())),  # safe because helper defined below
+        "genre_banks": compact_banks(rebuild_banks(default_genre_banks())),
+        "voices": {},  # reserved for later trained "named voices" if you want
+    }
 
-def _digest(payload: Dict[str, Any]) -> str:
-    s = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    return hashlib.md5(s.encode("utf-8")).hexdigest()
+def default_workspace() -> Dict[str, Any]:
+    return {
+        "title": "",
+        "draft": "",
+        "idea_bank": "",
+        "story_bible": default_story_bible(),
+        "voice_bible": default_voice_bible(),
+        "action_controls": default_action_controls(),
+        "import_controls": default_import_controls(),
+        "imports_log": [],
+        "style_banks": compact_banks(rebuild_banks(default_style_banks())),
+        "genre_banks": compact_banks(rebuild_banks(default_genre_banks())),
+    }
 
+# ============================================================
+# Bank rebuild/compact helpers (style + genre + global voice)
+# Keep stable: vectors exist only in session; persisted data is compact.
+# ============================================================
+def _trim_sample(text: str) -> str:
+    t = normalize_text(text)
+    if len(t) > 2400:
+        t = t[:2400].rstrip() + "…"
+    return t
 
-def save_all_to_disk(force: bool = False) -> None:
-    """Autosave state to disk with an atomic write and a simple backup."""
-    try:
-        os.makedirs(AUTOSAVE_DIR, exist_ok=True)
-        payload = _payload()
-        dig = _digest(payload)
-        if (not force) and dig == st.session_state.last_saved_digest:
-            return
+def rebuild_banks(compact: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for name, blob in (compact or {}).items():
+        lanes_in = (blob or {}).get("lanes", {}) or {}
+        lanes_out: Dict[str, Any] = {ln: [] for ln in LANES}
+        for ln in LANES:
+            samples = lanes_in.get(ln, []) or []
+            for s in samples:
+                txt = _trim_sample(s.get("text", ""))
+                if len(txt) < 20:
+                    continue
+                lanes_out[ln].append({"ts": s.get("ts") or now_ts(), "text": txt, "vec": hash_vec(txt)})
+            # cap
+            lanes_out[ln] = lanes_out[ln][-MAX_BANK_SAMPLES_PER_LANE:]
+        out[name] = {"created_ts": blob.get("created_ts") or now_ts(), "lanes": lanes_out}
+    return out
 
-        tmp_path = AUTOSAVE_PATH + ".tmp"
-        bak_path = AUTOSAVE_PATH + ".bak"
+def compact_banks(full: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for name, blob in (full or {}).items():
+        lanes = (blob or {}).get("lanes", {}) or {}
+        out[name] = {
+            "created_ts": blob.get("created_ts") or now_ts(),
+            "lanes": {ln: [{"ts": s.get("ts"), "text": s.get("text", "")} for s in (lanes.get(ln, []) or []) if s.get("text")] for ln in LANES},
+        }
+    return out
 
-        try:
-            if os.path.exists(AUTOSAVE_PATH):
-                import shutil
+def retrieve_from_bank(bank_full: Dict[str, Any], name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
+    blob = (bank_full or {}).get(name)
+    if not blob:
+        return []
+    lane = lane if lane in LANES else "Narration"
+    pool = (blob.get("lanes", {}) or {}).get(lane, []) or []
+    if not pool:
+        return []
+    qv = hash_vec(query_text)
+    window = pool[-RETRIEVE_WINDOW:]
+    scored = [ (cosine(qv, s.get("vec", [])), s.get("text","")) for s in window ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out = [txt for score, txt in scored[:k] if score > 0 and txt]
+    return out[:k]
 
-                shutil.copy2(AUTOSAVE_PATH, bak_path)
-        except Exception:
-            pass
-
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, AUTOSAVE_PATH)
-
-        st.session_state.last_saved_digest = dig
-    except Exception as e:
-        st.session_state.voice_status = f"Autosave warning: {e}"
-
-
-def load_all_from_disk() -> None:
-    main_path = AUTOSAVE_PATH
-    bak_path = AUTOSAVE_PATH + ".bak"
-
-    def _boot_new() -> None:
-        st.session_state.sb_workspace = st.session_state.get("sb_workspace") or default_story_bible_workspace()
-        switch_bay("NEW")
-
-    if (not os.path.exists(main_path)) and (not os.path.exists(bak_path)):
-        _boot_new()
-        return
-
-    payload = None
-    loaded_from = "primary"
-    last_err = None
-    for path, label in ((main_path, "primary"), (bak_path, "backup")):
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-            loaded_from = label
-            break
-        except Exception as e:
-            last_err = e
-            payload = None
-
-    if payload is None:
-        st.session_state.voice_status = f"Load warning: {last_err}"
-        _boot_new()
-        return
-
-    try:
-        projs = payload.get("projects", {})
-        if isinstance(projs, dict):
-            st.session_state.projects = projs
-
-        apbb = payload.get("active_project_by_bay", {})
-        if isinstance(apbb, dict):
-            for b in BAYS:
-                apbb.setdefault(b, None)
-            st.session_state.active_project_by_bay = apbb
-
-        w = payload.get("sb_workspace")
-        if isinstance(w, dict) and w.get("workspace_story_bible_id"):
-            st.session_state.sb_workspace = w
-        else:
-            st.session_state.sb_workspace = default_story_bible_workspace()
-
-        # Migration guards
-        for _, p in (st.session_state.projects or {}).items():
-            if not isinstance(p, dict):
+# Global voice bank uses same structure as a bank named "GLOBAL"
+def rebuild_global_voice(compact: Dict[str, Any]) -> Dict[str, Any]:
+    compact = compact or default_global_voice()
+    lanes_out = {ln: [] for ln in LANES}
+    lanes_in = compact.get("lanes", {}) or {}
+    for ln in LANES:
+        for s in (lanes_in.get(ln, []) or []):
+            txt = _trim_sample(s.get("text", ""))
+            if len(txt) < 20:
                 continue
-            ts = p.get("created_ts") or now_ts()
-            title = p.get("title", "Untitled")
-            p.setdefault("story_bible_id", hashlib.md5(f"sb|{title}|{ts}".encode("utf-8")).hexdigest()[:12])
-            p.setdefault("story_bible_created_ts", ts)
-            if not isinstance(p.get("story_bible_binding"), dict):
-                p["story_bible_binding"] = {"locked": True, "locked_ts": ts, "source": "system", "source_story_bible_id": None}
-            p.setdefault("locks", {})
-            if isinstance(p["locks"], dict):
-                p["locks"].setdefault("sb_edit_unlocked", False)
-                p["locks"].setdefault("story_bible_lock", True)
-            p.setdefault("voices", default_voice_vault())
-            p.setdefault("style_banks", default_style_banks())
-            if "story_bible_fingerprint" not in p:
-                try:
-                    p["story_bible_fingerprint"] = _fingerprint_story_bible(p.get("story_bible", {}) or {})
-                except Exception:
-                    p["story_bible_fingerprint"] = ""
-
-        ab = payload.get("active_bay", "NEW")
-        if ab not in BAYS:
-            ab = "NEW"
-        st.session_state.active_bay = ab
-
-        ensure_bay_has_active_project(ab)
-        pid = st.session_state.active_project_by_bay.get(ab)
-        if pid:
-            load_project_into_session(pid)
-        else:
-            if ab == "NEW":
-                load_workspace_into_session()
-                st.session_state.voice_status = "NEW: (Story Bible workspace)"
-            else:
-                switch_bay(ab)
-
-        saved_at = (payload.get("meta", {}) or {}).get("saved_at", "")
-        src = "autosave" if loaded_from == "primary" else "backup autosave"
-        st.session_state.voice_status = f"Loaded {src} ({saved_at})."
-        st.session_state.last_saved_digest = _digest(_payload())
-    except Exception as e:
-        st.session_state.voice_status = f"Load warning: {e}"
-        _boot_new()
-
-
-if "did_load_autosave" not in st.session_state:
-    st.session_state.did_load_autosave = True
-    load_all_from_disk()
-
-
-def autosave() -> None:
-    st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
-    save_all_to_disk()
-
-
-# ============================================================
-# IMPORT / EXPORT
-# ============================================================
-def _read_uploaded_text(uploaded) -> Tuple[str, str]:
-    """Read .txt/.md/.docx from Streamlit UploadedFile."""
-    if uploaded is None:
-        return "", ""
-    name = getattr(uploaded, "name", "") or ""
-    raw = uploaded.getvalue()
-    if raw is None:
-        return "", name
-    if len(raw) > MAX_UPLOAD_BYTES:
-        return "", name
-    ext = os.path.splitext(name.lower())[1]
-
-    if ext in (".txt", ".md", ".markdown", ".text", ""):
-        try:
-            return raw.decode("utf-8"), name
-        except Exception:
-            return raw.decode("utf-8", errors="ignore"), name
-
-    if ext == ".docx":
-        try:
-            from docx import Document  # python-docx
-
-            doc = Document(BytesIO(raw))
-            parts = []
-            for p in doc.paragraphs:
-                t = (p.text or "").strip()
-                if t:
-                    parts.append(t)
-            return "\n\n".join(parts), name
-        except Exception:
-            try:
-                return raw.decode("utf-8", errors="ignore"), name
-            except Exception:
-                return "", name
-
-    try:
-        return raw.decode("utf-8", errors="ignore"), name
-    except Exception:
-        return "", name
-
-
-def _sb_sections_from_text_heuristic(text: str) -> Dict[str, str]:
-    t = _normalize_text(text)
-    if not t:
-        return {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""}
-
-    heading_map = {
-        "synopsis": ["synopsis", "premise", "logline"],
-        "genre_style_notes": ["genre", "style", "tone", "voice"],
-        "world": ["world", "setting", "lore"],
-        "characters": ["characters", "cast"],
-        "outline": ["outline", "beats", "plot", "structure"],
-    }
-
-    lines = t.splitlines()
-    buckets = {k: [] for k in heading_map.keys()}
-    current = None
-
-    def _match_heading(line: str) -> Optional[str]:
-        l = re.sub(r"^[#\-\*\s]+", "", (line or "").strip()).lower()
-        l = re.sub(r"[:\-\s]+$", "", l)
-        for key, aliases in heading_map.items():
-            if any(l == a or l.startswith(a + " ") for a in aliases):
-                return key
-        return None
-
-    for line in lines:
-        key = _match_heading(line)
-        if key:
-            current = key
-            continue
-        if current:
-            buckets[current].append(line)
-        else:
-            buckets["synopsis"].append(line)
-
-    return {k: _normalize_text("\n".join(v)) for k, v in buckets.items()}
-
-
-def _extract_json_object(s: str) -> Optional[Dict[str, Any]]:
-    if not s:
-        return None
-    s2 = re.sub(r"^```(?:json)?\s*|\s*```$", "", s.strip(), flags=re.IGNORECASE | re.MULTILINE)
-    m = re.search(r"\{.*\}", s2, flags=re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
-
-
-def story_bible_markdown(title: str, sb: Dict[str, str], meta: Dict[str, Any]) -> str:
-    t = title or "Untitled"
-
-    def sec(h: str, k: str) -> str:
-        body = (sb.get(k, "") or "").strip()
-        return f"## {h}\n\n{body}\n" if body else f"## {h}\n\n\n"
-
-    front = f"# Story Bible — {t}\n\n- Exported: {now_ts()}\n"
-    for mk, mv in (meta or {}).items():
-        front += f"- {mk}: {mv}\n"
-    front += "\n"
-    return front + "\n".join(
-        [
-            sec("Synopsis", "synopsis"),
-            sec("Genre / Style Notes", "genre_style_notes"),
-            sec("World", "world"),
-            sec("Characters", "characters"),
-            sec("Outline", "outline"),
-        ]
-    )
-
-
-def draft_markdown(title: str, draft: str, meta: Dict[str, Any]) -> str:
-    t = title or "Untitled"
-    front = f"# Draft — {t}\n\n- Exported: {now_ts()}\n"
-    for mk, mv in (meta or {}).items():
-        front += f"- {mk}: {mv}\n"
-    front += "\n---\n\n"
-    return front + (draft or "")
-
-
-def make_project_bundle(pid: str) -> Dict[str, Any]:
-    p = (st.session_state.projects or {}).get(pid, {}) or {}
-    return {"meta": {"exported_at": now_ts(), "type": "project_bundle", "version": "1"}, "project": p}
-
-
-def make_library_bundle() -> Dict[str, Any]:
-    if in_workspace_mode():
-        save_workspace_from_session()
-    else:
-        save_session_into_project()
+            lanes_out[ln].append({"ts": s.get("ts") or now_ts(), "text": txt, "vec": hash_vec(txt)})
+        lanes_out[ln] = lanes_out[ln][-MAX_BANK_SAMPLES_PER_LANE:]
     return {
-        "meta": {"exported_at": now_ts(), "type": "library_bundle", "version": "1"},
-        "active_bay": st.session_state.active_bay,
-        "active_project_by_bay": st.session_state.active_project_by_bay,
-        "sb_workspace": st.session_state.sb_workspace,
-        "projects": st.session_state.projects,
+        "enabled": bool(compact.get("enabled", False)),
+        "strength": clamp01(compact.get("strength", 0.65)),
+        "created_ts": compact.get("created_ts") or now_ts(),
+        "lanes": lanes_out,
     }
 
+def compact_global_voice(full: Dict[str, Any]) -> Dict[str, Any]:
+    full = full or default_global_voice()
+    lanes = full.get("lanes", {}) or {}
+    return {
+        "enabled": bool(full.get("enabled", False)),
+        "strength": clamp01(full.get("strength", 0.65)),
+        "created_ts": full.get("created_ts") or now_ts(),
+        "lanes": {ln: [{"ts": s.get("ts"), "text": s.get("text","")} for s in (lanes.get(ln,[]) or []) if s.get("text")] for ln in LANES},
+    }
 
-def _new_pid_like(seed: str) -> str:
-    return hashlib.md5(f"{seed}|{now_ts()}".encode("utf-8")).hexdigest()[:12]
-
-
-def import_project_bundle(bundle: Dict[str, Any], target_bay: str = "NEW", rename: str = "") -> Optional[str]:
-    if not isinstance(bundle, dict):
-        return None
-    proj = bundle.get("project")
-    if not isinstance(proj, dict):
-        return None
-
-    pid = str(proj.get("id") or _new_pid_like("import"))
-    if pid in (st.session_state.projects or {}):
-        pid = _new_pid_like(pid)
-
-    proj = json.loads(json.dumps(proj))
-    proj["id"] = pid
-    if rename.strip():
-        proj["title"] = rename.strip()
-    if target_bay in BAYS:
-        proj["bay"] = target_bay
-    proj["updated_ts"] = now_ts()
-
-    ts = proj.get("created_ts") or now_ts()
-    title = proj.get("title", "Untitled")
-    proj.setdefault("story_bible_id", hashlib.md5(f"sb|{title}|{ts}".encode("utf-8")).hexdigest()[:12])
-    proj.setdefault("story_bible_created_ts", ts)
-    if not isinstance(proj.get("story_bible_binding"), dict):
-        proj["story_bible_binding"] = {"locked": True, "locked_ts": ts, "source": "import", "source_story_bible_id": None}
-    proj.setdefault("locks", {})
-    if isinstance(proj["locks"], dict):
-        proj["locks"].setdefault("sb_edit_unlocked", False)
-        proj["locks"].setdefault("story_bible_lock", True)
-    proj.setdefault("voices", default_voice_vault())
-    proj.setdefault("style_banks", default_style_banks())
-    proj.setdefault("story_bible_fingerprint", "")
-
-    st.session_state.projects[pid] = proj
-    st.session_state.active_project_by_bay[proj.get("bay", "NEW")] = pid
-    return pid
-
-
-def import_library_bundle(bundle: Dict[str, Any]) -> int:
-    if not isinstance(bundle, dict):
-        return 0
-    projs = bundle.get("projects")
-    if not isinstance(projs, dict):
-        return 0
-    imported = 0
-    for _, proj in projs.items():
-        if not isinstance(proj, dict):
-            continue
-        pid = import_project_bundle({"project": proj}, target_bay=proj.get("bay", "NEW"), rename="")
-        if pid:
-            imported += 1
-
-    w = bundle.get("sb_workspace")
-    if isinstance(w, dict) and w.get("workspace_story_bible_id"):
-        cur = st.session_state.sb_workspace or default_story_bible_workspace()
-        cur_sb = (cur.get("story_bible", {}) or {})
-        cur_empty = not any((cur_sb.get(k, "") or "").strip() for k in ["synopsis", "genre_style_notes", "world", "characters", "outline"])
-        if cur_empty:
-            st.session_state.sb_workspace = w
-    return imported
-
+def retrieve_from_global_voice(global_full: Dict[str, Any], lane: str, query_text: str, k: int = 2) -> List[str]:
+    lane = lane if lane in LANES else "Narration"
+    pool = (global_full.get("lanes", {}) or {}).get(lane, []) or []
+    if not pool:
+        return []
+    qv = hash_vec(query_text)
+    window = pool[-RETRIEVE_WINDOW:]
+    scored = [ (cosine(qv, s.get("vec", [])), s.get("text","")) for s in window ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [txt for score, txt in scored[:k] if score > 0 and txt][:k]
 
 # ============================================================
-# JUNK DRAWER COMMANDS
+# Prompt directives (adaptive)
 # ============================================================
-CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
-CMD_CREATE = re.compile(r"^\s*/create\s*:\s*(.+)$", re.IGNORECASE)
-CMD_PROMOTE = re.compile(r"^\s*/promote\s*$", re.IGNORECASE)
+def intensity_profile(x: float) -> str:
+    x = clamp01(x)
+    if x <= 0.25:
+        return "LOW: conservative, literal, minimal invention; prioritize continuity and clarity."
+    if x <= 0.60:
+        return "MED: balanced creativity; controlled invention within canon."
+    if x <= 0.85:
+        return "HIGH: bolder choices and richer specificity; still obey canon."
+    return "MAX: aggressive originality and voice; still obey canon; no random derailments."
 
+def temperature_from_intensity(x: float) -> float:
+    x = clamp01(x)
+    return 0.15 + (x * 0.95)
 
-def _run_find(term: str) -> str:
-    term = (term or "").strip()
-    if not term:
-        return "Find: missing search term. Use /find: word"
+def engine_style_directive(style: str, x: float, lane: str) -> str:
+    x = clamp01(x)
+    base = {
+        "NARRATIVE": "clarity, scene logic, cause→effect, controlled pacing, strong verbs, professional prose",
+        "DESCRIPTIVE": "sensory specificity, concrete detail, spatial clarity, texture/light/sound, avoid purple unless intensity is high",
+        "EMOTIONAL": "interiority, stakes, subtext, desire/fear, emotional logic; avoid melodrama unless intensity is high",
+        "LYRICAL": "musical cadence, image-driven language, metaphor discipline; never obscure meaning; keep story moving",
+    }.get(style, "professional prose")
+    weight = "subtle" if x < 0.35 else "strong" if x < 0.75 else "dominant"
+    return f"ENGINE STYLE: {style} ({weight}). Prioritize: {base}. Lane-aware: {lane}. Intensity={x:.2f}."
 
-    def _hits(label: str, text: str) -> List[str]:
-        lines = (text or "").splitlines()
-        out = []
-        for i, line in enumerate(lines, start=1):
-            if term.lower() in (line or "").lower():
-                out.append(f"{label} L{i}: {line.strip()}")
-            if len(out) >= 20:
-                break
-        return out
-
-    hits = []
-    hits += _hits("DRAFT", st.session_state.main_text)
-    hits += _hits("SYNOPSIS", st.session_state.synopsis)
-    hits += _hits("WORLD", st.session_state.world)
-    hits += _hits("CHARS", st.session_state.characters)
-    hits += _hits("OUTLINE", st.session_state.outline)
-
-    if not hits:
-        return f"Find: no matches for '{term}'."
-    return "\n".join(hits[:30])
-
-
-def handle_junk_commands() -> None:
-    raw = (st.session_state.junk or "").strip()
-    if not raw:
-        return
-
-    m = CMD_CREATE.match(raw)
-    if m:
-        title = m.group(1).strip()
-        pid = create_project_from_current_bible(title)
-        st.session_state.active_project_by_bay["NEW"] = pid
-        st.session_state.active_bay = "NEW"
-        load_project_into_session(pid)
-        st.session_state.voice_status = f"Created project in NEW: {st.session_state.project_title}"
-        st.session_state.last_action = "Create Project"
-        st.session_state.junk = ""
-        autosave()
-        return
-
-    if CMD_PROMOTE.match(raw):
-        pid = st.session_state.project_id
-        bay = st.session_state.active_bay
-        nb = next_bay(bay)
-        if not pid or not nb:
-            st.session_state.tool_output = "Promote: no project selected, or already FINAL."
-            st.session_state.voice_status = "Promote blocked."
-            st.session_state.junk = ""
-            autosave()
-            return
-        save_session_into_project()
-        promote_project(pid, nb)
-        st.session_state.active_project_by_bay[nb] = pid
-        switch_bay(nb)
-        st.session_state.voice_status = f"Promoted → {nb}: {st.session_state.project_title}"
-        st.session_state.last_action = f"Promote → {nb}"
-        st.session_state.junk = ""
-        autosave()
-        return
-
-    m = CMD_FIND.match(raw)
-    if m:
-        st.session_state.tool_output = _clamp_text(_run_find(m.group(1)))
-        st.session_state.voice_status = "Find complete"
-        st.session_state.last_action = "Find"
-        st.session_state.junk = ""
-        autosave()
-        return
-
-
-# Run junk commands early (before widgets instantiate)
-handle_junk_commands()
-
+def engine_genre_directive(genre: str, x: float, lane: str) -> str:
+    x = clamp01(x)
+    base = {
+        "Romance": "chemistry, longing, intimacy tension, emotional stakes, relational power shifts; keep consent and clarity; avoid clichés unless knowingly stylized",
+        "Thriller": "tension escalation, urgency, risk, clean cause→effect, sharp beats, compression; avoid meandering",
+        "Fantasy": "wonder, mythic resonance, concrete lore, consistent rules, vivid setting; avoid exposition dumps",
+        "Science Fiction": "conceptual rigor, plausible tech/social speculation, crisp terminology; show consequences; avoid sterile textbook tone",
+        "Comedy": "timing, contrast, voice, surprise, comedic misdirection; keep character truth; avoid cheap randomness",
+    }.get(genre, "genre discipline")
+    weight = "subtle" if x < 0.35 else "strong" if x < 0.75 else "dominant"
+    return f"ENGINE GENRE: {genre} ({weight}). Prioritize: {base}. Lane-aware: {lane}. Intensity={x:.2f}."
 
 # ============================================================
-# AI BRIEF + CALL
+# OpenAI call (optional)
 # ============================================================
-def _story_bible_text() -> str:
-    sb = []
-    if (st.session_state.synopsis or "").strip():
-        sb.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
-    if (st.session_state.genre_style_notes or "").strip():
-        sb.append(f"GENRE/STYLE NOTES:\n{st.session_state.genre_style_notes.strip()}")
-    if (st.session_state.world or "").strip():
-        sb.append(f"WORLD:\n{st.session_state.world.strip()}")
-    if (st.session_state.characters or "").strip():
-        sb.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
-    if (st.session_state.outline or "").strip():
-        sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
-    return "\n\n".join(sb).strip() if sb else "— None provided —"
-
-
-def build_partner_brief(action_name: str, lane: str) -> str:
-    story_bible = _story_bible_text()
-    vb = []
-    if st.session_state.vb_style_on:
-        vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
-    if st.session_state.vb_genre_on:
-        vb.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
-    if st.session_state.vb_trained_on and st.session_state.trained_voice and st.session_state.trained_voice != "— None —":
-        vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
-    if st.session_state.vb_match_on and (st.session_state.voice_sample or "").strip():
-        vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
-    if st.session_state.vb_lock_on and (st.session_state.voice_lock_prompt or "").strip():
-        vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
-    voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
-
-    # Engine Style (trainable banks)
-    style_name = (st.session_state.writing_style or "").strip().upper()
-    style_directive = ""
-    style_exemplars: List[str] = []
-    if st.session_state.vb_style_on and style_name in ENGINE_STYLES:
-        style_directive = engine_style_directive(style_name, float(st.session_state.style_intensity), lane)
-        ctx2 = (st.session_state.main_text or "")[-2500:]
-        q2 = ctx2 if ctx2.strip() else (st.session_state.synopsis or "")
-        k = 1 + int(max(0.0, min(1.0, float(st.session_state.style_intensity))) * 2.0)
-        style_exemplars = retrieve_style_exemplars(style_name, lane, q2, k=k)
-
-    exemplars: List[str] = []
-    tv = st.session_state.trained_voice
-    if st.session_state.vb_trained_on and tv and tv != "— None —":
-        ctx = (st.session_state.main_text or "")[-2500:]
-        query = ctx if ctx.strip() else st.session_state.synopsis
-        exemplars = retrieve_mixed_exemplars(tv, lane, query)
-    ex_block = "\n\n---\n\n".join(exemplars) if exemplars else "— None —"
-    style_ex_block = "\n\n---\n\n".join(style_exemplars) if style_exemplars else "— None —"
-
-    ai_x = float(st.session_state.ai_intensity)
-    return f"""
-YOU ARE OLIVETTI: the author's personal writing and editing partner.
-Professional output only. No UI talk. No process talk.
-
-STORY BIBLE IS CANON + IDEA BANK.
-When generating NEW material, pull at least 2 concrete specifics from the Story Bible.
-Never contradict canon. Never add random characters/places unless Story Bible supports it.
-
-LANE: {lane}
-
-AI INTENSITY: {ai_x:.2f}
-INTENSITY PROFILE: {intensity_profile(ai_x)}
-
-VOICE CONTROLS:
-{voice_controls}
-
-ENGINE STYLE DIRECTIVE:
-{style_directive if style_directive else "— None —"}
-
-STYLE EXEMPLARS (mimic cadence/diction, not content):
-{style_ex_block}
-
-TRAINED EXEMPLARS (mimic patterns, not content):
-{ex_block}
-
-STORY BIBLE:
-{story_bible}
-
-ACTION: {action_name}
-""".strip()
-
-
-def call_openai(system_brief: str, user_task: str, text: str) -> str:
+def call_openai(system: str, user: str, intensity_x: float) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not set")
     try:
         from openai import OpenAI
     except Exception as e:
-        raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
+        raise RuntimeError("OpenAI SDK not installed. Add 'openai' to requirements.txt.") from e
 
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY, timeout=60)
-    except TypeError:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
+    client = OpenAI(api_key=OPENAI_API_KEY, timeout=60)
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": system_brief},
-            {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
-        ],
-        temperature=temperature_from_intensity(st.session_state.ai_intensity),
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        temperature=temperature_from_intensity(intensity_x),
     )
     return (resp.choices[0].message.content or "").strip()
 
+# ============================================================
+# Session state init
+# ============================================================
+def ss_setdefault(key: str, value: Any) -> None:
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+def init_state() -> None:
+    ss_setdefault("active_bay", "NEW")
+    ss_setdefault("projects", {})
+    ss_setdefault("active_project_by_bay", {b: None for b in BAYS})
+    ss_setdefault("workspace", default_workspace())
+
+    # current context (mirrors either workspace or a project)
+    ss_setdefault("project_id", None)
+    ss_setdefault("project_title", "—")
+
+    # shared editable fields (current context)
+    ss_setdefault("workspace_title", "")
+    ss_setdefault("main_text", "")
+    ss_setdefault("junk", "")
+
+    sb = default_story_bible()
+    for k in sb:
+        ss_setdefault(k, "")
+
+    vb = default_voice_bible()
+    for k, v in vb.items():
+        ss_setdefault(k, v)
+
+    ss_setdefault("locks", {"story_bible_edit_unlocked": False})
+    ss_setdefault("ai_intensity", 0.75)
+
+    # global voice
+    ss_setdefault("global_voice", compact_global_voice(rebuild_global_voice(default_global_voice())))
+    ss_setdefault("global_voice_full", rebuild_global_voice(st.session_state.global_voice))
+
+    # banks live in session as full vectors for current context
+    ss_setdefault("style_banks_full", rebuild_banks(st.session_state.workspace.get("style_banks", default_style_banks())))
+    ss_setdefault("genre_banks_full", rebuild_banks(st.session_state.workspace.get("genre_banks", default_genre_banks())))
+
+    # action controls scalars
+    ss_setdefault("ac_locked", False)
+    for a in ALL_ACTIONS:
+        ss_setdefault(f"ac__{a}__enabled", True)
+        ss_setdefault(f"ac__{a}__use_global", True)
+        ss_setdefault(f"ac__{a}__intensity", 0.75)
+
+    # import controls scalars
+    ss_setdefault("import_use_ai", True)
+    ss_setdefault("import_use_global", True)
+    ss_setdefault("import_intensity", 0.65)
+    ss_setdefault("import_merge_mode", "Append")
+    ss_setdefault("import_paste", "")
+
+    # trainer UI
+    ss_setdefault("style_train_text", "")
+    ss_setdefault("style_train_upload", None)
+    ss_setdefault("style_train_style", ENGINE_STYLES[0])
+    ss_setdefault("style_train_lane", "Narration")
+    ss_setdefault("style_train_split", "Paragraphs")
+
+    ss_setdefault("genre_train_text", "")
+    ss_setdefault("genre_train_upload", None)
+    ss_setdefault("genre_train_genre", ENGINE_GENRES[0])
+    ss_setdefault("genre_train_lane", "Narration")
+    ss_setdefault("genre_train_split", "Paragraphs")
+
+    ss_setdefault("tool_output", "")
+    ss_setdefault("voice_status", "—")
+    ss_setdefault("last_action", "—")
+    ss_setdefault("autosave_time", None)
+
+    ss_setdefault("_dispatch", None)  # action queue
+    ss_setdefault("_last_saved_digest", "")
+
+init_state()
+
+# ============================================================
+# Persistence (atomic + backup)
+# ============================================================
+def _payload() -> Dict[str, Any]:
+    # snapshot current context back into containers
+    save_current_context()
+    return {
+        "meta": {"saved_at": now_ts(), "version": "olivetti-base-engine-v1"},
+        "active_bay": st.session_state.active_bay,
+        "active_project_by_bay": st.session_state.active_project_by_bay,
+        "projects": st.session_state.projects,
+        "workspace": st.session_state.workspace,
+        "global_voice": compact_global_voice(st.session_state.global_voice_full),
+    }
+
+def _digest(obj: Dict[str, Any]) -> str:
+    s = json.dumps(obj, ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+def autosave(force: bool = False) -> None:
+    try:
+        os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+        payload = _payload()
+        dig = _digest(payload)
+        if (not force) and dig == st.session_state._last_saved_digest:
+            return
+        tmp = AUTOSAVE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        # rotate backup
+        if os.path.exists(AUTOSAVE_FILE):
+            try:
+                with open(AUTOSAVE_FILE, "r", encoding="utf-8") as rf:
+                    prev = rf.read()
+                with open(AUTOSAVE_BAK, "w", encoding="utf-8") as bf:
+                    bf.write(prev)
+            except Exception:
+                pass
+        os.replace(tmp, AUTOSAVE_FILE)
+        st.session_state._last_saved_digest = dig
+        st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
+    except Exception as e:
+        st.session_state.voice_status = f"Autosave warning: {e}"
+
+def load_autosave() -> None:
+    def _load(path: str) -> Optional[Dict[str, Any]]:
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    payload = _load(AUTOSAVE_FILE) or _load(AUTOSAVE_BAK)
+    if not payload:
+        return
+    try:
+        st.session_state.active_bay = payload.get("active_bay", "NEW")
+        st.session_state.active_project_by_bay = payload.get("active_project_by_bay", {b: None for b in BAYS})
+        st.session_state.projects = payload.get("projects", {})
+        st.session_state.workspace = payload.get("workspace", default_workspace())
+
+        # global voice compact -> rebuild
+        gv_compact = payload.get("global_voice", default_global_voice())
+        st.session_state.global_voice = gv_compact
+        st.session_state.global_voice_full = rebuild_global_voice(gv_compact)
+
+        # ensure keys exist
+        for b in BAYS:
+            st.session_state.active_project_by_bay.setdefault(b, None)
+
+        # load current context into session keys (without dispatch hazards — this happens at top)
+        load_context_from_bay_selection(st.session_state.active_bay)
+
+        st.session_state.voice_status = f"Loaded autosave ({payload.get('meta', {}).get('saved_at','')})."
+        st.session_state._last_saved_digest = _digest(_payload())
+    except Exception as e:
+        st.session_state.voice_status = f"Load warning: {e}"
+
+if "did_load" not in st.session_state:
+    st.session_state.did_load = True
+    load_autosave()
+
+# ============================================================
+# Context save/load wiring
+# ============================================================
+def action_controls_struct_from_scalars() -> Dict[str, Any]:
+    items = {}
+    for a in ALL_ACTIONS:
+        items[a] = {
+            "enabled": bool(st.session_state.get(f"ac__{a}__enabled", True)),
+            "use_global": bool(st.session_state.get(f"ac__{a}__use_global", True)),
+            "intensity": clamp01(st.session_state.get(f"ac__{a}__intensity", 0.75)),
+        }
+    return {"locked": bool(st.session_state.get("ac_locked", False)), "items": items}
+
+def apply_action_controls_struct(ac: Dict[str, Any]) -> None:
+    ac = ac or default_action_controls()
+    st.session_state.ac_locked = bool(ac.get("locked", False))
+    items = ac.get("items", {}) or {}
+    for a in ALL_ACTIONS:
+        it = items.get(a, {}) or {}
+        st.session_state[f"ac__{a}__enabled"] = bool(it.get("enabled", True))
+        st.session_state[f"ac__{a}__use_global"] = bool(it.get("use_global", True))
+        st.session_state[f"ac__{a}__intensity"] = clamp01(it.get("intensity", 0.75))
+
+def import_controls_struct_from_scalars() -> Dict[str, Any]:
+    return {
+        "use_ai": bool(st.session_state.import_use_ai),
+        "use_global_intensity": bool(st.session_state.import_use_global),
+        "intensity": clamp01(st.session_state.import_intensity),
+        "merge_mode": st.session_state.import_merge_mode if st.session_state.import_merge_mode in ("Append","Replace") else "Append",
+    }
+
+def apply_import_controls_struct(ic: Dict[str, Any]) -> None:
+    ic = ic or default_import_controls()
+    st.session_state.import_use_ai = bool(ic.get("use_ai", True))
+    st.session_state.import_use_global = bool(ic.get("use_global_intensity", True))
+    st.session_state.import_intensity = clamp01(ic.get("intensity", 0.65))
+    mm = ic.get("merge_mode", "Append")
+    st.session_state.import_merge_mode = mm if mm in ("Append","Replace") else "Append"
+
+def voice_bible_struct_from_session() -> Dict[str, Any]:
+    keys = default_voice_bible().keys()
+    return {k: st.session_state.get(k) for k in keys}
+
+def apply_voice_bible_struct(vb: Dict[str, Any]) -> None:
+    vb = vb or default_voice_bible()
+    for k, v in default_voice_bible().items():
+        st.session_state[k] = vb.get(k, v)
+
+def story_bible_struct_from_session() -> Dict[str, str]:
+    return {k: st.session_state.get(k, "") for k in default_story_bible().keys()}
+
+def apply_story_bible_struct(sb: Dict[str, Any]) -> None:
+    sb = sb or default_story_bible()
+    for k in default_story_bible().keys():
+        st.session_state[k] = sb.get(k, "")
+
+def save_current_context() -> None:
+    # save session -> current container (workspace or project)
+    pid = st.session_state.project_id
+    if pid and pid in st.session_state.projects:
+        p = st.session_state.projects[pid]
+        p["updated_ts"] = now_ts()
+        p["draft"] = st.session_state.main_text
+        p["idea_bank"] = st.session_state.junk
+        p["story_bible"] = story_bible_struct_from_session()
+        p["voice_bible"] = voice_bible_struct_from_session()
+        p["action_controls"] = action_controls_struct_from_scalars()
+        p["import_controls"] = import_controls_struct_from_scalars()
+        # persist compact banks
+        p["style_banks"] = compact_banks(st.session_state.style_banks_full)
+        p["genre_banks"] = compact_banks(st.session_state.genre_banks_full)
+        # hard-lock state
+        p["story_bible_edit_unlocked"] = bool(st.session_state.locks.get("story_bible_edit_unlocked", False))
+    else:
+        w = st.session_state.workspace
+        w["title"] = st.session_state.workspace_title
+        w["draft"] = st.session_state.main_text
+        w["idea_bank"] = st.session_state.junk
+        w["story_bible"] = story_bible_struct_from_session()
+        w["voice_bible"] = voice_bible_struct_from_session()
+        w["action_controls"] = action_controls_struct_from_scalars()
+        w["import_controls"] = import_controls_struct_from_scalars()
+        w["style_banks"] = compact_banks(st.session_state.style_banks_full)
+        w["genre_banks"] = compact_banks(st.session_state.genre_banks_full)
+
+def load_workspace_into_session() -> None:
+    w = st.session_state.workspace or default_workspace()
+    st.session_state.project_id = None
+    st.session_state.project_title = "—"
+    st.session_state.workspace_title = w.get("title","") or ""
+    st.session_state.main_text = w.get("draft","") or ""
+    st.session_state.junk = w.get("idea_bank","") or ""
+    apply_story_bible_struct(w.get("story_bible", default_story_bible()))
+    apply_voice_bible_struct(w.get("voice_bible", default_voice_bible()))
+    apply_action_controls_struct(w.get("action_controls", default_action_controls()))
+    apply_import_controls_struct(w.get("import_controls", default_import_controls()))
+    st.session_state.style_banks_full = rebuild_banks(w.get("style_banks", default_style_banks()))
+    st.session_state.genre_banks_full = rebuild_banks(w.get("genre_banks", default_genre_banks()))
+    st.session_state.locks = {"story_bible_edit_unlocked": True}  # workspace editable
+    st.session_state.voice_status = "NEW: (Story Bible workspace)"
+
+def load_project_into_session(pid: str) -> None:
+    p = st.session_state.projects.get(pid)
+    if not p:
+        return
+    st.session_state.project_id = pid
+    st.session_state.project_title = p.get("title","Untitled Project")
+    st.session_state.workspace_title = ""  # irrelevant inside project
+    st.session_state.main_text = p.get("draft","") or ""
+    st.session_state.junk = p.get("idea_bank","") or ""
+    apply_story_bible_struct(p.get("story_bible", default_story_bible()))
+    apply_voice_bible_struct(p.get("voice_bible", default_voice_bible()))
+    apply_action_controls_struct(p.get("action_controls", default_action_controls()))
+    apply_import_controls_struct(p.get("import_controls", default_import_controls()))
+    st.session_state.style_banks_full = rebuild_banks(p.get("style_banks", default_style_banks()))
+    st.session_state.genre_banks_full = rebuild_banks(p.get("genre_banks", default_genre_banks()))
+    st.session_state.locks = {"story_bible_edit_unlocked": bool(p.get("story_bible_edit_unlocked", False))}
+    st.session_state.voice_status = f"{p.get('bay','')}: {st.session_state.project_title}"
+
+def list_projects_in_bay(bay: str) -> List[Tuple[str,str]]:
+    items = [(pid, p.get("title","Untitled")) for pid,p in (st.session_state.projects or {}).items() if p.get("bay")==bay]
+    items.sort(key=lambda x: x[1].lower())
+    return items
+
+def ensure_active_project(bay: str) -> None:
+    pid = st.session_state.active_project_by_bay.get(bay)
+    if pid and pid in st.session_state.projects and st.session_state.projects[pid].get("bay")==bay:
+        return
+    items = list_projects_in_bay(bay)
+    st.session_state.active_project_by_bay[bay] = items[0][0] if items else None
+
+def load_context_from_bay_selection(bay: str) -> None:
+    # called at top or via dispatch, safe to set widget keys
+    ensure_active_project(bay)
+    pid = st.session_state.active_project_by_bay.get(bay)
+    if bay == "NEW" and not pid:
+        load_workspace_into_session()
+    elif pid:
+        load_project_into_session(pid)
+    else:
+        # empty bay, keep a blank context
+        st.session_state.project_id = None
+        st.session_state.project_title = "—"
+        st.session_state.main_text = ""
+        st.session_state.junk = ""
+        apply_story_bible_struct(default_story_bible())
+        apply_voice_bible_struct(default_voice_bible())
+        st.session_state.style_banks_full = rebuild_banks(default_style_banks())
+        st.session_state.genre_banks_full = rebuild_banks(default_genre_banks())
+        st.session_state.locks = {"story_bible_edit_unlocked": False}
+        st.session_state.voice_status = f"{bay}: (empty)"
+
+# ============================================================
+# Dispatch (pre-widget) to avoid session_state mutation errors
+# ============================================================
+def set_dispatch(job: Dict[str, Any]) -> None:
+    st.session_state._dispatch = job
+    st.rerun()
+
+def dispatch_run() -> None:
+    job = st.session_state._dispatch
+    if not job:
+        return
+    st.session_state._dispatch = None  # clear first
+    typ = job.get("type","")
+
+    try:
+        if typ == "switch_bay":
+            save_current_context()
+            st.session_state.active_bay = job["bay"]
+            load_context_from_bay_selection(job["bay"])
+            st.session_state.last_action = f"Bay → {job['bay']}"
+            autosave(force=True)
+            return
+
+        if typ == "select_project":
+            save_current_context()
+            bay = st.session_state.active_bay
+            st.session_state.active_project_by_bay[bay] = job.get("pid")
+            load_context_from_bay_selection(bay)
+            st.session_state.last_action = "Select Context"
+            autosave()
+            return
+
+        if typ == "promote":
+            pid = st.session_state.project_id
+            if not pid:
+                st.session_state.tool_output = "Promote blocked: no project selected."
+                return
+            bay = st.session_state.projects[pid].get("bay")
+            nxt = {"NEW":"ROUGH","ROUGH":"EDIT","EDIT":"FINAL"}.get(bay)
+            if not nxt:
+                st.session_state.tool_output = "Promote blocked: already FINAL."
+                return
+            save_current_context()
+            st.session_state.projects[pid]["bay"] = nxt
+            st.session_state.projects[pid]["updated_ts"] = now_ts()
+            st.session_state.active_project_by_bay[nxt] = pid
+            st.session_state.active_bay = nxt
+            load_context_from_bay_selection(nxt)
+            st.session_state.last_action = f"Promote → {nxt}"
+            autosave(force=True)
+            return
+
+        if typ == "start_project":
+            # From workspace to NEW project
+            if st.session_state.project_id:
+                st.session_state.tool_output = "Start Project is only available from workspace."
+                return
+            title = normalize_text(job.get("title","")) or normalize_text(st.session_state.workspace_title) or "Untitled Project"
+            save_current_context()
+            p = new_project_payload(title)
+            # carry over workspace content
+            p["draft"] = st.session_state.main_text
+            p["idea_bank"] = st.session_state.junk
+            p["story_bible"] = story_bible_struct_from_session()
+            p["voice_bible"] = voice_bible_struct_from_session()
+            p["action_controls"] = action_controls_struct_from_scalars()
+            p["import_controls"] = import_controls_struct_from_scalars()
+            p["style_banks"] = compact_banks(st.session_state.style_banks_full)
+            p["genre_banks"] = compact_banks(st.session_state.genre_banks_full)
+
+            # lock stamp
+            p["story_bible_locked_ts"] = now_ts()
+            p["story_bible_lock_reason"] = "Started from Story Bible workspace"
+            p["story_bible_edit_unlocked"] = False
+
+            st.session_state.projects[p["id"]] = p
+            st.session_state.active_project_by_bay["NEW"] = p["id"]
+            st.session_state.active_bay = "NEW"
+            load_project_into_session(p["id"])
+
+            # reset workspace (keep templates)
+            st.session_state.workspace = default_workspace()
+            load_workspace_into_session()  # safe here (still pre-widgets)
+            st.session_state.last_action = "Start Project"
+            autosave(force=True)
+            return
+
+        if typ == "partner_action":
+            action = job.get("action","")
+            run_partner_action(action)
+            autosave()
+            return
+
+        if typ == "import_story_bible":
+            run_import_story_bible(job.get("text",""), job.get("filename","(pasted)"))
+            autosave()
+            return
+
+        if typ == "import_draft":
+            run_import_draft(job.get("text",""), job.get("filename","(pasted)"))
+            autosave()
+            return
+
+        if typ == "promote_ideas":
+            run_promote_ideas(job.get("target","World"), job.get("selected",[]), bool(job.get("remove", False)))
+            autosave()
+            return
+
+        if typ == "train_style":
+            run_train_bank(kind="style", name=job.get("name","NARRATIVE"), lane=job.get("lane","Narration"), text=job.get("text",""), split=job.get("split","Paragraphs"))
+            autosave()
+            return
+
+        if typ == "train_genre":
+            run_train_bank(kind="genre", name=job.get("name","Romance"), lane=job.get("lane","Narration"), text=job.get("text",""), split=job.get("split","Paragraphs"))
+            autosave()
+            return
+
+        if typ == "train_global_voice":
+            run_train_global_voice(lane=job.get("lane","Narration"), text=job.get("text",""), split=job.get("split","Paragraphs"))
+            autosave()
+            return
+
+    except Exception as e:
+        st.session_state.voice_status = f"ERROR: {e}"
+        st.session_state.tool_output = f"ERROR:\n{e}"
+
+# Run dispatch before any widgets instantiate (prevents StreamlitAPIException)
+dispatch_run()
+
+# ============================================================
+# Canon / lock helpers
+# ============================================================
+def story_bible_locked() -> bool:
+    if not st.session_state.project_id:
+        return False
+    return not bool(st.session_state.locks.get("story_bible_edit_unlocked", False))
+
+# ============================================================
+# Import / export helpers
+# ============================================================
+def read_uploaded_text(upload) -> Tuple[str, str]:
+    if upload is None:
+        return ("", "")
+    name = getattr(upload, "name", "") or ""
+    suffix = name.lower().split(".")[-1] if "." in name else ""
+    raw = upload.getvalue()
+    if raw and len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"Upload too large (> {MAX_UPLOAD_BYTES//1_000_000}MB).")
+
+    if suffix in ("txt","md"):
+        try:
+            return (raw.decode("utf-8"), name)
+        except Exception:
+            return (raw.decode("latin-1", errors="ignore"), name)
+
+    if suffix == "docx":
+        try:
+            from docx import Document
+            import io
+            f = io.BytesIO(raw)
+            doc = Document(f)
+            paras = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+            return ("\n".join(paras).strip(), name)
+        except Exception:
+            return ("", name)
+
+    return ("", name)
+
+def merge_field(existing: str, new_text: str, mode: str) -> str:
+    new_text = normalize_text(new_text)
+    if not new_text:
+        return existing or ""
+    if mode == "Replace" or not (existing or "").strip():
+        return new_text
+    stamp = f"--- IMPORT {now_ts()} ---"
+    return (existing.rstrip() + "\n\n" + stamp + "\n" + new_text).strip()
+
+def heuristic_breakdown(text: str) -> Dict[str,str]:
+    t = normalize_text(text)
+    out = default_story_bible()
+    if not t:
+        return out
+    # simple headings detection
+    lines = t.splitlines()
+    key = None
+    heading_map = {
+        "synopsis":"synopsis","summary":"synopsis","logline":"synopsis",
+        "genre":"genre_style_notes","style":"genre_style_notes","tone":"genre_style_notes",
+        "world":"world","setting":"world","locations":"world","location":"world",
+        "characters":"characters","cast":"characters","people":"characters",
+        "outline":"outline","plot":"outline","beats":"outline","structure":"outline",
+    }
+    def head(line: str) -> Optional[str]:
+        s = line.strip().lower()
+        s = re.sub(r"^#{1,6}\s*", "", s)
+        s = re.sub(r":\s*$","",s).strip()
+        s = re.sub(r"[^a-z ]+","",s).strip()
+        return heading_map.get(s)
+    for ln in lines:
+        h = head(ln)
+        if h:
+            key = h
+            continue
+        if key:
+            out[key] += ln + "\n"
+    for k in out:
+        out[k] = normalize_text(out[k])
+    if not any(v.strip() for v in out.values()):
+        out["synopsis"] = t[:1400].strip()
+    return out
+
+def ai_breakdown(text: str, intensity_x: float) -> Dict[str,str]:
+    system = (
+        "You are Olivetti, a professional story-bible analyst. "
+        "Return ONLY valid JSON (no markdown, no commentary). "
+        "Keys: synopsis, genre_style_notes, world, characters, outline. "
+        "No invention; if unknown, empty string."
+    )
+    user = "Break the document into Story Bible sections. Output JSON only.\n\nDOCUMENT:\n" + text
+    out = call_openai(system, user, intensity_x)
+    obj = safe_extract_json(out)
+    b = default_story_bible()
+    for k in b:
+        b[k] = normalize_text(str(obj.get(k,""))) if isinstance(obj, dict) else ""
+    return b
+
+def effective_import_intensity() -> float:
+    if bool(st.session_state.import_use_global):
+        return clamp01(st.session_state.ai_intensity)
+    return clamp01(st.session_state.import_intensity)
+
+def run_import_story_bible(text: str, filename: str) -> None:
+    if story_bible_locked():
+        st.session_state.tool_output = "Import blocked: Story Bible is locked. Toggle 'Unlock Story Bible Editing'."
+        st.session_state.voice_status = "Import blocked"
+        return
+    text = normalize_text(text)
+    if not text:
+        st.session_state.tool_output = "Import: no text."
+        return
+    use_ai = bool(st.session_state.import_use_ai) and bool(OPENAI_API_KEY)
+    try:
+        b = ai_breakdown(text, effective_import_intensity()) if use_ai else heuristic_breakdown(text)
+        mode = st.session_state.import_merge_mode
+        st.session_state.synopsis = merge_field(st.session_state.synopsis, b["synopsis"], mode)
+        st.session_state.genre_style_notes = merge_field(st.session_state.genre_style_notes, b["genre_style_notes"], mode)
+        st.session_state.world = merge_field(st.session_state.world, b["world"], mode)
+        st.session_state.characters = merge_field(st.session_state.characters, b["characters"], mode)
+        st.session_state.outline = merge_field(st.session_state.outline, b["outline"], mode)
+        st.session_state.tool_output = f"Imported → Story Bible ({'AI' if use_ai else 'Heuristic'}) from {filename}."
+        st.session_state.voice_status = "Import complete"
+        st.session_state.last_action = "Import → Story Bible"
+    except Exception as e:
+        st.session_state.tool_output = f"Import ERROR:\n{e}"
+        st.session_state.voice_status = "Import error"
+
+def run_import_draft(text: str, filename: str) -> None:
+    text = normalize_text(text)
+    if not text:
+        st.session_state.tool_output = "Import: no text."
+        return
+    mode = st.session_state.import_merge_mode
+    st.session_state.main_text = merge_field(st.session_state.main_text, text, mode)
+    st.session_state.tool_output = f"Imported → Draft ({mode}) from {filename}."
+    st.session_state.voice_status = "Draft import complete"
+    st.session_state.last_action = "Import → Draft"
+
+# ============================================================
+# Idea bank promotion
+# ============================================================
+def idea_lines(bank: str) -> List[str]:
+    out = []
+    seen = set()
+    for ln in (bank or "").splitlines():
+        s = ln.strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+def append_bullets(existing: str, bullets: List[str]) -> str:
+    existing = (existing or "").rstrip()
+    bullets = [b.strip() for b in bullets if b and b.strip()]
+    if not bullets:
+        return existing
+    existing_low = existing.lower()
+    uniq = []
+    for b in bullets:
+        if b.lower() in existing_low:
+            continue
+        uniq.append(b)
+    if not uniq:
+        return existing
+    block = "\n".join([f"- {b}" if not b.startswith(("-", "•")) else b for b in uniq])
+    return (existing + ("\n\n" if existing else "") + block).strip()
+
+def run_promote_ideas(target: str, selected: List[str], remove: bool) -> None:
+    if story_bible_locked() and target in ("Synopsis","Genre/Style Notes","World","Characters","Outline"):
+        st.session_state.tool_output = "Promote blocked: Story Bible is locked. Toggle 'Unlock Story Bible Editing'."
+        st.session_state.voice_status = "Promote blocked"
+        return
+
+    selected = [s.strip() for s in selected if s and s.strip()]
+    if not selected:
+        st.session_state.tool_output = "Promote: nothing selected."
+        return
+
+    if target == "Synopsis":
+        st.session_state.synopsis = append_bullets(st.session_state.synopsis, selected)
+    elif target == "Genre/Style Notes":
+        st.session_state.genre_style_notes = append_bullets(st.session_state.genre_style_notes, selected)
+    elif target == "World":
+        st.session_state.world = append_bullets(st.session_state.world, selected)
+    elif target == "Characters":
+        st.session_state.characters = append_bullets(st.session_state.characters, selected)
+    elif target == "Outline":
+        st.session_state.outline = append_bullets(st.session_state.outline, selected)
+    elif target == "Draft":
+        base = (st.session_state.main_text or "").rstrip()
+        note = "\n".join([f"[IDEA → DRAFT NOTE] {s}" for s in selected])
+        st.session_state.main_text = (base + ("\n\n" if base else "") + note).strip()
+    else:
+        st.session_state.tool_output = f"Promote: unknown target '{target}'."
+        return
+
+    if remove:
+        bank_lines = (st.session_state.junk or "").splitlines()
+        rm = set(selected)
+        st.session_state.junk = "\n".join([ln for ln in bank_lines if ln.strip() not in rm]).strip()
+
+    st.session_state.tool_output = f"Promoted {len(selected)} → {target}."
+    st.session_state.voice_status = f"Promoted → {target}"
+    st.session_state.last_action = f"Promote → {target}"
+
+# ============================================================
+# Training (engine styles + genres + global voice)
+# ============================================================
+def _train_split(text: str, split: str) -> List[str]:
+    t = normalize_text(text)
+    if not t:
+        return []
+    if split == "Whole":
+        return [t]
+    return split_paragraphs(t)
+
+def _add_samples_to_lane(pool: List[Dict[str, Any]], samples: List[str]) -> List[Dict[str, Any]]:
+    for s in samples:
+        txt = _trim_sample(s)
+        if len(txt) < 20:
+            continue
+        pool.append({"ts": now_ts(), "text": txt, "vec": hash_vec(txt)})
+    pool = pool[-MAX_BANK_SAMPLES_PER_LANE:]
+    return pool
+
+def run_train_bank(kind: str, name: str, lane: str, text: str, split: str) -> None:
+    text = normalize_text(text)
+    if not text:
+        st.session_state.tool_output = "Trainer: no text."
+        return
+    lane = lane if lane in LANES else "Narration"
+    split = split if split in ("Paragraphs","Whole") else "Paragraphs"
+    chunks = _train_split(text, split)
+    if not chunks:
+        st.session_state.tool_output = "Trainer: nothing to add."
+        return
+
+    if kind == "style":
+        banks = st.session_state.style_banks_full
+        if name not in banks:
+            banks[name] = {"created_ts": now_ts(), "lanes": _default_lane_bank()}
+        pool = banks[name]["lanes"][lane]
+        banks[name]["lanes"][lane] = _add_samples_to_lane(pool, chunks)
+        st.session_state.style_banks_full = banks
+        st.session_state.tool_output = f"Added {len(chunks)} sample(s) → Style {name} / {lane}."
+        st.session_state.voice_status = "Style trained"
+        st.session_state.last_action = "Train Style"
+        return
+
+    if kind == "genre":
+        banks = st.session_state.genre_banks_full
+        if name not in banks:
+            banks[name] = {"created_ts": now_ts(), "lanes": _default_lane_bank()}
+        pool = banks[name]["lanes"][lane]
+        banks[name]["lanes"][lane] = _add_samples_to_lane(pool, chunks)
+        st.session_state.genre_banks_full = banks
+        st.session_state.tool_output = f"Added {len(chunks)} sample(s) → Genre {name} / {lane}."
+        st.session_state.voice_status = "Genre trained"
+        st.session_state.last_action = "Train Genre"
+        return
+
+def run_train_global_voice(lane: str, text: str, split: str) -> None:
+    text = normalize_text(text)
+    if not text:
+        st.session_state.tool_output = "Global Voice: no text."
+        return
+    lane = lane if lane in LANES else "Narration"
+    chunks = _train_split(text, split)
+    gv = st.session_state.global_voice_full
+    pool = gv["lanes"][lane]
+    gv["lanes"][lane] = _add_samples_to_lane(pool, chunks)
+    st.session_state.global_voice_full = gv
+    st.session_state.global_voice = compact_global_voice(gv)
+    st.session_state.tool_output = f"Added {len(chunks)} sample(s) → Global Voice / {lane}."
+    st.session_state.voice_status = "Global voice trained"
+    st.session_state.last_action = "Train Global Voice"
+
+# ============================================================
+# Partner action (AI + deterministic fallbacks)
+# ============================================================
+def action_enabled(action: str) -> bool:
+    return bool(st.session_state.get(f"ac__{action}__enabled", True))
+
+def effective_intensity_for_action(action: str) -> float:
+    global_x = clamp01(st.session_state.ai_intensity)
+    use_global = bool(st.session_state.get(f"ac__{action}__use_global", True))
+    if use_global:
+        return global_x
+    return clamp01(st.session_state.get(f"ac__{action}__intensity", global_x))
 
 def local_cleanup(text: str) -> str:
-    t = (text or "")
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     t = re.sub(r"[ \t]+\n", "\n", t)
     t = re.sub(r"\n{4,}", "\n\n\n", t)
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)
@@ -1677,257 +1262,245 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
+def local_find(term: str) -> str:
+    q = (term or "").strip()
+    if not q:
+        return "Find: empty query."
+    ql = q.lower()
+    targets = [
+        ("DRAFT", st.session_state.main_text or ""),
+        ("SYNOPSIS", st.session_state.synopsis or ""),
+        ("GENRE/STYLE", st.session_state.genre_style_notes or ""),
+        ("WORLD", st.session_state.world or ""),
+        ("CHARACTERS", st.session_state.characters or ""),
+        ("OUTLINE", st.session_state.outline or ""),
+        ("IDEA BANK", st.session_state.junk or ""),
+        ("VOICE SAMPLE", st.session_state.voice_sample or ""),
+        ("VOICE LOCK", st.session_state.voice_lock_prompt or ""),
+    ]
+    hits = []
+    for label, txt in targets:
+        if not (txt or "").strip():
+            continue
+        paras = split_paragraphs(txt)
+        for i, p in enumerate(paras, start=1):
+            if ql in p.lower():
+                snippet = p.strip()
+                if len(snippet) > 260:
+                    idx = p.lower().find(ql)
+                    start = max(0, idx - 90)
+                    end = min(len(p), idx + 170)
+                    snippet = ("…" if start > 0 else "") + p[start:end].strip() + ("…" if end < len(p) else "")
+                hits.append(f"[{label} • ¶{i}] {snippet}")
+    if not hits:
+        return f"Find: no matches for '{q}'."
+    cap = 24
+    out = "\n".join(hits[:cap])
+    if len(hits) > cap:
+        out += f"\n\n(+{len(hits)-cap} more hits)"
+    return out
 
-def sb_breakdown_ai(text: str) -> Dict[str, str]:
-    prompt = """Break the provided source document into these Story Bible sections.
-Return STRICT JSON with these exact keys:
-synopsis, genre_style_notes, world, characters, outline
+def story_bible_text() -> str:
+    parts = []
+    if (st.session_state.synopsis or "").strip():
+        parts.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
+    if (st.session_state.genre_style_notes or "").strip():
+        parts.append(f"GENRE/STYLE NOTES:\n{st.session_state.genre_style_notes.strip()}")
+    if (st.session_state.world or "").strip():
+        parts.append(f"WORLD:\n{st.session_state.world.strip()}")
+    if (st.session_state.characters or "").strip():
+        parts.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
+    if (st.session_state.outline or "").strip():
+        parts.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
+    return "\n\n".join(parts).strip() if parts else "— None provided —"
 
-Rules:
-- Use clear, concrete specifics (names, places, stakes).
-- Preserve existing proper nouns from the text.
-- If a section is unknown, return an empty string for it.
-- No commentary. JSON only.
-"""
-    try:
-        out = call_openai(
-            system_brief="You are a precise literary analyst. You output only valid JSON.",
-            user_task=prompt,
-            text=text,
-        )
-        obj = _extract_json_object(out) or {}
-        return {
-            "synopsis": _normalize_text(str(obj.get("synopsis", ""))),
-            "genre_style_notes": _normalize_text(str(obj.get("genre_style_notes", ""))),
-            "world": _normalize_text(str(obj.get("world", ""))),
-            "characters": _normalize_text(str(obj.get("characters", ""))),
-            "outline": _normalize_text(str(obj.get("outline", ""))),
-        }
-    except Exception:
-        return _sb_sections_from_text_heuristic(text)
+def build_brief(action: str, lane: str, intensity_x: float) -> str:
+    intensity_x = clamp01(intensity_x)
 
+    # voice bible controls text
+    vb_lines = []
+    if st.session_state.vb_style_on:
+        vb_lines.append(f"Writing Style: {st.session_state.writing_style} (intensity {float(st.session_state.style_intensity):.2f})")
+    if st.session_state.vb_genre_on:
+        vb_lines.append(f"Genre: {st.session_state.genre} (intensity {float(st.session_state.genre_intensity):.2f})")
+    if st.session_state.vb_pov_on:
+        vb_lines.append(f"POV: {st.session_state.pov} (strength {float(st.session_state.pov_strength):.2f})")
+    if st.session_state.vb_tense_on:
+        vb_lines.append(f"Tense: {st.session_state.tense} (strength {float(st.session_state.tense_strength):.2f})")
+    if st.session_state.vb_match_on and (st.session_state.voice_sample or "").strip():
+        vb_lines.append(f"Match Sample (intensity {float(st.session_state.match_intensity):.2f}):\n{st.session_state.voice_sample.strip()}")
+    if st.session_state.vb_lock_on and (st.session_state.voice_lock_prompt or "").strip():
+        vb_lines.append(f"VOICE LOCK (strength {float(st.session_state.lock_intensity):.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
 
-def _merge_section(existing: str, incoming: str, mode: str) -> str:
-    ex = (existing or "").strip()
-    inc = (incoming or "").strip()
-    if mode == "Replace":
-        return inc
-    if not ex:
-        return inc
-    if not inc:
-        return ex
-    return (ex + "\n\n" + inc).strip()
+    # Engine style exemplars
+    style_ex = []
+    style_dir = ""
+    if st.session_state.vb_style_on and st.session_state.writing_style in ENGINE_STYLES:
+        style_dir = engine_style_directive(st.session_state.writing_style, float(st.session_state.style_intensity), lane)
+        ctx = (st.session_state.main_text or "")[-2500:] or (st.session_state.synopsis or "")
+        style_ex = retrieve_from_bank(st.session_state.style_banks_full, st.session_state.writing_style, lane, ctx, k=2)
 
+    # Engine genre exemplars
+    genre_ex = []
+    genre_dir = ""
+    if st.session_state.vb_genre_on and st.session_state.genre in ENGINE_GENRES:
+        genre_dir = engine_genre_directive(st.session_state.genre, float(st.session_state.genre_intensity), lane)
+        ctx = (st.session_state.main_text or "")[-2500:] or (st.session_state.synopsis or "")
+        genre_ex = retrieve_from_bank(st.session_state.genre_banks_full, st.session_state.genre, lane, ctx, k=2)
 
-# ============================================================
-# ACTIONS (queued for Streamlit safety)
-# ============================================================
-def partner_action(action: str) -> None:
+    # Global voice exemplars (if enabled globally + per-project)
+    gv_dir = ""
+    gv_ex = []
+    gv_full = st.session_state.global_voice_full
+    if bool(gv_full.get("enabled", False)) and bool(st.session_state.use_global_voice):
+        strength = clamp01(gv_full.get("strength", 0.65) * float(st.session_state.global_voice_strength))
+        gv_dir = f"GLOBAL VOICE: enabled (effective strength {strength:.2f}). Mimic cadence/diction; never copy content."
+        ctx = (st.session_state.main_text or "")[-2500:] or (st.session_state.synopsis or "")
+        gv_ex = retrieve_from_global_voice(gv_full, lane, ctx, k=2)
+
+    # Assemble
+    ex_blocks = []
+    if gv_ex:
+        ex_blocks.append("GLOBAL VOICE EXEMPLARS:\n" + "\n\n---\n\n".join(gv_ex))
+    if style_ex:
+        ex_blocks.append("ENGINE STYLE EXEMPLARS:\n" + "\n\n---\n\n".join(style_ex))
+    if genre_ex:
+        ex_blocks.append("ENGINE GENRE EXEMPLARS:\n" + "\n\n---\n\n".join(genre_ex))
+    exemplar_text = "\n\n".join(ex_blocks).strip() if ex_blocks else "— None —"
+
+    pov_dir = ""
+    tense_dir = ""
+    if st.session_state.vb_pov_on:
+        pov_dir = f"POV CONSTRAINT: {st.session_state.pov} (strength {float(st.session_state.pov_strength):.2f})."
+    if st.session_state.vb_tense_on:
+        tense_dir = f"TENSE CONSTRAINT: {st.session_state.tense} (strength {float(st.session_state.tense_strength):.2f})."
+    directives = "\n".join([d for d in [gv_dir, style_dir, genre_dir, pov_dir, tense_dir] if d]).strip() or "— None —"
+    voice_controls = "\n".join(vb_lines).strip() if vb_lines else "— None enabled —"
+
+    return f"""
+YOU ARE OLIVETTI: the author's professional writing engine.
+No UI talk. No process talk.
+
+STORY BIBLE is project-specific canon. Never contradict canon.
+IDEA BANK supports, not canon unless promoted.
+
+LANE: {lane}
+ACTION: {action}
+
+EFFECTIVE INTENSITY: {intensity_x:.2f}
+PROFILE: {intensity_profile(intensity_x)}
+
+DIRECTIVES:
+{directives}
+
+VOICE BIBLE SETTINGS:
+{voice_controls}
+
+EXEMPLARS (mimic patterns, not content):
+{exemplar_text}
+
+STORY BIBLE:
+{story_bible_text()}
+
+IDEA BANK:
+{(st.session_state.junk or '').strip() or '— None —'}
+""".strip()
+
+def run_partner_action(action: str) -> None:
+    if action not in ALL_ACTIONS:
+        return
+    if not action_enabled(action):
+        st.session_state.tool_output = f"{action} is disabled in Action Controls."
+        st.session_state.voice_status = f"{action}: disabled"
+        return
+
     text = st.session_state.main_text or ""
     lane = current_lane_from_draft(text)
-    brief = build_partner_brief(action, lane=lane)
-    use_ai = bool(OPENAI_API_KEY)
-
-    def apply_replace(result: str) -> None:
-        if result and result.strip():
-            st.session_state.main_text = result.strip()
-            st.session_state.last_action = action
-            autosave()
-
-    def apply_append(result: str) -> None:
-        if result and result.strip():
-            if (st.session_state.main_text or "").strip():
-                st.session_state.main_text = (st.session_state.main_text.rstrip() + "\n\n" + result.strip()).strip()
-            else:
-                st.session_state.main_text = result.strip()
-            st.session_state.last_action = action
-            autosave()
+    intensity_x = effective_intensity_for_action(action)
+    brief = build_brief(action, lane, intensity_x)
 
     try:
+        if action == "Find":
+            st.session_state.tool_output = "Use /find: term in the Idea Bank (Junk Drawer), or the search box below."
+            st.session_state.last_action = "Find"
+            return
+
+        use_ai = bool(OPENAI_API_KEY)
+
         if action == "Write":
-            if use_ai:
-                task = (
-                    f"Continue decisively in lane ({lane}). Add 1–3 paragraphs that advance the scene. "
-                    "MANDATORY: incorporate at least 2 Story Bible specifics. "
-                    "No recap. No planning. Just prose."
-                )
-                out = call_openai(brief, task, text if text.strip() else "Start the opening.")
-                apply_append(out)
-            return
-
-        if action == "Rewrite":
-            if use_ai:
-                task = f"Rewrite for professional quality in lane ({lane}). Preserve meaning and canon. Return full revised text."
-                out = call_openai(brief, task, text)
-                apply_replace(out)
-            else:
-                apply_replace(local_cleanup(text))
-            return
-
-        if action == "Expand":
-            if use_ai:
-                task = f"Expand with meaningful depth in lane ({lane}). No padding. Preserve canon. Return full revised text."
-                out = call_openai(brief, task, text)
-                apply_replace(out)
-            return
-
-        if action == "Rephrase":
-            if use_ai:
-                task = f"Replace the final sentence with a stronger one (same meaning) in lane ({lane}). Return full text."
-                out = call_openai(brief, task, text)
-                apply_replace(out)
-            return
-
-        if action == "Describe":
-            if use_ai:
-                task = f"Add vivid controlled description in lane ({lane}). Preserve pace and canon. Return full revised text."
-                out = call_openai(brief, task, text)
-                apply_replace(out)
-            return
-
-        if action in ("Spell", "Grammar"):
-            cleaned = local_cleanup(text)
-            if use_ai:
-                task = "Copyedit spelling/grammar/punctuation. Preserve voice. Return full revised text."
-                out = call_openai(brief, task, cleaned)
-                apply_replace(out if out else cleaned)
-            else:
-                apply_replace(cleaned)
-            return
-
-        if action == "Synonym":
-            # Tool output only (does not change draft)
-            last = ""
-            m = re.search(r"([A-Za-z']{3,})\W*$", text.strip())
-            if m:
-                last = m.group(1)
-            if not last:
-                st.session_state.tool_output = "Synonym: couldn't detect a target word (try ending with a word)."
-                st.session_state.voice_status = "Synonym: no target"
-                autosave()
+            if not use_ai:
+                st.session_state.tool_output = "Write requires OPENAI_API_KEY."
                 return
-            if use_ai:
-                task = (
-                    f"Give 12 strong synonyms for '{last}'. "
-                    "Group them by nuance (formal, punchy, poetic, archaic, etc). "
-                    "No filler." 
-                )
-                out = call_openai(brief, task, text)
-                st.session_state.tool_output = _clamp_text(out)
-            else:
-                st.session_state.tool_output = f"Synonym requires OPENAI_API_KEY (target word: {last})."
-            st.session_state.voice_status = f"Synonym: {last}"
-            st.session_state.last_action = "Synonym"
-            autosave()
+            task = f"Continue decisively in lane ({lane}). Add 1–3 paragraphs that advance the scene. No recap. Just prose."
+            out = call_openai(brief, task + "\n\nTEXT:\n" + (text.strip() or "Start the opening."), intensity_x)
+            if out:
+                st.session_state.main_text = (text.rstrip() + ("\n\n" if text.strip() else "") + out.strip()).strip()
+            st.session_state.last_action = "Write"
+            st.session_state.voice_status = "Write complete"
             return
 
-        if action == "Sentence":
-            # Tool output only
-            last_sentence = ""
-            sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-            if sentences:
-                last_sentence = sentences[-1].strip()
-            if not last_sentence:
-                st.session_state.tool_output = "Sentence: couldn't detect a final sentence."
-                st.session_state.voice_status = "Sentence: no target"
-                autosave()
+        if action in ("Rewrite","Expand","Rephrase","Describe","Spell","Grammar"):
+            if not use_ai:
+                # deterministic fallback
+                st.session_state.main_text = local_cleanup(text)
+                st.session_state.tool_output = f"{action}: local cleanup (no API key)."
+                st.session_state.last_action = action
                 return
-            if use_ai:
-                task = (
-                    "Provide 8 alternative rewrites of the final sentence. "
-                    "Keep meaning. Vary rhythm and diction. Return as a numbered list."
-                )
-                out = call_openai(brief, task, text)
-                st.session_state.tool_output = _clamp_text(out)
+
+            task_map = {
+                "Rewrite": f"Rewrite for professional quality in lane ({lane}). Preserve meaning and canon. Return full revised text.",
+                "Expand": f"Expand with meaningful depth in lane ({lane}). No padding. Preserve canon. Return full revised text.",
+                "Rephrase": f"Rewrite the final paragraph for maximum strength (same meaning) in lane ({lane}). Return full text.",
+                "Describe": f"Add vivid controlled description in lane ({lane}). Preserve pace and canon. Return full revised text.",
+                "Spell": "Copyedit spelling/grammar/punctuation. Preserve voice. Return full revised text.",
+                "Grammar": "Copyedit grammar/punctuation and clean sentence flow. Preserve voice. Return full revised text.",
+            }
+            out = call_openai(brief, task_map[action] + "\n\nTEXT:\n" + (text.strip() or "—"), intensity_x)
+            if out:
+                st.session_state.main_text = out.strip()
+            st.session_state.last_action = action
+            st.session_state.voice_status = f"{action} complete"
+            return
+
+        if action in ("Synonym","Sentence"):
+            if not use_ai:
+                st.session_state.tool_output = f"{action}: requires OPENAI_API_KEY."
+                return
+            if action == "Synonym":
+                task = "Provide 10 strong synonym options for the single most important verb in the final paragraph. Output bullet list only."
             else:
-                st.session_state.tool_output = "Sentence requires OPENAI_API_KEY."
-            st.session_state.voice_status = "Sentence options"
-            st.session_state.last_action = "Sentence"
-            autosave()
+                task = f"Generate 8 alternative sentences that could replace the final sentence, same meaning, lane ({lane}). Return numbered list."
+            out = call_openai(brief, task + "\n\nTEXT:\n" + (text[-1200:].strip() or "—"), intensity_x)
+            st.session_state.tool_output = out
+            st.session_state.last_action = action
+            st.session_state.voice_status = f"{action} complete"
             return
 
     except Exception as e:
-        msg = str(e)
-        if ("insufficient_quota" in msg) or ("exceeded your current quota" in msg.lower()):
-            st.session_state.voice_status = "Engine: OpenAI quota exceeded."
-            st.session_state.tool_output = _clamp_text(
-                "OpenAI returned a quota/billing error.\n\nFix:\n• Confirm your API key is correct\n• Check billing/usage limits\n• Or swap to a different key in Streamlit Secrets"
-            )
-        elif "OPENAI_API_KEY not set" in msg:
-            st.session_state.voice_status = "Engine: missing OPENAI_API_KEY."
-            st.session_state.tool_output = "Set OPENAI_API_KEY in Streamlit Secrets (or environment) to enable AI."
-        else:
-            st.session_state.voice_status = f"Engine: {msg}"
-            st.session_state.tool_output = _clamp_text(f"ERROR:\n{msg}")
-        autosave()
-
-
-def queue_action(action: str) -> None:
-    st.session_state.pending_action = action
-
-
-def run_pending_action() -> None:
-    action = st.session_state.get("pending_action")
-    if not action:
-        return
-    st.session_state.pending_action = None
-
-    # Non-engine UI hint (keeps session_state mutations pre-widget)
-    if action == "__FIND_HINT__":
-        st.session_state.tool_output = "Find is wired via /find: in Junk Drawer."
-        st.session_state.voice_status = "Find: use /find: in Junk Drawer."
-        st.session_state.last_action = "Find (hint)"
-        autosave()
-        return
-
-    if action == "__VAULT_CLEAR_SAMPLE__":
-        # Clear the vault sample text area safely (pre-widget) and surface status.
-        st.session_state.vault_sample_text = ""
-        note = (st.session_state.get("ui_notice") or "").strip()
-        if note:
-            st.session_state.voice_status = note
-            st.session_state.ui_notice = ""
-        st.session_state.last_action = "Voice Vault"
-        autosave()
-        return
-    partner_action(action)
-
-
-# Run queued actions early (pre-widget)
-run_pending_action()
-
+        st.session_state.voice_status = f"Engine error"
+        st.session_state.tool_output = f"ERROR:\n{e}"
 
 # ============================================================
-# UI — TOP BAR
+# Header / status
 # ============================================================
 top = st.container()
 with top:
-    cols = st.columns([1, 1, 1, 1, 2])
-
+    cols = st.columns([1,1,1,1,2.2])
     if cols[0].button("🆕 New", key="bay_new"):
-        switch_bay("NEW")
-        save_all_to_disk(force=True)
-
+        set_dispatch({"type":"switch_bay","bay":"NEW"})
     if cols[1].button("✏️ Rough", key="bay_rough"):
-        switch_bay("ROUGH")
-        save_all_to_disk(force=True)
-
+        set_dispatch({"type":"switch_bay","bay":"ROUGH"})
     if cols[2].button("🛠 Edit", key="bay_edit"):
-        switch_bay("EDIT")
-        save_all_to_disk(force=True)
-
+        set_dispatch({"type":"switch_bay","bay":"EDIT"})
     if cols[3].button("✅ Final", key="bay_final"):
-        switch_bay("FINAL")
-        save_all_to_disk(force=True)
-
+        set_dispatch({"type":"switch_bay","bay":"FINAL"})
     cols[4].markdown(
         f"""
-        <div style='text-align:right;font-size:12px;'>
-            Bay: <b>{st.session_state.active_bay}</b>
-            &nbsp;•&nbsp; Project: <b>{st.session_state.project_title}</b>
-            &nbsp;•&nbsp; Autosave: {st.session_state.autosave_time or '—'}
-            <br/>AI Intensity: {float(st.session_state.ai_intensity):.2f}
-            &nbsp;•&nbsp; Status: {st.session_state.voice_status}
+        <div style='text-align:right;font-size:12px;opacity:.95;'>
+          Bay: <b>{st.session_state.active_bay}</b> •
+          Project: <b>{st.session_state.project_title}</b> •
+          Autosave: {st.session_state.autosave_time or "—"}<br/>
+          Last Action: {st.session_state.last_action} • Status: {st.session_state.voice_status}
         </div>
         """,
         unsafe_allow_html=True,
@@ -1936,583 +1509,372 @@ with top:
 st.divider()
 
 # ============================================================
-# LOCKED LAYOUT (same ratios)
+# Layout columns (locked)
 # ============================================================
-left, center, right = st.columns([1.2, 3.2, 1.6])
-
+left, center, right = st.columns([1.25, 3.2, 1.65])
 
 # ============================================================
-# LEFT — STORY BIBLE
+# LEFT — Story Bible + pipeline + import/export + idea bank
 # ============================================================
 with left:
     st.subheader("📖 Story Bible")
 
     bay = st.session_state.active_bay
-    bay_projects = list_projects_in_bay(bay)
-
-    # Build a stable selector with unique labels (handles duplicate titles)
+    projects = list_projects_in_bay(bay)
     if bay == "NEW":
-        items: List[Tuple[Optional[str], str]] = [(None, "— (Story Bible workspace) —")] + [(pid, title) for pid, title in bay_projects]
+        labels = ["— (Story Bible workspace) —"] + [t for _,t in projects]
+        ids = [None] + [pid for pid,_ in projects]
     else:
-        items = [(None, "— (none) —")] + [(pid, title) for pid, title in bay_projects]
+        labels = ["— (none) —"] + [t for _,t in projects]
+        ids = [None] + [pid for pid,_ in projects]
 
-    # Disambiguate duplicate titles
-    seen: Dict[str, int] = {}
-    labels: List[str] = []
-    ids: List[Optional[str]] = []
-    for pid, title in items:
-        base = title
-        seen[base] = seen.get(base, 0) + 1
-        label = base if seen[base] == 1 else f"{base}  ·  {str(pid)[-4:]}"
-        labels.append(label)
-        ids.append(pid)
+    current_pid = st.session_state.project_id if st.session_state.project_id in ids else None
+    idx = ids.index(current_pid) if current_pid in ids else 0
 
-    current_pid = st.session_state.project_id if (st.session_state.project_id in ids) else None
-    current_idx = ids.index(current_pid) if current_pid in ids else 0
+    sel = st.selectbox("Current Bay Project", labels, index=idx, key="sel_project")
+    sel_pid = ids[labels.index(sel)]
 
-    sel = st.selectbox("Current Bay Project", labels, index=current_idx, key="bay_project_selector")
-    sel_pid = ids[labels.index(sel)] if sel in labels else None
-
-    if sel_pid:
-        p = st.session_state.projects.get(sel_pid, {}) or {}
-        sbid = p.get("story_bible_id", "—")
-        sbts = p.get("story_bible_created_ts", "—")
-        bind = p.get("story_bible_binding", {}) or {}
-        src = bind.get("source", "—")
-        st.caption(f"Locked Story Bible → Project • Bible ID: **{sbid}** • Created: **{sbts}** • Source: **{src}**")
-    else:
-        w = st.session_state.sb_workspace or default_story_bible_workspace()
-        st.caption(
-            f"Workspace Story Bible (not linked yet) • Bible ID: **{w.get('workspace_story_bible_id','—')}** • Created: **{w.get('workspace_story_bible_created_ts','—')}**"
-        )
-
-    # Switch context if changed
     if sel_pid != st.session_state.project_id:
-        if in_workspace_mode():
-            save_workspace_from_session()
-        else:
-            save_session_into_project()
+        set_dispatch({"type":"select_project","pid": sel_pid})
 
-        st.session_state.active_project_by_bay[bay] = sel_pid
-        if sel_pid:
-            load_project_into_session(sel_pid)
-            st.session_state.voice_status = f"{bay}: {st.session_state.project_title}"
-        else:
-            st.session_state.project_id = None
-            st.session_state.project_title = "—"
-            if bay == "NEW":
-                load_workspace_into_session()
-                st.session_state.voice_status = "NEW: (Story Bible workspace)"
-            else:
-                st.session_state.main_text = ""
-                st.session_state.synopsis = ""
-                st.session_state.genre_style_notes = ""
-                st.session_state.world = ""
-                st.session_state.characters = ""
-                st.session_state.outline = ""
-                st.session_state.voice_sample = ""
-                st.session_state.ai_intensity = 0.75
-                st.session_state.voices = rebuild_vectors_in_voice_vault(default_voice_vault())
-                st.session_state.voices_seeded = True
-                st.session_state.voice_status = f"{bay}: (empty)"
-        st.session_state.last_action = "Select Context"
-        autosave()
+    # Workspace title + Start Project
+    if bay == "NEW" and not st.session_state.project_id:
+        st.text_input("Workspace Title", key="workspace_title")
+        if st.button("Start Project", key="btn_start_project", type="primary"):
+            set_dispatch({"type":"start_project","title": st.session_state.workspace_title})
 
-    # Hard lock: Story Bible edits are locked per-project unless explicitly unlocked
-    is_project = bool(st.session_state.project_id)
-    sb_edit_unlocked = bool((st.session_state.locks or {}).get("sb_edit_unlocked", False))
-    sb_locked = is_project and (not sb_edit_unlocked)
+    # Promote button (if in a project)
+    if st.session_state.project_id and st.session_state.active_bay in ("NEW","ROUGH","EDIT"):
+        nxt = {"NEW":"ROUGH","ROUGH":"EDIT","EDIT":"FINAL"}[st.session_state.active_bay]
+        if st.button(f"Promote → {nxt}", key="btn_promote", type="secondary"):
+            set_dispatch({"type":"promote"})
 
-    with st.expander("🔒 Story Bible Hard Lock", expanded=False):
-        if is_project:
-            st.caption("Default is LOCKED. Unlock only when you intend to edit canon.")
-            st.checkbox("Unlock Story Bible Editing", key="sb_unlock_cb")
-            # sync the checkbox into locks
-            st.session_state.locks["sb_edit_unlocked"] = bool(st.session_state.sb_unlock_cb)
-            autosave()
-        else:
-            st.caption("Workspace is always editable. This lock applies after a project is created.")
+    # Global AI intensity
+    st.slider("AI Intensity", 0.0, 1.0, key="ai_intensity")
 
-    # ✅ AI Intensity lives in Story Bible panel (left)
-    st.slider(
-        "AI Intensity",
-        0.0,
-        1.0,
-        key="ai_intensity",
-        help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to every AI generation.",
-        on_change=autosave,
-    )
+    # Hard-lock toggle for Story Bible editing (projects only)
+    if st.session_state.project_id:
+        unlocked = st.checkbox(
+            "Unlock Story Bible Editing",
+            value=bool(st.session_state.locks.get("story_bible_edit_unlocked", False)),
+            help="Hard Lock: ON by default. Toggle ON to edit canon / import to canon / promote to canon.",
+            key="sb_unlock_toggle",
+        )
+        st.session_state.locks["story_bible_edit_unlocked"] = bool(unlocked)
 
-    # Project controls
-    action_cols = st.columns([1, 1])
-    if bay == "NEW":
-        label = "Start Project (Lock Bible → Project)" if in_workspace_mode() else "Create Project (from Bible)"
-        if action_cols[0].button(label, key="create_project_btn"):
-            title_guess = (st.session_state.synopsis.strip().splitlines()[0].strip() if st.session_state.synopsis.strip() else "New Project")
-            pid = create_project_from_current_bible(title_guess)
-            load_project_into_session(pid)
-            st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
-            st.session_state.last_action = "Create Project"
-            autosave()
-            st.rerun()
-
-        if in_workspace_mode() and action_cols[1].button("New Story Bible (fresh ID)", key="new_workspace_bible_btn"):
-            reset_workspace_story_bible(keep_templates=True)
-            st.session_state.voice_status = "Workspace: new Story Bible minted"
-            st.session_state.last_action = "New Story Bible"
-            autosave()
-            st.rerun()
-
-        if action_cols[1].button("Promote → Rough", key="promote_new_to_rough"):
-            if st.session_state.project_id:
-                save_session_into_project()
-                promote_project(st.session_state.project_id, "ROUGH")
-                st.session_state.active_project_by_bay["ROUGH"] = st.session_state.project_id
-                switch_bay("ROUGH")
-                st.session_state.voice_status = f"Promoted → ROUGH: {st.session_state.project_title}"
-                st.session_state.last_action = "Promote → ROUGH"
-                autosave()
-                st.rerun()
-    elif bay in ("ROUGH", "EDIT"):
-        nb = next_bay(bay)
-        if action_cols[1].button(f"Promote → {nb.title()}", key=f"promote_{bay.lower()}"):
-            if st.session_state.project_id and nb:
-                save_session_into_project()
-                promote_project(st.session_state.project_id, nb)
-                st.session_state.active_project_by_bay[nb] = st.session_state.project_id
-                switch_bay(nb)
-                st.session_state.voice_status = f"Promoted → {nb}: {st.session_state.project_title}"
-                st.session_state.last_action = f"Promote → {nb}"
-                autosave()
-                st.rerun()
-
-    # Import / Export hub (restored)
     with st.expander("📦 Import / Export", expanded=False):
-        tab_imp, tab_exp, tab_bundle = st.tabs(["Import", "Export", "Bundles"])
+        st.caption("Import into Draft or Story Bible. Export Draft/Story Bible and JSON bundles.")
 
-        with tab_imp:
-            st.caption("Import a document into Draft or break it into Story Bible sections.")
-            up = st.file_uploader("Upload (.txt, .md, .docx)", type=["txt", "md", "docx"], key="io_upload")
-            paste = st.text_area("Paste text", key="io_paste", height=140)
-            target = st.radio("Import target", ["Draft", "Story Bible"], horizontal=True, key="io_target")
-            merge_mode = st.radio("Merge mode", ["Append", "Replace"], horizontal=True, key="io_merge")
-            use_ai = st.checkbox(
-                "Use AI Breakdown (Story Bible)",
-                value=bool(OPENAI_API_KEY),
-                disabled=not bool(OPENAI_API_KEY),
-                help="Requires OPENAI_API_KEY. Falls back to heuristic if AI fails.",
-                key="io_use_ai",
-            )
+        up = st.file_uploader("Upload (.txt .md .docx)", type=["txt","md","docx"], key="imp_upload")
+        paste = st.text_area("Or paste text", key="import_paste", height=120, label_visibility="collapsed")
 
-            if st.button("Run Import", key="io_run_import"):
-                src_file, name = _read_uploaded_text(up)
-                src = _normalize_text(paste if (paste or "").strip() else src_file)
-                if not src.strip():
-                    st.session_state.tool_output = "Import: no text provided (or file too large)."
-                    st.session_state.voice_status = "Import blocked"
-                    autosave()
-                elif target == "Draft":
-                    if merge_mode == "Replace":
-                        st.session_state.main_text = src
-                    else:
-                        st.session_state.main_text = (st.session_state.main_text.rstrip() + "\n\n" + src).strip() if (st.session_state.main_text or "").strip() else src
-                    st.session_state.voice_status = f"Imported → Draft ({name or 'paste'})"
-                    st.session_state.last_action = "Import → Draft"
-                    autosave()
-                else:
-                    if sb_locked:
-                        st.session_state.tool_output = "Story Bible is LOCKED. Unlock Story Bible Editing to import into it."
-                        st.session_state.voice_status = "Import blocked (locked)"
-                        autosave()
-                    else:
-                        sections = sb_breakdown_ai(src) if use_ai else _sb_sections_from_text_heuristic(src)
-                        st.session_state.synopsis = _merge_section(st.session_state.synopsis, sections.get("synopsis", ""), merge_mode)
-                        st.session_state.genre_style_notes = _merge_section(
-                            st.session_state.genre_style_notes, sections.get("genre_style_notes", ""), merge_mode
-                        )
-                        st.session_state.world = _merge_section(st.session_state.world, sections.get("world", ""), merge_mode)
-                        st.session_state.characters = _merge_section(st.session_state.characters, sections.get("characters", ""), merge_mode)
-                        st.session_state.outline = _merge_section(st.session_state.outline, sections.get("outline", ""), merge_mode)
-                        st.session_state.voice_status = f"Imported → Story Bible ({'AI' if use_ai else 'heuristic'})"
-                        st.session_state.last_action = "Import → Story Bible"
-                        autosave()
+        st.checkbox("Use AI breakdown (Story Bible)", key="import_use_ai")
+        st.checkbox("Use Global Intensity", key="import_use_global")
+        st.slider("Import Intensity Override", 0.0, 1.0, key="import_intensity", disabled=bool(st.session_state.import_use_global))
+        st.selectbox("Merge Mode", ["Append","Replace"], key="import_merge_mode")
 
-        with tab_exp:
-            title = "Workspace" if in_workspace_mode() else st.session_state.project_title
-            meta = {"Context": "Workspace" if in_workspace_mode() else "Project", "Bay": st.session_state.active_bay}
-            if st.session_state.project_id:
-                meta["Project ID"] = st.session_state.project_id
-            stem = _safe_filename(title, "olivetti")
+        colA, colB = st.columns(2)
+        if colA.button("Import → Draft", key="btn_imp_draft", type="secondary"):
+            txt, name = read_uploaded_text(up) if up else ("","")
+            src = normalize_text(paste) if paste.strip() else txt
+            set_dispatch({"type":"import_draft","text": src, "filename": name or "(pasted)"})
+        if colB.button("Import → Story Bible", key="btn_imp_sb", type="secondary"):
+            txt, name = read_uploaded_text(up) if up else ("","")
+            src = normalize_text(paste) if paste.strip() else txt
+            set_dispatch({"type":"import_story_bible","text": src, "filename": name or "(pasted)"})
 
-            # Ensure latest writes are saved into project/workspace
-            if in_workspace_mode():
-                save_workspace_from_session()
+        st.divider()
+
+        # Export helpers
+        def export_story_bible_md() -> str:
+            sb = story_bible_struct_from_session()
+            return "\n\n".join([
+                "# Story Bible",
+                "## Synopsis\n" + (sb["synopsis"] or "").strip(),
+                "## Genre / Style Notes\n" + (sb["genre_style_notes"] or "").strip(),
+                "## World\n" + (sb["world"] or "").strip(),
+                "## Characters\n" + (sb["characters"] or "").strip(),
+                "## Outline\n" + (sb["outline"] or "").strip(),
+            ]).strip() + "\n"
+
+        def export_project_bundle(pid: Optional[str]) -> str:
+            save_current_context()
+            if pid and pid in st.session_state.projects:
+                data = {"type":"project_bundle", "exported_at": now_ts(), "project": st.session_state.projects[pid], "global_voice": compact_global_voice(st.session_state.global_voice_full)}
             else:
-                save_session_into_project()
+                data = {"type":"library_bundle", "exported_at": now_ts(), "projects": st.session_state.projects, "workspace": st.session_state.workspace, "active_project_by_bay": st.session_state.active_project_by_bay, "global_voice": compact_global_voice(st.session_state.global_voice_full)}
+            return json.dumps(data, ensure_ascii=False, indent=2)
 
-            draft_txt = st.session_state.main_text or ""
-            sb_dict = {
-                "synopsis": st.session_state.synopsis,
-                "genre_style_notes": st.session_state.genre_style_notes,
-                "world": st.session_state.world,
-                "characters": st.session_state.characters,
-                "outline": st.session_state.outline,
-            }
+        st.download_button("Export Draft (.txt)", data=(st.session_state.main_text or ""), file_name="draft.txt", mime="text/plain")
+        st.download_button("Export Draft (.md)", data="# Draft\n\n" + (st.session_state.main_text or ""), file_name="draft.md", mime="text/markdown")
+        st.download_button("Export Story Bible (.md)", data=export_story_bible_md(), file_name="story_bible.md", mime="text/markdown")
+        st.download_button("Export Project Bundle (.json)", data=export_project_bundle(st.session_state.project_id), file_name="project_bundle.json", mime="application/json")
+        st.download_button("Export Full Library (.json)", data=export_project_bundle(None), file_name="olivetti_library.json", mime="application/json")
 
-            st.download_button("Download Draft (.txt)", data=draft_txt, file_name=f"{stem}_draft.txt", mime="text/plain")
-            st.download_button(
-                "Download Draft (.md)",
-                data=draft_markdown(title, draft_txt, meta),
-                file_name=f"{stem}_draft.md",
-                mime="text/markdown",
-            )
-            st.download_button(
-                "Download Story Bible (.md)",
-                data=story_bible_markdown(title, sb_dict, meta),
-                file_name=f"{stem}_story_bible.md",
-                mime="text/markdown",
-            )
-
-            try:
-                from docx import Document  # type: ignore
-
-                def _docx_bytes(doc: "Document") -> bytes:
-                    buf = BytesIO()
-                    doc.save(buf)
-                    return buf.getvalue()
-
-                d = Document()
-                d.add_heading(f"Draft — {title}", level=0)
-                for mk, mv in meta.items():
-                    d.add_paragraph(f"{mk}: {mv}")
-                d.add_paragraph(now_ts())
-                d.add_paragraph("")
-                for para in _split_paragraphs(draft_txt):
-                    d.add_paragraph(para)
-                st.download_button(
-                    "Download Draft (.docx)",
-                    data=_docx_bytes(d),
-                    file_name=f"{stem}_draft.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
-            except Exception:
-                st.caption("DOCX export unavailable (python-docx not installed).")
-
-        with tab_bundle:
-            st.caption("Bundle exports are merge-safe (imports never wipe your library).")
-            if st.session_state.project_id:
-                pj = json.dumps(make_project_bundle(st.session_state.project_id), ensure_ascii=False, indent=2)
-                st.download_button(
-                    "Download Project Bundle (.json)",
-                    data=pj,
-                    file_name=f"{_safe_filename(st.session_state.project_title,'project')}_bundle.json",
-                    mime="application/json",
-                )
-            lib = json.dumps(make_library_bundle(), ensure_ascii=False, indent=2)
-            st.download_button("Download Full Library (.json)", data=lib, file_name="olivetti_library_bundle.json", mime="application/json")
-
-            st.divider()
-            target_bay = st.selectbox("Imported projects go to bay", BAYS, index=0, key="io_bundle_target")
-            rename = st.text_input("Optional rename (single project import)", key="io_bundle_rename")
-            upb = st.file_uploader("Upload .json bundle", type=["json"], key="io_bundle_upload")
-            switch_after = st.checkbox("Switch to imported project after import", value=True, key="io_bundle_switch")
-
-            if st.button("Import Bundle", key="io_bundle_import"):
-                if upb is None:
-                    st.session_state.tool_output = "Import bundle: upload a .json file first."
-                    autosave()
+        st.divider()
+        st.caption("Import Bundle (.json) merges in safely — never wipes.")
+        bun = st.file_uploader("Import Bundle (.json)", type=["json"], key="imp_bundle")
+        if st.button("Import Bundle NOW", key="btn_import_bundle", type="primary"):
+            if not bun:
+                st.session_state.tool_output = "Bundle import: no file."
+            else:
+                raw = bun.getvalue()
+                if raw and len(raw) > MAX_UPLOAD_BYTES:
+                    st.session_state.tool_output = "Bundle import: file too large."
                 else:
-                    raw = upb.getvalue()
-                    if raw is not None and len(raw) > MAX_UPLOAD_BYTES:
-                        st.session_state.tool_output = "Import bundle: file too large."
-                        autosave()
-                    else:
-                        try:
-                            obj = json.loads((raw or b"").decode("utf-8"))
-                        except Exception:
-                            obj = None
-                        if isinstance(obj, dict) and obj.get("projects"):
-                            n = import_library_bundle(obj)
-                            st.session_state.voice_status = f"Imported library bundle: {n} projects merged."
-                            st.session_state.last_action = "Import Library Bundle"
-                            autosave()
-                        elif isinstance(obj, dict) and obj.get("project"):
-                            pid = import_project_bundle(obj, target_bay=target_bay, rename=rename)
-                            if pid:
-                                st.session_state.voice_status = f"Imported project bundle → {pid}"
-                                st.session_state.last_action = "Import Project Bundle"
-                                autosave()
-                                if switch_after:
-                                    switch_bay(target_bay)
-                                    load_project_into_session(pid)
-                                    st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
-                                    autosave()
-                                    st.rerun()
-                            else:
-                                st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
-                                autosave()
+                    try:
+                        obj = json.loads(raw.decode("utf-8"))
+                        typ = obj.get("type","")
+                        if typ == "project_bundle":
+                            p = obj.get("project", {})
+                            if not isinstance(p, dict) or not p.get("id"):
+                                raise ValueError("Invalid project bundle.")
+                            st.session_state.projects[p["id"]] = p
+                            st.session_state.tool_output = f"Imported project bundle: {p.get('title','')}."
+                        elif typ == "library_bundle":
+                            projs = obj.get("projects", {})
+                            if isinstance(projs, dict):
+                                st.session_state.projects.update(projs)
+                            ws = obj.get("workspace")
+                            if isinstance(ws, dict):
+                                st.session_state.workspace = ws
+                            apbb = obj.get("active_project_by_bay")
+                            if isinstance(apbb, dict):
+                                for b in BAYS:
+                                    apbb.setdefault(b, None)
+                                st.session_state.active_project_by_bay = apbb
+                            gv = obj.get("global_voice")
+                            if isinstance(gv, dict):
+                                st.session_state.global_voice_full = rebuild_global_voice(gv)
+                                st.session_state.global_voice = compact_global_voice(st.session_state.global_voice_full)
+                            st.session_state.tool_output = "Imported full library bundle."
                         else:
-                            st.session_state.tool_output = "Import bundle: bundle type not recognized."
-                            autosave()
+                            raise ValueError("Unknown bundle type.")
+                        autosave(force=True)
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state.tool_output = f"Bundle import error:\n{e}"
 
-    # Junk Drawer + Story Bible sections (labels hidden safely)
-    with st.expander("🗃 Junk Drawer"):
-        st.text_area(
-            "Junk Drawer",
-            key="junk",
-            height=80,
-            on_change=autosave,
-            label_visibility="collapsed",
-            help="Commands: /create: Title  |  /promote  |  /find: term",
-        )
-        st.text_area("Tool Output", value=st.session_state.tool_output, height=140, disabled=True)
+    with st.expander("🧠 Idea Bank (Junk Drawer)", expanded=False):
+        st.text_area("", key="junk", height=140, label_visibility="collapsed")
+        ideas = idea_lines(st.session_state.junk or "")
+        if ideas:
+            selected = st.multiselect("Select idea line(s)", options=ideas, key="promote_selected")
+            cols = st.columns([1.2,1.2,1.6])
+            target = cols[0].selectbox("Target", ["Synopsis","Genre/Style Notes","World","Characters","Outline","Draft"], key="promote_target")
+            remove = cols[1].checkbox("Remove from Idea Bank", key="promote_remove")
+            if cols[2].button("Promote Selected → Target", key="btn_promote_selected", type="secondary"):
+                set_dispatch({"type":"promote_ideas","target": target, "selected": selected, "remove": remove})
+        st.markdown("**Search**")
+        term = st.text_input("Find term", key="find_term", label_visibility="collapsed")
+        if st.button("Find", key="btn_find_local", type="secondary"):
+            st.session_state.tool_output = local_find(term)
 
-    with st.expander("📝 Synopsis"):
-        st.text_area("Synopsis", key="synopsis", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+        st.markdown("**Tool Output**")
+        st.code(st.session_state.tool_output or "", language="text")
 
-    with st.expander("🎭 Genre / Style Notes"):
-        st.text_area(
-            "Genre / Style Notes",
-            key="genre_style_notes",
-            height=80,
-            on_change=autosave,
-            label_visibility="collapsed",
-            disabled=sb_locked,
-        )
-
-    with st.expander("🌍 World Elements"):
-        st.text_area("World", key="world", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
-
-    with st.expander("👤 Characters"):
-        st.text_area(
-            "Characters",
-            key="characters",
-            height=120,
-            on_change=autosave,
-            label_visibility="collapsed",
-            disabled=sb_locked,
-        )
-
-    with st.expander("🧱 Outline"):
-        st.text_area("Outline", key="outline", height=160, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
-
+    # Story Bible editors (lockable)
+    disabled = story_bible_locked()
+    with st.expander("📝 Synopsis", expanded=False):
+        st.text_area("", key="synopsis", height=120, disabled=disabled, label_visibility="collapsed")
+    with st.expander("🎭 Genre / Style Notes", expanded=False):
+        st.text_area("", key="genre_style_notes", height=120, disabled=disabled, label_visibility="collapsed")
+    with st.expander("🌍 World", expanded=False):
+        st.text_area("", key="world", height=160, disabled=disabled, label_visibility="collapsed")
+    with st.expander("👤 Characters", expanded=False):
+        st.text_area("", key="characters", height=160, disabled=disabled, label_visibility="collapsed")
+    with st.expander("🧱 Outline", expanded=False):
+        st.text_area("", key="outline", height=200, disabled=disabled, label_visibility="collapsed")
 
 # ============================================================
-# CENTER — WRITING DESK
+# CENTER — Writing Desk (linked)
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
-    st.text_area("Draft", key="main_text", height=650, on_change=autosave, label_visibility="collapsed")
 
-    b1 = st.columns(5)
-    if b1[0].button("Write", key="btn_write"):
-        queue_action("Write")
-        st.rerun()
-    if b1[1].button("Rewrite", key="btn_rewrite"):
-        queue_action("Rewrite")
-        st.rerun()
-    if b1[2].button("Expand", key="btn_expand"):
-        queue_action("Expand")
-        st.rerun()
-    if b1[3].button("Rephrase", key="btn_rephrase"):
-        queue_action("Rephrase")
-        st.rerun()
-    if b1[4].button("Describe", key="btn_describe"):
-        queue_action("Describe")
-        st.rerun()
+    if st.session_state.project_id:
+        p = st.session_state.projects.get(st.session_state.project_id, {})
+        st.caption(
+            f"Linked To: **{st.session_state.active_bay} / {st.session_state.project_title}** "
+            f"• Bible ID: **{p.get('story_bible_id','—')}** "
+            f"• Created: **{p.get('story_bible_created_ts','—')}** "
+            f"• Locked: **{p.get('story_bible_locked_ts','—') or '—'}**"
+        )
+    else:
+        w = st.session_state.workspace
+        # Workspace gets its own deterministic bible id for clarity
+        wid = st.session_state.workspace.get("workspace_bible_id")
+        if not wid:
+            wid = hashlib.md5(("workspace|" + now_ts()).encode("utf-8")).hexdigest()[:12]
+            st.session_state.workspace["workspace_bible_id"] = wid
+            st.session_state.workspace["workspace_bible_created_ts"] = now_ts()
+        st.caption(
+            f"Workspace Story Bible (not linked yet) • Bible ID: **{wid}** • Created: {st.session_state.workspace.get('workspace_bible_created_ts','—')}"
+        )
 
-    b2 = st.columns(5)
-    if b2[0].button("Spell", key="btn_spell"):
-        queue_action("Spell")
-        st.rerun()
-    if b2[1].button("Grammar", key="btn_grammar"):
-        queue_action("Grammar")
-        st.rerun()
-    if b2[2].button("Find", key="btn_find"):
-        queue_action("__FIND_HINT__")
-        st.rerun()
-    if b2[3].button("Synonym", key="btn_synonym"):
-        queue_action("Synonym")
-        st.rerun()
-    if b2[4].button("Sentence", key="btn_sentence"):
-        queue_action("Sentence")
-        st.rerun()
+    if not st.session_state.project_id:
+        with st.expander("⚙ Project Controls (from the desk)", expanded=False):
+            st.caption("You are in the Story Bible workspace. Start a project to lock this Bible to a NEW project.")
+            if "desk_workspace_title" not in st.session_state:
+                st.session_state.desk_workspace_title = st.session_state.workspace_title
 
+            def _sync_desk_title():
+                st.session_state.workspace_title = st.session_state.desk_workspace_title
+
+            st.text_input("Project Title", key="desk_workspace_title", on_change=_sync_desk_title)
+            if st.button("Start Project NOW (from desk)", key="btn_start_project_desk", type="primary"):
+                set_dispatch({"type":"start_project","title": st.session_state.workspace_title})
+
+    with st.expander("📌 Story Bible Dock (read-only)", expanded=False):
+        tabs = st.tabs(["Synopsis","Genre/Style","World","Characters","Outline"])
+        tabs[0].text_area("Synopsis", value=st.session_state.synopsis or "", height=150, disabled=True, label_visibility="collapsed")
+        tabs[1].text_area("Genre/Style", value=st.session_state.genre_style_notes or "", height=150, disabled=True, label_visibility="collapsed")
+        tabs[2].text_area("World", value=st.session_state.world or "", height=150, disabled=True, label_visibility="collapsed")
+        tabs[3].text_area("Characters", value=st.session_state.characters or "", height=150, disabled=True, label_visibility="collapsed")
+        tabs[4].text_area("Outline", value=st.session_state.outline or "", height=150, disabled=True, label_visibility="collapsed")
+
+    # Draft editor
+    st.text_area("", key="main_text", height=680, label_visibility="collapsed")
+
+    # Action buttons (dispatch to avoid session_state mutation after widgets)
+    row1 = st.columns(5)
+    for i, a in enumerate(ACTIONS_PRIMARY):
+        if row1[i].button(a, key=f"btn_{a.lower()}", type="primary"):
+            set_dispatch({"type":"partner_action","action": a})
+
+    row2 = st.columns(5)
+    for i, a in enumerate(ACTIONS_SECONDARY):
+        if row2[i].button(a, key=f"btn_{a.lower()}", type="secondary"):
+            set_dispatch({"type":"partner_action","action": a})
 
 # ============================================================
-# RIGHT — VOICE BIBLE
+# RIGHT — Voice Bible + Training + Action Controls
 # ============================================================
 with right:
     st.subheader("🎙 Voice Bible")
 
-    st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
-    st.selectbox(
-        "Writing Style",
-        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"] + ENGINE_STYLES,
-        key="writing_style",
-        disabled=not st.session_state.vb_style_on,
-        on_change=autosave,
-    )
-    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on, on_change=autosave)
+    # Writing style
+    st.checkbox("Enable Writing Style", key="vb_style_on")
+    st.selectbox("Writing Style", ENGINE_STYLES + ["Neutral","Minimal","Expressive","Hardboiled","Poetic"], key="writing_style", disabled=not st.session_state.vb_style_on)
+    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on)
 
     with st.expander("🎨 Style Trainer (Engine Styles)", expanded=False):
-        st.caption("Train per-project style banks. These steer the engine styles across all actions.")
-        s_cols = st.columns([1.2, 1.0, 1.0])
-        st_style = s_cols[0].selectbox("Engine style", ENGINE_STYLES, key="style_train_style")
-        st_lane = s_cols[1].selectbox("Lane", LANES, key="style_train_lane")
-        split_mode = s_cols[2].selectbox("Split", ["Paragraphs", "Whole"], key="style_train_split")
-
-        up = st.file_uploader("Upload training (.txt/.md/.docx)", type=["txt", "md", "docx"], key="style_train_upload")
-        paste = st.text_area("Paste training text", key="style_train_paste", height=140)
-
-        c1, c2, c3 = st.columns([1, 1, 1])
-        if c1.button("Add Samples", key="style_train_add"):
-            ftxt, fname = _read_uploaded_text(up)
-            src = _normalize_text((paste or "").strip() if (paste or "").strip() else ftxt)
-            if not src.strip():
-                st.session_state.tool_output = "Style Trainer: no text provided (or file too large)."
-                st.session_state.voice_status = "Style Trainer blocked"
-                autosave()
-            else:
-                n = add_style_samples(st_style, st_lane, src, split_mode=split_mode)
-                st.session_state.voice_status = f"Style Trainer: added {n} sample(s) → {st_style} • {st_lane}"
-                st.session_state.tool_output = _clamp_text(f"Added {n} sample(s) to {st_style} / {st_lane}.\nSource: {fname or 'paste'}")
-                autosave()
-
-        if c2.button("Delete last", key="style_train_del"):
-            if delete_last_style_sample(st_style, st_lane):
-                st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
-                autosave()
-                st.rerun()
-            else:
-                st.warning("Nothing to delete for that style/lane.")
-
-        if c3.button("Clear trainer text", key="style_train_clear"):
-            st.session_state.ui_notice = "Style trainer text cleared."
-            queue_action("__STYLE_CLEAR_PASTE__")
-            st.rerun()
-
-        st.caption("Lane sample counts:")
-        bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
-        lanes = bank.get("lanes") or {}
-        counts = {ln: len((lanes.get(ln) or [])) for ln in LANES}
-        st.code("  ".join([f"{ln}: {counts[ln]}" for ln in LANES]), language="")
-
-        if st.button("Clear THIS lane", key="style_train_clear_lane"):
-            clear_style_lane(st_style, st_lane)
-            st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
-            autosave()
-            st.rerun()
+        st.caption("Train NARRATIVE / DESCRIPTIVE / EMOTIONAL / LYRICAL with your own text. Project-specific.")
+        up = st.file_uploader("Upload training doc (.txt .md .docx)", type=["txt","md","docx"], key="style_train_upload")
+        st.text_area("Or paste training text", key="style_train_text", height=120)
+        st.selectbox("Style Bank", ENGINE_STYLES, key="style_train_style")
+        st.selectbox("Lane", LANES, key="style_train_lane")
+        st.selectbox("Split Mode", ["Paragraphs","Whole"], key="style_train_split")
+        if st.button("Add Samples → Style Bank", key="btn_train_style", type="primary"):
+            txt, name = read_uploaded_text(up) if up else ("","")
+            src = normalize_text(st.session_state.style_train_text) if st.session_state.style_train_text.strip() else txt
+            set_dispatch({"type":"train_style","name": st.session_state.style_train_style, "lane": st.session_state.style_train_lane, "text": src, "split": st.session_state.style_train_split})
 
     st.divider()
 
-    st.checkbox("Enable Genre Influence", key="vb_genre_on", on_change=autosave)
-    st.selectbox(
-        "Genre",
-        ["Literary", "Noir", "Thriller", "Comedy", "Lyrical"],
-        key="genre",
-        disabled=not st.session_state.vb_genre_on,
-        on_change=autosave,
-    )
-    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on, on_change=autosave)
+    # Genre influence
+    st.checkbox("Enable Genre Influence", key="vb_genre_on")
+    st.selectbox("Genre", ENGINE_GENRES + ["Literary","Noir","Thriller(alt)","Comedy(alt)"], key="genre", disabled=not st.session_state.vb_genre_on)
+    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on)
+
+    with st.expander("🧬 Genre Trainer (Engine Genres)", expanded=False):
+        st.caption("Train Romance / Thriller / Fantasy / Science Fiction / Comedy with your own text. Project-specific.")
+        up = st.file_uploader("Upload training doc (.txt .md .docx)", type=["txt","md","docx"], key="genre_train_upload")
+        st.text_area("Or paste training text", key="genre_train_text", height=120)
+        st.selectbox("Genre Bank", ENGINE_GENRES, key="genre_train_genre")
+        st.selectbox("Lane", LANES, key="genre_train_lane")
+        st.selectbox("Split Mode", ["Paragraphs","Whole"], key="genre_train_split")
+        if st.button("Add Samples → Genre Bank", key="btn_train_genre", type="primary"):
+            txt, name = read_uploaded_text(up) if up else ("","")
+            src = normalize_text(st.session_state.genre_train_text) if st.session_state.genre_train_text.strip() else txt
+            set_dispatch({"type":"train_genre","name": st.session_state.genre_train_genre, "lane": st.session_state.genre_train_lane, "text": src, "split": st.session_state.genre_train_split})
 
     st.divider()
 
-    st.checkbox("Enable Trained Voice", key="vb_trained_on", on_change=autosave)
-    trained_options = voice_names_for_selector()
-    if st.session_state.trained_voice not in trained_options:
-        st.session_state.trained_voice = "— None —"
-    st.selectbox(
-        "Trained Voice",
-        trained_options,
-        key="trained_voice",
-        disabled=not st.session_state.vb_trained_on,
-        on_change=autosave,
-    )
-    st.slider(
-        "Trained Voice Intensity",
-        0.0,
-        1.0,
-        key="trained_intensity",
-        disabled=not st.session_state.vb_trained_on,
-        on_change=autosave,
-    )
-
-    with st.expander("🧬 Voice Vault (Training Samples)", expanded=False):
-        st.caption("Drop in passages from your work. Olivetti retrieves the closest exemplars per lane.")
-
-        existing_voices = [v for v in (st.session_state.voices or {}).keys()]
-        existing_voices = sorted(existing_voices, key=lambda x: (x not in ("Voice A", "Voice B"), x))
-        if not existing_voices:
-            existing_voices = ["Voice A", "Voice B"]
-
-        vcol1, vcol2 = st.columns([2, 1])
-        vault_voice = vcol1.selectbox("Vault voice", existing_voices, key="vault_voice_sel")
-        new_name = vcol2.text_input("New voice", key="vault_new_voice", label_visibility="collapsed", placeholder="New voice name")
-        if vcol2.button("Create", key="vault_create_voice"):
-            if create_custom_voice(new_name):
-                st.session_state.voice_status = f"Voice created: {new_name.strip()}"
-                autosave()
-                st.rerun()
-            else:
-                st.warning("Could not create that voice (empty or already exists).")
-
-        lane = st.selectbox("Lane", LANES, key="vault_lane_sel")
-        sample = st.text_area("Sample", key="vault_sample_text", height=140, label_visibility="collapsed", placeholder="Paste a passage...")
-        a1, a2 = st.columns([1, 1])
-        if a1.button("Add sample", key="vault_add_sample"):
-            if add_voice_sample(vault_voice, lane, sample):
-                st.session_state.ui_notice = f"Added sample → {vault_voice} • {lane}"
-                queue_action("__VAULT_CLEAR_SAMPLE__")
-                autosave()
-                st.rerun()
-            else:
-                st.warning("No sample text found.")
-
-        # Quick stats + delete last sample
-        v = (st.session_state.voices or {}).get(vault_voice, {})
-        lane_counts = {ln: len((v.get("lanes", {}) or {}).get(ln, []) or []) for ln in LANES}
-        st.caption("Samples: " + "  ".join([f"{ln}: {lane_counts[ln]}" for ln in LANES]))
-
-        if a2.button("Delete last sample", key="vault_del_last"):
-            if delete_voice_sample(vault_voice, lane, index_from_end=0):
-                st.session_state.voice_status = f"Deleted last sample → {vault_voice} • {lane}"
-                autosave()
-                st.rerun()
-            else:
-                st.warning("Nothing to delete for that lane.")
+    st.checkbox("Enable Match My Style", key="vb_match_on")
+    st.text_area("Style Example", key="voice_sample", height=120, disabled=not st.session_state.vb_match_on)
+    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on)
 
     st.divider()
 
-    st.checkbox("Enable Match My Style", key="vb_match_on", on_change=autosave)
-    st.text_area(
-        "Style Example",
-        key="voice_sample",
-        height=100,
-        disabled=not st.session_state.vb_match_on,
-        on_change=autosave,
-    )
-    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on, on_change=autosave)
+    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on")
+    st.text_area("Voice Lock Prompt", key="voice_lock_prompt", height=100, disabled=not st.session_state.vb_lock_on)
+    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on)
 
     st.divider()
 
-    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on", on_change=autosave)
-    st.text_area(
-        "Voice Lock Prompt",
-        key="voice_lock_prompt",
-        height=80,
-        disabled=not st.session_state.vb_lock_on,
-        on_change=autosave,
-    )
-    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on, on_change=autosave)
+    
+    st.checkbox("Enforce POV", key="vb_pov_on")
+    st.selectbox("POV", ["First","Close Third","Omniscient"], key="pov", disabled=not st.session_state.vb_pov_on)
+    st.slider("POV Strength", 0.0, 1.0, key="pov_strength", disabled=not st.session_state.vb_pov_on)
 
     st.divider()
 
-    st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov", on_change=autosave)
-    st.selectbox("Tense", ["Past", "Present"], key="tense", on_change=autosave)
+    st.checkbox("Enforce Tense", key="vb_tense_on")
+    st.selectbox("Tense", ["Past","Present"], key="tense", disabled=not st.session_state.vb_tense_on)
+    st.slider("Tense Strength", 0.0, 1.0, key="tense_strength", disabled=not st.session_state.vb_tense_on)
 
+
+    st.divider()
+
+    # Global voice (optional master + per-project toggle)
+    with st.expander("🌐 Global Voice (optional)", expanded=False):
+        gv = st.session_state.global_voice_full
+        enabled = st.checkbox("Enable Global Voice (master)", value=bool(gv.get("enabled", False)), key="gv_enabled")
+        strength = st.slider("Global Voice Strength", 0.0, 1.0, value=float(gv.get("strength", 0.65)), key="gv_strength")
+        gv["enabled"] = bool(enabled)
+        gv["strength"] = clamp01(strength)
+        st.session_state.global_voice_full = gv
+        st.session_state.global_voice = compact_global_voice(gv)
+
+        if st.session_state.project_id:
+            st.checkbox("Use Global Voice (this project)", key="use_global_voice")
+            st.slider("Project Global Voice Mix", 0.0, 1.0, key="global_voice_strength")
+        else:
+            st.caption("Per-project toggle appears inside projects (not workspace).")
+
+        st.divider()
+        st.caption("Train Global Voice with your own text (affects all projects that enable it).")
+        up = st.file_uploader("Upload training doc", type=["txt","md","docx"], key="gv_upload")
+        gv_text = st.text_area("Or paste training text", key="gv_paste", height=110)
+        gv_lane = st.selectbox("Lane", LANES, key="gv_lane")
+        gv_split = st.selectbox("Split Mode", ["Paragraphs","Whole"], key="gv_split")
+        if st.button("Add Samples → Global Voice", key="btn_train_gv", type="primary"):
+            txt, name = read_uploaded_text(up) if up else ("","")
+            src = normalize_text(gv_text) if gv_text.strip() else txt
+            set_dispatch({"type":"train_global_voice","lane": gv_lane, "text": src, "split": gv_split})
+
+    # Action Controls
+    with st.expander("🧰 Action Controls (Per Button)", expanded=False):
+        st.checkbox("Lock Action Controls (this context)", key="ac_locked")
+        locked = bool(st.session_state.ac_locked)
+        st.caption("Each button has Enable + Use Global Intensity + Override Intensity.")
+
+        st.markdown("**Primary Buttons**")
+        for a in ACTIONS_PRIMARY:
+            c = st.columns([1.2, 1.0, 1.6])
+            c[0].checkbox(f"{a} Enabled", key=f"ac__{a}__enabled", disabled=locked)
+            c[1].checkbox("Use Global", key=f"ac__{a}__use_global", disabled=locked)
+            c[2].slider(
+                "Intensity Override",
+                0.0, 1.0,
+                key=f"ac__{a}__intensity",
+                disabled=locked or bool(st.session_state.get(f"ac__{a}__use_global", True)),
+            )
+
+        st.markdown("**Secondary Buttons**")
+        for a in ACTIONS_SECONDARY:
+            c = st.columns([1.2, 1.0, 1.6])
+            c[0].checkbox(f"{a} Enabled", key=f"ac__{a}__enabled", disabled=locked)
+            c[1].checkbox("Use Global", key=f"ac__{a}__use_global", disabled=locked)
+            c[2].slider(
+                "Intensity Override",
+                0.0, 1.0,
+                key=f"ac__{a}__intensity",
+                disabled=locked or bool(st.session_state.get(f"ac__{a}__use_global", True)),
+            )
 
 # ============================================================
-# SAFETY NET SAVE EVERY RERUN
+# End-of-run autosave (safe & cheap)
 # ============================================================
-save_all_to_disk()
+autosave()
