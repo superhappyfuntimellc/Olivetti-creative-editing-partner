@@ -4,23 +4,22 @@ import math
 import hashlib
 import streamlit as st
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List
 
 # ============================================================
-# ENV / METADATA HYGIENE (prevents "undefined" artifacts)
+# ENV / METADATA HYGIENE
 # ============================================================
 os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
 # Streamlit Cloud Secrets preferred; env var fallback
-OPENAI_API_KEY = ""
-OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-4.1-mini"
 try:
     OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")  # type: ignore[attr-defined]
-    OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", OPENAI_MODEL)  # type: ignore[attr-defined]
+    OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", DEFAULT_MODEL)  # type: ignore[attr-defined]
 except Exception:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", OPENAI_MODEL)
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
 # ============================================================
 # CONFIG
@@ -42,7 +41,7 @@ st.markdown(
       font-size: 18px !important;
       line-height: 1.65 !important;
       padding: 18px !important;
-      resize: vertical !important;
+      resize: vertical !important;   /* central writing window expandable */
       min-height: 520px !important;
     }
 
@@ -107,19 +106,19 @@ def init_state():
         "focus_mode": False,
 
         # Production mode (wired to existing top buttons)
-        "stage": "Rough",  # Rough | Edit | Final
+        "stage": "Rough",     # Rough | Edit | Final
         "last_action": "—",
 
-        # Safety
-        "revisions": [],          # list[{ts, action, text}]
-        "redo_stack": [],         # list[{ts, action, text}]
+        # Safety: non-destructive history
+        "revisions": [],      # list[{ts, action, text}]
+        "redo_stack": [],     # list[{ts, action, text}]
 
-        # Temporary "My Voice" (session-only)
-        "voiceA_snips": [],       # list[str]
-        "voiceB_snips": [],       # list[str]
+        # Temporary session “My Voice”
+        "voiceA_snips": [],   # list[str]
+        "voiceB_snips": [],   # list[str]
         "voice_status": "—",
 
-        # Internal throttles
+        # Throttles
         "last_captured_hash": "",
     }
 
@@ -137,7 +136,6 @@ st.session_state.focus_mode = False
 # ============================================================
 def autosave():
     st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
-    # Opportunistic voice capture (session only) to support 10–12 hour training
     capture_voice_snippet_from_draft()
 
 # ============================================================
@@ -152,7 +150,6 @@ def push_revision(action_name: str):
     st.session_state.revisions.append(snap)
     if len(st.session_state.revisions) > 80:
         st.session_state.revisions = st.session_state.revisions[-80:]
-    # Any new action clears redo
     st.session_state.redo_stack = []
 
 def undo_last():
@@ -180,16 +177,15 @@ def redo_last():
     st.session_state.main_text = snap["text"]
     st.session_state.last_action = "Redo"
     autosave()
-    st.session_state.voice_status = f"Redo: restored."
+    st.session_state.voice_status = "Redo: restored."
 
 # ============================================================
 # COMMANDS (no new UI) — typed into Story Bible Junk Drawer
 # ============================================================
-# This keeps every feature intact: we simply interpret special commands if you type them.
 CMD_UNDO = re.compile(r"^\s*/undo\s*$", re.IGNORECASE)
 CMD_REDO = re.compile(r"^\s*/redo\s*$", re.IGNORECASE)
 CMD_STATUS = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
-CMD_CLEAR_JUNK = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
+CMD_CLEAR = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
 
 def handle_junk_commands():
     raw = (st.session_state.junk or "").strip()
@@ -209,13 +205,16 @@ def handle_junk_commands():
         st.session_state.voice_status = f"Status: A={a} samples, B={b} samples. Revisions={len(st.session_state.revisions)}."
         st.session_state.junk = ""
         return
-    if CMD_CLEAR_JUNK.match(raw):
+    if CMD_CLEAR.match(raw):
         st.session_state.junk = ""
         st.session_state.voice_status = "Cleared."
         return
 
+# Run command handler each rerun (keeps it “OS-like” without UI changes)
+handle_junk_commands()
+
 # ============================================================
-# “MY VOICE” — Session-only training (Sudowrite ×100 core)
+# TEMP “MY VOICE” — Session-only training + retrieval
 # ============================================================
 WORD_RE = re.compile(r"[A-Za-z']+")
 
@@ -247,14 +246,10 @@ def _split_paragraphs(text: str) -> List[str]:
         return []
     return re.split(r"\n\s*\n", t, flags=re.MULTILINE)
 
-def _join_paragraphs(paras: List[str]) -> str:
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
-
 def capture_voice_snippet_from_draft():
     """
-    Session-only training:
-    - As you write, we capture the *latest paragraph* occasionally.
-    - If Trained Voice is enabled and you selected Voice A or Voice B, it learns passively.
+    Learns passively DURING the session (temporary memory).
+    Captures the latest paragraph occasionally while Trained Voice is ON.
     """
     if not st.session_state.vb_trained_on:
         return
@@ -262,15 +257,13 @@ def capture_voice_snippet_from_draft():
     if tv not in ("Voice A", "Voice B"):
         return
 
-    text = st.session_state.main_text or ""
-    paras = _split_paragraphs(text)
+    paras = _split_paragraphs(st.session_state.main_text or "")
     if not paras:
         return
     last = paras[-1].strip()
     if len(last) < 240:
-        return  # too small; wait for substance
+        return
 
-    # throttle duplicates
     h = hashlib.md5(last.encode("utf-8")).hexdigest()
     if h == st.session_state.last_captured_hash:
         return
@@ -300,10 +293,9 @@ def retrieve_voice_exemplars(query_text: str, voice: str, k: int = 3) -> List[st
     return top[:k]
 
 # ============================================================
-# PARTNER BRIEF (Story Bible + Voice Bible + Stage)
+# STORY BIBLE AS CANON + IDEA BANK (MANDATORY INJECTION)
 # ============================================================
-def build_partner_brief(action_name: str) -> str:
-    # Story Bible
+def _story_bible_text() -> str:
     sb = []
     if st.session_state.synopsis.strip():
         sb.append(f"SYNOPSIS:\n{st.session_state.synopsis.strip()}")
@@ -315,9 +307,27 @@ def build_partner_brief(action_name: str) -> str:
         sb.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
     if st.session_state.outline.strip():
         sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
-    story_bible = "\n\n".join(sb).strip() if sb else "— None provided —"
+    return "\n\n".join(sb).strip() if sb else "— None provided —"
 
-    # Voice Bible controls (kept EXACT — we only interpret them)
+def build_partner_brief(action_name: str) -> str:
+    story_bible = _story_bible_text()
+
+    idea_directive = """
+STORY BIBLE USAGE (MANDATORY):
+- Treat Story Bible as CANON and as an IDEA BANK.
+- When generating NEW material, you MUST pull at least 2 concrete specifics from the Story Bible
+  (character detail, world element, outline beat, relationship, rule, setting detail).
+- Do not contradict canon. Prefer Story Bible specificity over generic invention.
+""".strip()
+
+    dominance = """
+DOMINANCE RULES (do not violate):
+- If Voice Lock is ON: it is a hard constraint.
+- If Trained Voice is ON: mimic the author’s cadence and sentence habits from exemplars; do not drift.
+- Match My Style affects micro-style texture; do not change story facts.
+- Genre influence shapes structure/tropes but must not override the author’s voice.
+""".strip()
+
     vb = []
     if st.session_state.vb_style_on:
         vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
@@ -329,24 +339,14 @@ def build_partner_brief(action_name: str) -> str:
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
-    # Trained Voice exemplars (temporary session memory)
     exemplars = []
     tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv in ("Voice A", "Voice B"):
         ctx = (st.session_state.main_text or "")[-2500:]
         exemplars = retrieve_voice_exemplars(ctx if ctx.strip() else st.session_state.synopsis, tv, k=3)
-
     ex_block = "— None —"
     if exemplars:
         ex_block = "\n\n---\n\n".join(exemplars)
-
-    dominance = """
-DOMINANCE RULES (do not violate):
-- If Voice Lock is ON: it is a hard constraint.
-- If Trained Voice is ON: mimic the author’s cadence and sentence habits from exemplars; do not drift.
-- Match My Style affects micro-style texture; do not change story facts.
-- Genre influence shapes structure/tropes but must not override the author’s voice.
-""".strip()
 
     stage = st.session_state.stage
     pov = st.session_state.pov
@@ -365,6 +365,8 @@ WORKING MODE: {stage}
 POV: {pov}
 TENSE: {tense}
 
+{idea_directive}
+
 {dominance}
 
 VOICE CONTROLS:
@@ -373,14 +375,14 @@ VOICE CONTROLS:
 TRAINED VOICE EXEMPLARS (mimic patterns, not content):
 {ex_block}
 
-STORY BIBLE (canon/constraints):
+STORY BIBLE (canon/constraints + idea bank):
 {story_bible}
 
 ACTION: {action_name}
 """.strip()
 
 # ============================================================
-# OPTIONAL OPENAI CALL (if OPENAI_API_KEY set)
+# OPTIONAL OPENAI CALL (safe; won’t crash if missing)
 # ============================================================
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
     if not OPENAI_API_KEY:
@@ -416,22 +418,12 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
-def last_sentence(text: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    parts = re.split(r"(?<=[.!?])\s+", t)
-    return parts[-1].strip() if parts else t
-
 # ============================================================
 # PARTNER ACTIONS (wired to existing buttons)
 # ============================================================
 def partner_action(action: str):
     text = st.session_state.main_text or ""
     push_revision(action)
-
-    # Commands are processed from Junk Drawer (no new UI)
-    handle_junk_commands()
 
     brief = build_partner_brief(action)
     use_ai = bool(OPENAI_API_KEY)
@@ -451,83 +443,89 @@ def partner_action(action: str):
             autosave()
             st.session_state.last_action = action
 
-    # Assertive tool behavior (B mode)
-    if action == "Write":
-        if use_ai:
-            task = (
-                "Continue decisively. Add 1–3 paragraphs that advance the scene. "
-                "No recap. No planning. No explanation. Just prose."
-            )
-            out = call_openai(brief, task, text if text.strip() else "Start the opening.")
-            apply_append(out)
-        else:
-            # Still safe: no destructive change
-            apply_replace(text)
-        return
+    # Assertive tool behavior (Sudowrite ×100, but obedient)
+    try:
+        if action == "Write":
+            if use_ai:
+                task = (
+                    "Continue decisively. Add 1–3 paragraphs that advance the scene. "
+                    "MANDATORY: incorporate at least 2 Story Bible specifics. "
+                    "No recap. No planning. No explanation. Just prose."
+                )
+                out = call_openai(brief, task, text if text.strip() else "Start the opening.")
+                apply_append(out)
+            else:
+                apply_replace(text)
+            return
 
-    if action == "Rewrite":
-        if use_ai:
-            task = (
-                "Rewrite for professional quality. Tighten, sharpen, commit. "
-                "Preserve meaning and voice. Return the full revised text."
-            )
-            out = call_openai(brief, task, text)
-            apply_replace(out)
-        else:
-            apply_replace(local_cleanup(text))
-        return
+        if action == "Rewrite":
+            if use_ai:
+                task = (
+                    "Rewrite for professional quality. Tighten, sharpen, commit. "
+                    "Preserve meaning and voice. Preserve Story Bible canon. Return full revised text."
+                )
+                out = call_openai(brief, task, text)
+                apply_replace(out)
+            else:
+                apply_replace(local_cleanup(text))
+            return
 
-    if action == "Expand":
-        if use_ai:
-            task = (
-                "Expand with meaningful depth: concrete detail, specificity, subtext. "
-                "No padding. Return the full revised text."
-            )
-            out = call_openai(brief, task, text)
-            apply_replace(out)
-        else:
-            apply_replace(text)
-        return
+        if action == "Expand":
+            if use_ai:
+                task = (
+                    "Expand with meaningful depth: concrete detail, specificity, subtext. "
+                    "No padding. Preserve canon. Return full revised text."
+                )
+                out = call_openai(brief, task, text)
+                apply_replace(out)
+            else:
+                apply_replace(text)
+            return
 
-    if action == "Rephrase":
-        if use_ai:
-            task = (
-                "Replace the final sentence with a stronger one (same meaning). "
-                "Return the full text with that change applied."
-            )
-            out = call_openai(brief, task, text)
-            apply_replace(out)
-        else:
-            apply_replace(text)
-        return
+        if action == "Rephrase":
+            if use_ai:
+                task = (
+                    "Replace the final sentence with a stronger one (same meaning). "
+                    "Preserve voice and canon. Return full text with that change applied."
+                )
+                out = call_openai(brief, task, text)
+                apply_replace(out)
+            else:
+                apply_replace(text)
+            return
 
-    if action == "Describe":
-        if use_ai:
-            task = (
-                "Add vivid description with control: sharpen nouns/verbs, add sensory detail, "
-                "keep pace. Return the full revised text."
-            )
-            out = call_openai(brief, task, text)
-            apply_replace(out)
-        else:
-            apply_replace(text)
-        return
+        if action == "Describe":
+            if use_ai:
+                task = (
+                    "Add vivid description with control: sharpen nouns/verbs, add sensory detail, keep pace. "
+                    "Preserve canon. Return full revised text."
+                )
+                out = call_openai(brief, task, text)
+                apply_replace(out)
+            else:
+                apply_replace(text)
+            return
 
-    if action in ("Spell", "Grammar"):
-        cleaned = local_cleanup(text)
-        if use_ai:
-            task = (
-                "Production copyedit: spelling/grammar/punctuation. Preserve voice and meaning. "
-                "Do not flatten style. Return the full revised text."
-            )
-            out = call_openai(brief, task, cleaned)
-            apply_replace(out if out else cleaned)
-        else:
-            apply_replace(cleaned)
-        return
+        if action in ("Spell", "Grammar"):
+            cleaned = local_cleanup(text)
+            if use_ai:
+                task = (
+                    "Production copyedit: spelling/grammar/punctuation. Preserve voice and meaning. "
+                    "Do not flatten style. Preserve canon. Return full revised text."
+                )
+                out = call_openai(brief, task, cleaned)
+                apply_replace(out if out else cleaned)
+            else:
+                apply_replace(cleaned)
+            return
 
-    # Find / Synonym / Sentence remain present (no removal) — inert until you define behavior
-    apply_replace(text)
+        # Find / Synonym / Sentence stay present (no removal) — intentionally inert for now
+        apply_replace(text)
+
+    except Exception as e:
+        # No UI changes: report via existing status line
+        st.session_state.voice_status = f"Engine: {str(e)}"
+        apply_replace(text)
 
 # ============================================================
 # TOP BAR (EXACT BUTTONS KEPT)
@@ -579,7 +577,7 @@ with left:
 
     with st.expander("🗃 Junk Drawer"):
         st.text_area("", key="junk", height=80)
-        # No new UI. Commands supported if you type exactly:
+        # Commands (type exactly):
         # /undo  /redo  /status  /clear
 
     with st.expander("📝 Synopsis"):
@@ -605,7 +603,7 @@ with center:
 
     st.text_area("", key="main_text", height=650, on_change=autosave)
 
-    # Bottom bar — writing (EXACT BUTTONS KEPT; now powered)
+    # Bottom bar — writing (EXACT BUTTONS KEPT; powered)
     b1 = st.columns(5)
     if b1[0].button("Write", key="btn_write"):
         partner_action("Write")
