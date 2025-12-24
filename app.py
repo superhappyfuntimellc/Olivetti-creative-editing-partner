@@ -20,7 +20,7 @@ import streamlit as st
 os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
-DEFAULT_MODEL = "gpt-5.2-thinking"
+DEFAULT_MODEL = "gpt-4.1-mini"
 try:
     OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")  # type: ignore[attr-defined]
     OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", DEFAULT_MODEL)  # type: ignore[attr-defined]
@@ -56,6 +56,7 @@ st.markdown(
 # CONSTANTS
 # ============================================================
 LANES = ["Dialogue", "Narration", "Interiority", "Action"]
+GLOBAL_VOICE_PREFIX = "🌐 "
 BAYS = ["NEW", "ROUGH", "EDIT", "FINAL"]
 
 ACTIONS_PRIMARY = ["Write", "Rewrite", "Expand", "Rephrase", "Describe"]
@@ -194,6 +195,37 @@ def detect_lane(paragraph: str) -> str:
     lane = max(scores.items(), key=lambda kv: kv[1])[0]
     return "Narration" if scores[lane] < 0.9 else lane
 
+
+def add_voice_samples(vault: Dict[str, Any], voice_key: str, raw_text: str,
+                     auto_lane: bool = True, forced_lane: str = "Narration",
+                     max_samples: int = 60, min_words: int = 8) -> int:
+    """Add samples into a voice vault (project or global). Returns # added."""
+    if not raw_text or not raw_text.strip():
+        return 0
+    voice_key = (voice_key or "").strip() or "Global Voice"
+    if voice_key not in (vault or {}):
+        vault[voice_key] = {"created_ts": now_ts(), "lanes": {ln: [] for ln in LANES}}
+    vault[voice_key].setdefault("lanes", {ln: [] for ln in LANES})
+    for ln in LANES:
+        vault[voice_key]["lanes"].setdefault(ln, [])
+
+    paras = split_paragraphs(raw_text)
+    added = 0
+    for p in paras:
+        if len(tokenize(p)) < int(min_words):
+            continue
+        ln = detect_lane(p) if auto_lane else (forced_lane if forced_lane in LANES else "Narration")
+        vault[voice_key]["lanes"][ln].append({"ts": now_ts(), "text": p.strip(), "vec": hash_vec(p)})
+        added += 1
+        if added >= int(max_samples):
+            break
+
+    # Cap memory per lane
+    CAP = 250
+    for ln in LANES:
+        vault[voice_key]["lanes"][ln] = (vault[voice_key]["lanes"].get(ln, []) or [])[-CAP:]
+    return added
+
 def current_lane_from_draft(text: str) -> str:
     paras = split_paragraphs(text)
     if not paras:
@@ -290,6 +322,19 @@ def default_voice_vault() -> Dict[str, Any]:
     ts = now_ts()
     return {"Voice A": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
             "Voice B": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}}}
+
+def default_global_voice_vault() -> Dict[str, Any]:
+    ts = now_ts()
+    return {"Global Voice": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}}}
+
+def is_global_voice(name: str) -> bool:
+    return bool(name) and name.startswith(GLOBAL_VOICE_PREFIX)
+
+def global_label(name: str) -> str:
+    return f"{GLOBAL_VOICE_PREFIX}{name}"
+
+def global_unlabel(name: str) -> str:
+    return name[len(GLOBAL_VOICE_PREFIX):] if is_global_voice(name) else name
 
 def default_voice_bible() -> Dict[str, Any]:
     return {
@@ -392,6 +437,11 @@ def init_state():
 
         "voices": {},
         "voices_seeded": False,
+        "global_voices": {},
+        "global_voices_seeded": False,
+        "global_voice_on": True,
+        "global_voice": global_label("Global Voice"),
+        "global_voice_strength": 0.9,
         "ac_locked": False,
 
         # Promote UI
@@ -567,26 +617,49 @@ def seed_default_voices():
 
 seed_default_voices()
 
+def seed_default_global_voices():
+    if st.session_state.global_voices_seeded:
+        return
+    st.session_state.global_voices = rebuild_vectors_in_voice_vault(default_global_voice_vault())
+    st.session_state.global_voices_seeded = True
+    if not st.session_state.global_voice:
+        st.session_state.global_voice = global_label("Global Voice")
+
+seed_default_global_voices()
+
+
+def global_voice_names_for_selector() -> List[str]:
+    # Stored without prefix internally; selector displays with prefix.
+    return sorted([k for k in (st.session_state.global_voices or {}).keys()])
+
 def voice_names_for_selector() -> List[str]:
     base = ["— None —", "Voice A", "Voice B"]
-    customs = sorted([k for k in st.session_state.voices.keys() if k not in ("Voice A", "Voice B")])
-    return base + customs
+    customs = sorted([k for k in (st.session_state.voices or {}).keys() if k not in ("Voice A", "Voice B")])
+    globals_ = [global_label(n) for n in global_voice_names_for_selector()]
+    return base + customs + globals_
+
+def get_voice_vault(voice_name: str) -> Optional[Dict[str, Any]]:
+    if is_global_voice(voice_name):
+        return (st.session_state.global_voices or {}).get(global_unlabel(voice_name))
+    return (st.session_state.voices or {}).get(voice_name)
 
 def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
-    v = st.session_state.voices.get(voice_name)
+    v = get_voice_vault(voice_name)
     if not v:
         return []
     lane = lane if lane in LANES else "Narration"
-    pool = v["lanes"].get(lane, [])
+    pool = (v.get("lanes", {}) or {}).get(lane, []) or []
     if not pool:
         return []
     qv = hash_vec(query_text)
-    scored = [(cosine(qv, s.get("vec", [])), s.get("text", "")) for s in pool[-140:]]
+    scored = [(cosine(qv, s.get("vec", [])), s.get("text", "")) for s in pool[-180:]]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [txt for score, txt in scored[:k] if score > 0.0 and txt][:k]
 
 def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> List[str]:
     lane_ex = retrieve_exemplars(voice_name, lane, query_text, k=2)
+    if lane == "Narration":
+        return lane_ex if lane_ex else retrieve_exemplars(voice_name, "Narration", query_text, k=3)
     nar_ex = retrieve_exemplars(voice_name, "Narration", query_text, k=1)
     out = lane_ex + [x for x in nar_ex if x not in lane_ex]
     return out[:3]
@@ -808,10 +881,16 @@ def payload() -> Dict[str, Any]:
         save_workspace_from_session()
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-storybible-lock-v2"},
+        "meta": {"saved_at": now_ts(), "version": "olivetti-storybible-globalvoice-v1"},
         "workspace": st.session_state.workspace,
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
+        "global": {
+            "voices": compact_voice_vault(st.session_state.global_voices),
+            "global_voice_on": bool(st.session_state.global_voice_on),
+            "global_voice": st.session_state.global_voice,
+            "global_voice_strength": float(st.session_state.global_voice_strength),
+        },
         "projects": st.session_state.projects,
     }
 
@@ -840,12 +919,26 @@ def load_all_from_disk() -> None:
         with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
             pl = json.load(f)
 
+        # ---- Global (cross-project) state ----
+        g = pl.get("global", {})
+        if isinstance(g, dict):
+            gv = g.get("voices", {})
+            if isinstance(gv, dict):
+                st.session_state.global_voices = rebuild_vectors_in_voice_vault(gv)
+                st.session_state.global_voices_seeded = True
+            st.session_state.global_voice_on = bool(g.get("global_voice_on", True))
+            gv_sel = g.get("global_voice", global_label("Global Voice"))
+            st.session_state.global_voice = gv_sel if isinstance(gv_sel, str) else global_label("Global Voice")
+            st.session_state.global_voice_strength = float(g.get("global_voice_strength", 0.9))
+
+        # ---- Workspace ----
         ws = pl.get("workspace")
         if isinstance(ws, dict):
             st.session_state.workspace = ws
             st.session_state.workspace_title = ws.get("title", "") or ""
             st.session_state.desk_workspace_title = st.session_state.workspace_title
 
+        # ---- Projects ----
         projs = pl.get("projects", {})
         if isinstance(projs, dict):
             st.session_state.projects = projs
@@ -874,6 +967,9 @@ def load_all_from_disk() -> None:
     except Exception as e:
         st.session_state.voice_status = f"Load warning: {e}"
         switch_bay("NEW")
+
+
+
 
 def autosave():
     st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
@@ -905,6 +1001,8 @@ def build_partner_brief(action_name: str, lane: str, intensity_x: float) -> str:
     idea_bank = (st.session_state.junk or "").strip() or "— None —"
 
     vb_lines = []
+    if bool(st.session_state.get("global_voice_on", True)) and st.session_state.global_voice and st.session_state.global_voice != "— None —":
+        vb_lines.append(f"Global Voice: {st.session_state.global_voice} (strength {float(st.session_state.global_voice_strength):.2f})")
     if st.session_state.vb_style_on:
         vb_lines.append(f"Writing Style: {st.session_state.writing_style} (intensity {float(st.session_state.style_intensity):.2f})")
     if st.session_state.vb_genre_on:
@@ -918,14 +1016,23 @@ def build_partner_brief(action_name: str, lane: str, intensity_x: float) -> str:
 
     voice_controls = "\n\n".join(vb_lines).strip() if vb_lines else "— None enabled —"
 
-    exemplars: List[str] = []
+    project_exemplars: List[str] = []
     tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv and tv != "— None —":
         ctx = (st.session_state.main_text or "")[-2500:]
         query = ctx if ctx.strip() else st.session_state.synopsis
-        exemplars = retrieve_mixed_exemplars(tv, lane, query)
+        project_exemplars = retrieve_mixed_exemplars(tv, lane, query)
 
-    ex_block = "\n\n---\n\n".join(exemplars) if exemplars else "— None —"
+    project_ex_block = "\n\n---\n\n".join(project_exemplars) if project_exemplars else "— None —"
+
+    global_exemplars: List[str] = []
+    gv = st.session_state.global_voice
+    if bool(st.session_state.get("global_voice_on", True)) and gv and gv != "— None —":
+        ctx2 = (st.session_state.main_text or "")[-2500:]
+        query2 = ctx2 if ctx2.strip() else st.session_state.synopsis
+        global_exemplars = retrieve_mixed_exemplars(gv, lane, query2)
+
+    global_ex_block = "\n\n---\n\n".join(global_exemplars) if global_exemplars else "— None —"
     intensity_x = clamp01(intensity_x)
 
     return f"""
@@ -946,8 +1053,11 @@ PROFILE: {intensity_profile(intensity_x)}
 VOICE CONTROLS:
 {voice_controls}
 
-TRAINED EXEMPLARS (mimic patterns, not content):
-{ex_block}
+GLOBAL VOICE EXEMPLARS (mimic patterns, not content):
+{global_ex_block}
+
+PROJECT TRAINED EXEMPLARS (mimic patterns, not content):
+{project_ex_block}
 
 STORY BIBLE:
 {sb}
@@ -1860,6 +1970,87 @@ with right:
 
     st.divider()
 
+
+    with st.expander("🌐 Global Voice (trainable)", expanded=False):
+        st.checkbox("Enable Global Voice", key="global_voice_on", on_change=autosave)
+        gv_profiles = ["— None —"] + [global_label(n) for n in global_voice_names_for_selector()]
+        if st.session_state.global_voice not in gv_profiles:
+            st.session_state.global_voice = gv_profiles[1] if len(gv_profiles) > 1 else "— None —"
+        st.selectbox("Global Voice Profile", gv_profiles, key="global_voice", disabled=not st.session_state.global_voice_on, on_change=autosave)
+        st.slider("Global Voice Strength", 0.0, 1.0, key="global_voice_strength", disabled=not st.session_state.global_voice_on, on_change=autosave)
+
+        st.divider()
+
+        colA, colB = st.columns([3, 1])
+        with colA:
+            st.text_input("New Global Voice Name", key="gv_new_name")
+        with colB:
+            if st.button("Create", key="gv_create_btn"):
+                nm = (st.session_state.get("gv_new_name") or "").strip()
+                if nm:
+                    st.session_state.global_voices.setdefault(nm, {"created_ts": now_ts(), "lanes": {ln: [] for ln in LANES}})
+                    st.session_state.global_voice = global_label(nm)
+                    st.session_state.gv_new_name = ""
+                    st.session_state.voice_status = f"Created global voice: {nm}"
+                    autosave()
+
+        # Training input
+        up = st.file_uploader("Upload training text (.txt/.md/.docx)", type=["txt", "md", "docx"], key="gv_train_upload")
+        st.text_area("…or paste training text", key="gv_train_paste", height=140)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.checkbox("Auto-lane paragraphs", key="gv_auto_lane", value=True)
+            st.number_input("Max paragraphs to add", 1, 200, value=60, key="gv_max_samples")
+        with col2:
+            st.selectbox("Forced lane (if auto-lane off)", LANES, key="gv_forced_lane", disabled=st.session_state.get("gv_auto_lane", True))
+            st.number_input("Min words per paragraph", 1, 50, value=8, key="gv_min_words")
+
+        if st.button("Train Global Voice NOW", key="gv_train_btn"):
+            raw = read_uploaded_text(up) if up is not None else ""
+            raw = raw if raw.strip() else (st.session_state.get("gv_train_paste") or "")
+            target = st.session_state.global_voice
+            target_name = global_unlabel(target) if is_global_voice(target) else (target or "Global Voice")
+            if target_name == "— None —":
+                target_name = "Global Voice"
+                st.session_state.global_voice = global_label("Global Voice")
+            added = add_voice_samples(
+                st.session_state.global_voices,
+                target_name,
+                raw,
+                auto_lane=bool(st.session_state.get("gv_auto_lane", True)),
+                forced_lane=st.session_state.get("gv_forced_lane", "Narration"),
+                max_samples=int(st.session_state.get("gv_max_samples", 60)),
+                min_words=int(st.session_state.get("gv_min_words", 8)),
+            )
+            if added > 0:
+                st.session_state.voice_status = f"Trained {target_name}: +{added} samples"
+                autosave()
+                st.success(f"Added {added} paragraphs into {target_name}.")
+            else:
+                st.warning("Nothing added. Paste/upload text first (and ensure paragraphs are long enough).")
+
+        # Quick stats + maintenance
+        sel = global_unlabel(st.session_state.global_voice) if is_global_voice(st.session_state.global_voice) else "Global Voice"
+        v = (st.session_state.global_voices or {}).get(sel)
+        if v:
+            counts = {ln: len((v.get("lanes", {}) or {}).get(ln, []) or []) for ln in LANES}
+            st.caption("Lane counts: " + " • ".join([f"{ln}: {counts[ln]}" for ln in LANES]))
+            colX, colY = st.columns(2)
+            with colX:
+                if st.button("Clear last 50 (all lanes)", key="gv_clear50"):
+                    for ln in LANES:
+                        v["lanes"][ln] = (v["lanes"].get(ln, []) or [])[:-50]
+                    st.session_state.voice_status = f"Cleared last 50 samples from {sel}"
+                    autosave()
+            with colY:
+                if st.button("Wipe this voice (DANGER)", key="gv_wipe_voice"):
+                    for ln in LANES:
+                        v["lanes"][ln] = []
+                    st.session_state.voice_status = f"Wiped global voice: {sel}"
+                    autosave()
+
+
     st.checkbox("Enable Match My Style", key="vb_match_on", on_change=autosave)
     st.text_area("Style Example", key="voice_sample", height=100, disabled=not st.session_state.vb_match_on, on_change=autosave)
     st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on, on_change=autosave)
@@ -1922,4 +2113,3 @@ with right:
 # FINAL SAFETY NET SAVE
 # ============================================================
 save_all_to_disk()
-
