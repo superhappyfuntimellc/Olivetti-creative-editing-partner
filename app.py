@@ -1,220 +1,238 @@
+import os
 import streamlit as st
-from openai import OpenAI
-import time
+from datetime import datetime
+
+# ============================================================
+# ENV / METADATA HYGIENE (prevents "undefined" app-id artifacts)
+# ============================================================
+os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
+os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="🫒 Olivetti", layout="wide")
-client = OpenAI()
+st.set_page_config(
+    page_title="Olivetti Desk",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================================
-# SAFE SESSION INIT
+# AUTHOR-GRADE SCALE (BIGGER / BETTER) — NO LAYOUT CHANGES
 # ============================================================
-def init(key, value):
-    if key not in st.session_state:
-        st.session_state[key] = value
+st.markdown(
+    """
+    <style>
+    /* Writing desk typography + comfort */
+    div[data-testid="stTextArea"] textarea {
+      font-size: 18px !important;
+      line-height: 1.65 !important;
+      padding: 18px !important;
+      resize: vertical !important;   /* makes the central writing window expandable */
+      min-height: 520px !important;
+    }
 
-STATE_DEFAULTS = {
-    "text": "",
-    "junk": "",
-    "synopsis": "",
-    "genre": "Literary",
-    "world": "",
-    "characters": "",
-    "outline": "",
-    "style": "Neutral",
-    "voice": "Literary",
-    "trained_voices": {},
-    "trained_voice": "— None —",
-    "sample": "",
-    "intensity": 0.5,
-    "voice_lock": False,
-    "focus": False,   # retained for state safety, no longer used
-    "last_save": time.time(),
-}
+    /* Button ergonomics */
+    button[kind="secondary"], button[kind="primary"] {
+      font-size: 16px !important;
+      padding: 0.6rem 0.9rem !important;
+    }
 
-for k, v in STATE_DEFAULTS.items():
-    init(k, v)
+    /* Control labels readability */
+    label, .stSelectbox label, .stSlider label {
+      font-size: 14px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # ============================================================
-# AUTOSAVE (SAFE, SILENT)
+# SESSION STATE INIT
+# ============================================================
+def init_state():
+    defaults = {
+        # Main writing
+        "main_text": "",
+        "autosave_time": None,
+
+        # Story Bible
+        "junk": "",
+        "synopsis": "",
+        "genre_style_notes": "",
+        "world": "",
+        "characters": "",
+        "outline": "",
+
+        # Voice Bible — toggles
+        "vb_style_on": True,
+        "vb_genre_on": True,
+        "vb_trained_on": False,
+        "vb_match_on": False,
+        "vb_lock_on": False,
+
+        # Voice Bible — selections
+        "writing_style": "Neutral",
+        "genre": "Literary",
+        "trained_voice": "— None —",
+        "voice_sample": "",
+        "voice_lock_prompt": "",
+
+        # Voice Bible — intensities
+        "style_intensity": 0.6,
+        "genre_intensity": 0.6,
+        "trained_intensity": 0.7,
+        "match_intensity": 0.8,
+        "lock_intensity": 1.0,
+
+        # POV / Tense
+        "pov": "Close Third",
+        "tense": "Past",
+
+        # UI
+        "focus_mode": False,
+    }
+
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+init_state()
+
+# Free writing always: permanently disable hard focus behavior
+st.session_state.focus_mode = False
+
+# ============================================================
+# AUTOSAVE
 # ============================================================
 def autosave():
-    st.session_state.last_save = time.time()
+    st.session_state.autosave_time = datetime.now().strftime("%H:%M:%S")
 
 # ============================================================
-# VOICE ENGINE (PURE / IMMUTABLE)
+# TOP BAR
 # ============================================================
-def build_voice_block():
-    blocks = [
-        f"Writing Style: {st.session_state.style}",
-        f"Genre Voice: {st.session_state.voice}",
-        f"Intensity: {st.session_state.intensity}",
-    ]
-
-    if st.session_state.trained_voice != "— None —":
-        blocks.append(
-            f"Trained Voice:\n{st.session_state.trained_voices.get(st.session_state.trained_voice,'')}"
-        )
-    elif st.session_state.sample.strip():
-        blocks.append(f"Match This Style:\n{st.session_state.sample}")
-
-    if st.session_state.voice_lock:
-        blocks.append("IMPORTANT: Maintain voice exactly.")
-
-    return "\n".join(blocks)
-
-# ============================================================
-# AI CORE (HARDENED)
-# ============================================================
-PROMPTS = {
-    "write": "Continue writing naturally.",
-    "rewrite": "Rewrite for clarity and strength.",
-    "expand": "Expand with more depth.",
-    "rephrase": "Rephrase without changing meaning.",
-    "describe": "Add vivid description.",
-    "spell": "Fix spelling only.",
-    "grammar": "Fix grammar only.",
-    "find": "Improve consistency.",
-    "syn": "Suggest stronger word choices.",
-    "sentence": "Improve sentence flow.",
-}
-
-def run_ai(action):
-    if action not in PROMPTS:
-        return
-
-    text = st.session_state.text.strip()
-    if not text:
-        return
-
-    prompt = f"""
-VOICE PROFILE:
-{build_voice_block()}
-
-TASK:
-{PROMPTS[action]}
-
-TEXT:
-{text}
-"""
-
-    try:
-        r = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {"role": "system", "content": "You are a professional fiction editor."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=float(st.session_state.intensity),
-        )
-        output = (r.output_text or "").strip()
-        if output:
-            st.session_state.text = output
-            autosave()
-    except Exception:
-        pass
-
-# ============================================================
-# TOP BAR (UNCHANGED)
-# ============================================================
-top = st.columns([2,1,1,1,1])
-top[0].markdown("## 🫒 **Olivetti**")
-top[1].button("New Project", key="top_new")
-top[2].button("Rough Draft", key="top_rough")
-top[3].button("First Edit", key="top_edit")
-top[4].button("Final Draft", key="top_final")
-
-st.divider()
-
-# ============================================================
-# MAIN LAYOUT (LOCKED)
-# ============================================================
-left, center, right = st.columns([1.3, 3.4, 1.3], gap="large")
-
-# ============================================================
-# LEFT — STORY BIBLE (UNCHANGED)
-# ============================================================
-with left:
-    with st.expander("📖 Story Bible", expanded=True):
-        st.text_area("Junk Drawer", key="junk", height=70, on_change=autosave)
-        st.text_area("Synopsis", key="synopsis", height=70, on_change=autosave)
-        st.selectbox(
-            "Genre / Style",
-            ["Literary", "Noir", "Thriller", "Comedy"],
-            key="genre",
-        )
-        st.text_area("World Elements", key="world", height=70, on_change=autosave)
-        st.text_area("Characters", key="characters", height=70, on_change=autosave)
-        st.text_area("Outline", key="outline", height=120, on_change=autosave)
-
-# ============================================================
-# CENTER — WRITING DESK (EXPANDABLE)
-# ============================================================
-with center:
-    st.markdown("### ✍️ Writing Desk")
-
-    # Increased default height; textarea remains user-resizable
-    st.text_area(
-        "",
-        key="text",
-        height=800,
-        on_change=autosave,
+top = st.container()
+with top:
+    cols = st.columns([1, 1, 1, 1, 2])
+    cols[0].button("🆕 New", key="new_project")
+    cols[1].button("✏️ Rough", key="rough")
+    cols[2].button("🛠 Edit", key="edit")
+    cols[3].button("✅ Final", key="final")
+    cols[4].markdown(
+        f"<div style='text-align:right;font-size:12px;'>Autosave: {st.session_state.autosave_time or '—'}</div>",
+        unsafe_allow_html=True
     )
 
-    r1 = st.columns(5)
-    if r1[0].button("Write", key="w1"): run_ai("write")
-    if r1[1].button("Rewrite", key="w2"): run_ai("rewrite")
-    if r1[2].button("Expand", key="w3"): run_ai("expand")
-    if r1[3].button("Rephrase", key="w4"): run_ai("rephrase")
-    if r1[4].button("Describe", key="w5"): run_ai("describe")
-
-    r2 = st.columns(5)
-    if r2[0].button("Spell Check", key="e1"): run_ai("spell")
-    if r2[1].button("Grammar Check", key="e2"): run_ai("grammar")
-    if r2[2].button("Find / Replace", key="e3"): run_ai("find")
-    if r2[3].button("Synonyms", key="e4"): run_ai("syn")
-    if r2[4].button("Sentence Improve", key="e5"): run_ai("sentence")
+st.divider()
 
 # ============================================================
-# RIGHT — VOICE BIBLE (UNCHANGED)
+# LAYOUT
+# ============================================================
+left, center, right = st.columns([1.2, 3.2, 1.6])
+
+# ============================================================
+# LEFT — STORY BIBLE
+# ============================================================
+with left:
+    st.subheader("📖 Story Bible")
+
+    with st.expander("🗃 Junk Drawer"):
+        st.text_area("", key="junk", height=80)
+
+    with st.expander("📝 Synopsis"):
+        st.text_area("", key="synopsis", height=100)
+
+    with st.expander("🎭 Genre / Style Notes"):
+        st.text_area("", key="genre_style_notes", height=80)
+
+    with st.expander("🌍 World Elements"):
+        st.text_area("", key="world", height=100)
+
+    with st.expander("👤 Characters"):
+        st.text_area("", key="characters", height=120)
+
+    with st.expander("🧱 Outline"):
+        st.text_area("", key="outline", height=160)
+
+# ============================================================
+# CENTER — TYPE SCREEN (ALWAYS ON)
+# ============================================================
+with center:
+    st.subheader("✍️ Writing Desk")
+
+    st.text_area(
+        "",
+        key="main_text",
+        height=650,      # bigger default; still user-expandable via resize handle
+        on_change=autosave
+    )
+
+    # Bottom bar — writing
+    b1 = st.columns(5)
+    b1[0].button("Write")
+    b1[1].button("Rewrite")
+    b1[2].button("Expand")
+    b1[3].button("Rephrase")
+    b1[4].button("Describe")
+
+    # Bottom bar — editing
+    b2 = st.columns(5)
+    b2[0].button("Spell")
+    b2[1].button("Grammar")
+    b2[2].button("Find")
+    b2[3].button("Synonym")
+    b2[4].button("Sentence")
+
+# ============================================================
+# RIGHT — VOICE BIBLE (TOP → BOTTOM, EXACT)
 # ============================================================
 with right:
-    with st.expander("🎭 Voice Bible", expanded=True):
-        st.selectbox(
-            "Writing Style",
-            ["Neutral", "Minimal", "Expressive"],
-            key="style",
-        )
-        st.selectbox(
-            "Genre Voice",
-            ["Literary", "Hardboiled", "Poetic"],
-            key="voice",
-        )
+    st.subheader("🎙 Voice Bible")
 
-        voices = ["— None —"] + list(st.session_state.trained_voices.keys())
-        st.selectbox("Trained Voices", voices, key="trained_voice")
+    # 1. Writing Style
+    st.checkbox("Enable Writing Style", key="vb_style_on")
+    st.selectbox(
+        "Writing Style",
+        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"],
+        key="writing_style",
+        disabled=not st.session_state.vb_style_on
+    )
+    st.slider(
+        "Style Intensity",
+        0.0, 1.0,
+        key="style_intensity",
+        disabled=not st.session_state.vb_style_on
+    )
 
-        st.text_area("Match My Style", key="sample", height=70)
+    st.divider()
 
-        c1, c2 = st.columns(2)
-        with c1:
-            vname = st.text_input("Save Voice As", key="voice_name")
-        with c2:
-            if st.button("Train Voice", key="train_voice"):
-                if vname and st.session_state.sample.strip():
-                    st.session_state.trained_voices[vname] = st.session_state.sample
-                    st.session_state.trained_voice = vname
-                    autosave()
+    # 2. Genre
+    st.checkbox("Enable Genre Influence", key="vb_genre_on")
+    st.selectbox(
+        "Genre",
+        ["Literary", "Noir", "Thriller", "Comedy", "Lyrical"],
+        key="genre",
+        disabled=not st.session_state.vb_genre_on
+    )
+    st.slider(
+        "Genre Intensity",
+        0.0, 1.0,
+        key="genre_intensity",
+        disabled=not st.session_state.vb_genre_on
+    )
 
-        st.slider("Intensity", 0.0, 1.0, key="intensity")
-        st.toggle("Voice Lock", key="voice_lock")
+    st.divider()
 
-# ============================================================
-# FOCUS MODE — DISABLED (BUTTON RETAINED, NO EFFECT)
-# ============================================================
-st.divider()
-f = st.columns(2)
-f[0].button("🔒 Focus Mode", key="focus_btn")  # no-op, layout preserved
-f[1].caption("Olivetti — Stable Build")
+    # 3. Trained Voices
+    st.checkbox("Enable Trained Voice", key="vb_trained_on")
+    st.selectbox(
+        "Trained Voice",
+        ["— None —", "Voice A", "Voice B"],
+        key="trained_voice",
+        disabled=not st.session_state.vb_trained_on
+    )
+    st.slider(
+        "Trained Voice Intensity",
+        0.0, 1.0,
+        key="trained_intensity",
+        disabled=not st.session_state.vb_trained_on_
