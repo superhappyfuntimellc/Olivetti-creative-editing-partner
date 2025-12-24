@@ -4,7 +4,7 @@ import math
 import hashlib
 import streamlit as st
 from datetime import datetime
-from typing import List
+from typing import List, Tuple
 
 # ============================================================
 # ENV / METADATA HYGIENE
@@ -41,7 +41,7 @@ st.markdown(
       font-size: 18px !important;
       line-height: 1.65 !important;
       padding: 18px !important;
-      resize: vertical !important;   /* central writing window expandable */
+      resize: vertical !important;
       min-height: 520px !important;
     }
 
@@ -118,6 +118,9 @@ def init_state():
         "voiceB_snips": [],   # list[str]
         "voice_status": "—",
 
+        # Tool output (shown inside existing Junk Drawer expander)
+        "tool_output": "",
+
         # Throttles
         "last_captured_hash": "",
     }
@@ -187,10 +190,16 @@ CMD_REDO = re.compile(r"^\s*/redo\s*$", re.IGNORECASE)
 CMD_STATUS = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
 CMD_CLEAR = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
 
+# Optional helper commands (still inside Junk Drawer, no new features removed)
+CMD_FIND = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
+CMD_SYN = re.compile(r"^\s*/syn\s*:\s*(.+)$", re.IGNORECASE)
+CMD_SENT = re.compile(r"^\s*/sentence\s*:\s*(.+)$", re.IGNORECASE)
+
 def handle_junk_commands():
     raw = (st.session_state.junk or "").strip()
     if not raw:
         return
+
     if CMD_UNDO.match(raw):
         undo_last()
         st.session_state.junk = ""
@@ -207,10 +216,28 @@ def handle_junk_commands():
         return
     if CMD_CLEAR.match(raw):
         st.session_state.junk = ""
+        st.session_state.tool_output = ""
         st.session_state.voice_status = "Cleared."
         return
 
-# Run command handler each rerun (keeps it “OS-like” without UI changes)
+    # Tool command hints (optional)
+    m = CMD_FIND.match(raw)
+    if m:
+        st.session_state.voice_status = "Find primed."
+        st.session_state.tool_output = f"Find query primed: {m.group(1).strip()}"
+        return
+    m = CMD_SYN.match(raw)
+    if m:
+        st.session_state.voice_status = "Synonym primed."
+        st.session_state.tool_output = f"Synonym query primed: {m.group(1).strip()}"
+        return
+    m = CMD_SENT.match(raw)
+    if m:
+        st.session_state.voice_status = "Sentence tool primed."
+        st.session_state.tool_output = f"Sentence directive primed: {m.group(1).strip()}"
+        return
+
+# Run command handler each rerun (OS-like)
 handle_junk_commands()
 
 # ============================================================
@@ -245,6 +272,16 @@ def _split_paragraphs(text: str) -> List[str]:
     if not t:
         return []
     return re.split(r"\n\s*\n", t, flags=re.MULTILINE)
+
+def _join_paragraphs(paras: List[str]) -> str:
+    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
+
+def _last_sentence(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    return parts[-1].strip() if parts else t
 
 def capture_voice_snippet_from_draft():
     """
@@ -293,7 +330,7 @@ def retrieve_voice_exemplars(query_text: str, voice: str, k: int = 3) -> List[st
     return top[:k]
 
 # ============================================================
-# STORY BIBLE AS CANON + IDEA BANK (MANDATORY INJECTION)
+# STORY BIBLE AS CANON + IDEA BANK (MANDATORY)
 # ============================================================
 def _story_bible_text() -> str:
     sb = []
@@ -333,6 +370,8 @@ DOMINANCE RULES (do not violate):
         vb.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
     if st.session_state.vb_genre_on:
         vb.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
+    if st.session_state.vb_trained_on and st.session_state.trained_voice in ("Voice A", "Voice B"):
+        vb.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
     if st.session_state.vb_match_on and st.session_state.voice_sample.strip():
         vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
     if st.session_state.vb_lock_on and st.session_state.voice_lock_prompt.strip():
@@ -382,7 +421,7 @@ ACTION: {action_name}
 """.strip()
 
 # ============================================================
-# OPTIONAL OPENAI CALL (safe; won’t crash if missing)
+# OPTIONAL OPENAI CALL (safe; won’t crash app)
 # ============================================================
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
     if not OPENAI_API_KEY:
@@ -418,8 +457,55 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
+def local_find(text: str, query: str, limit: int = 10) -> List[Tuple[int, str]]:
+    """
+    Returns (index, snippet) hits from draft text for a query.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    lines = (text or "").splitlines()
+    hits = []
+    for i, line in enumerate(lines, start=1):
+        if q.lower() in line.lower():
+            snippet = line.strip()
+            if len(snippet) > 140:
+                snippet = snippet[:140] + "…"
+            hits.append((i, snippet))
+            if len(hits) >= limit:
+                break
+    return hits
+
 # ============================================================
-# PARTNER ACTIONS (wired to existing buttons)
+# BUTTON TOOLING: hook every tool into Story Bible / Project context
+# ============================================================
+def _read_query_from_junk(default: str = "") -> str:
+    """
+    If Junk Drawer contains a tool command (/find: X or /syn: X), extract X.
+    Otherwise treat the entire junk text as a plain query (if short).
+    """
+    raw = (st.session_state.junk or "").strip()
+
+    m = CMD_FIND.match(raw)
+    if m:
+        return m.group(1).strip()
+
+    m = CMD_SYN.match(raw)
+    if m:
+        return m.group(1).strip()
+
+    m = CMD_SENT.match(raw)
+    if m:
+        return m.group(1).strip()
+
+    # If the user typed a simple word/phrase in junk, use it as query
+    if raw and len(raw) <= 80 and not raw.startswith("/"):
+        return raw.strip()
+
+    return default
+
+# ============================================================
+# PARTNER ACTIONS (wired to ALL bottom bar buttons)
 # ============================================================
 def partner_action(action: str):
     text = st.session_state.main_text or ""
@@ -443,7 +529,7 @@ def partner_action(action: str):
             autosave()
             st.session_state.last_action = action
 
-    # Assertive tool behavior (Sudowrite ×100, but obedient)
+    # === GENERATIVE WRITING TOOLS (all Story Bible hooked via brief) ===
     try:
         if action == "Write":
             if use_ai:
@@ -506,6 +592,7 @@ def partner_action(action: str):
                 apply_replace(text)
             return
 
+        # === TEXT CHECKING / EDITING TOOLS (also Story Bible hooked via brief) ===
         if action in ("Spell", "Grammar"):
             cleaned = local_cleanup(text)
             if use_ai:
@@ -519,12 +606,102 @@ def partner_action(action: str):
                 apply_replace(cleaned)
             return
 
-        # Find / Synonym / Sentence stay present (no removal) — intentionally inert for now
+        # === Find (project-aware) ===
+        if action == "Find":
+            query = _read_query_from_junk(default="")
+            if not query:
+                # If no query provided, use a small, useful default: try to locate Story Bible proper nouns
+                sb = _story_bible_text()
+                # crude extraction of capitalized words (names/places)
+                names = re.findall(r"\b[A-Z][a-z]{2,}\b", sb)
+                names = list(dict.fromkeys(names))[:5]
+                if names:
+                    query = names[0]
+                    st.session_state.tool_output = f"No query provided. Defaulting Find to: {query}\n(You can type /find: term in Junk Drawer.)"
+                else:
+                    st.session_state.tool_output = "Find: enter /find: term (or type a short term) in Junk Drawer."
+                    st.session_state.voice_status = "Find: waiting for query."
+                    return
+
+            hits = local_find(text, query, limit=12)
+            if hits:
+                lines = "\n".join([f"Line {ln}: {snip}" for ln, snip in hits])
+                st.session_state.tool_output = f"FIND: '{query}'\n\n{lines}"
+                st.session_state.voice_status = f"Find: {len(hits)} hit(s)."
+            else:
+                st.session_state.tool_output = f"FIND: '{query}'\n\nNo hits in draft."
+                st.session_state.voice_status = "Find: 0 hits."
+            # Find does not modify draft
+            st.session_state.last_action = "Find"
+            return
+
+        # === Synonym (project-aware) ===
+        if action == "Synonym":
+            query = _read_query_from_junk(default="")
+            if not query:
+                st.session_state.tool_output = "Synonym: enter /syn: word (or type a short word) in Junk Drawer."
+                st.session_state.voice_status = "Synonym: waiting for word."
+                st.session_state.last_action = "Synonym"
+                return
+
+            if use_ai:
+                task = (
+                    f"Provide 12 strong synonym/replacement options for the word/phrase: '{query}'. "
+                    "Rank by fit for the current project voice and tone. "
+                    "Avoid thesaurus weirdness. If replacements change nuance, label them."
+                )
+                out = call_openai(brief, task, query)
+                st.session_state.tool_output = f"SYNONYMS FOR: '{query}'\n\n{out}"
+                st.session_state.voice_status = "Synonym: generated."
+            else:
+                st.session_state.tool_output = f"SYNONYMS FOR: '{query}'\n\n(Enable OPENAI_API_KEY for synonym generation.)"
+                st.session_state.voice_status = "Synonym: no AI key."
+            st.session_state.last_action = "Synonym"
+            return
+
+        # === Sentence (project-aware) ===
+        if action == "Sentence":
+            directive = _read_query_from_junk(default="tighten")
+            # Sentence tool edits last paragraph at sentence-level
+            paras = _split_paragraphs(text)
+            if not paras:
+                st.session_state.tool_output = "Sentence: draft is empty."
+                st.session_state.voice_status = "Sentence: nothing to edit."
+                st.session_state.last_action = "Sentence"
+                return
+
+            if use_ai:
+                task = (
+                    f"Perform a sentence-level pass on the FINAL paragraph with directive: '{directive}'. "
+                    "Be decisive. Preserve meaning, voice, and canon. "
+                    "Improve rhythm, clarity, and force. Return ONLY the revised final paragraph."
+                )
+                out = call_openai(brief, task, paras[-1])
+                if out and out.strip():
+                    paras[-1] = out.strip()
+                    apply_replace(_join_paragraphs(paras))
+                    st.session_state.tool_output = f"SENTENCE PASS ({directive})\n\nRevised final paragraph."
+                    st.session_state.voice_status = "Sentence: applied."
+                else:
+                    st.session_state.tool_output = "Sentence: no output returned."
+                    st.session_state.voice_status = "Sentence: no change."
+                    st.session_state.last_action = "Sentence"
+            else:
+                # Local fallback: minimal safe tighten on last sentence spacing/punct
+                lastp = local_cleanup(paras[-1])
+                paras[-1] = lastp
+                apply_replace(_join_paragraphs(paras))
+                st.session_state.tool_output = "Sentence: applied local cleanup (enable OPENAI_API_KEY for full sentence partner)."
+                st.session_state.voice_status = "Sentence: local."
+            return
+
+        # If unknown, no-op
         apply_replace(text)
 
     except Exception as e:
-        # No UI changes: report via existing status line
+        # No UI changes: report via existing status line/output
         st.session_state.voice_status = f"Engine: {str(e)}"
+        st.session_state.tool_output = f"ERROR:\n{str(e)}"
         apply_replace(text)
 
 # ============================================================
@@ -577,8 +754,8 @@ with left:
 
     with st.expander("🗃 Junk Drawer"):
         st.text_area("", key="junk", height=80)
-        # Commands (type exactly):
-        # /undo  /redo  /status  /clear
+        # Output stays inside this existing feature (no layout changes)
+        st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
 
     with st.expander("📝 Synopsis"):
         st.text_area("", key="synopsis", height=100)
@@ -616,15 +793,18 @@ with center:
     if b1[4].button("Describe", key="btn_describe"):
         partner_action("Describe")
 
-    # Bottom bar — editing (EXACT BUTTONS KEPT; Spell/Grammar powered)
+    # Bottom bar — editing (EXACT BUTTONS KEPT; ALL now project-aware)
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"):
         partner_action("Spell")
     if b2[1].button("Grammar", key="btn_grammar"):
         partner_action("Grammar")
-    b2[2].button("Find", key="btn_find")
-    b2[3].button("Synonym", key="btn_synonym")
-    b2[4].button("Sentence", key="btn_sentence")
+    if b2[2].button("Find", key="btn_find"):
+        partner_action("Find")
+    if b2[3].button("Synonym", key="btn_synonym"):
+        partner_action("Synonym")
+    if b2[4].button("Sentence", key="btn_sentence"):
+        partner_action("Sentence")
 
 # ============================================================
 # RIGHT — VOICE BIBLE (TOP → BOTTOM, EXACT)
