@@ -95,25 +95,61 @@ def save_project(
 # -----------------------------
 # Helpers: AI
 # -----------------------------
-def responses_text(*, model: str, instructions: str, input_text: str, max_output_tokens: int = 700) -> str:
+# -----------------------------
+# Helpers: AI
+# -----------------------------
+
+def get_openai_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        st.error(
+            "Missing OPENAI_API_KEY. Add it in Streamlit Cloud → App → Settings → Secrets."
+        )
+        st.stop()
+    try:
+        return OpenAI(api_key=api_key)
+    except Exception as exc:
+        st.error(f"Unable to initialize OpenAI client: {exc}")
+        st.stop()
+
+
+def responses_text(
+    *,
+    model: str,
+    instructions: str,
+    input_text: str,
+    max_output_tokens: int = 700,
+) -> str:
+    client = get_openai_client()
     resp = client.responses.create(
         model=model,
         instructions=instructions,
-        input=input_text,
+        input=input_text,  # ← THIS is the important line
         max_output_tokens=max_output_tokens,
     )
     return (resp.output_text or "").strip()
 
-def responses_json(*, model: str, instructions: str, input_text: str, max_output_tokens: int = 900) -> Dict[str, Any]:
-    text = responses_text(model=model, instructions=instructions, input_text=input_text, max_output_tokens=max_output_tokens)
-    # Best-effort JSON parsing
+
+def responses_json(
+    *,
+    model: str,
+    instructions: str,
+    input_text: str,
+    max_output_tokens: int = 900,
+) -> dict:
+    text = responses_text(
+        model=model,
+        instructions=instructions,
+        input_text=input_text,
+        max_output_tokens=max_output_tokens,
+    )
     try:
         return json.loads(text)
     except Exception:
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(text[start : end + 1])
+            return json.loads(text[start:end + 1])
         raise
 
 # -----------------------------
@@ -498,3 +534,4 @@ with right:
             save_project(pid, voice_bible=voice_bible)
             st.success("Voice learned + saved to this project.")
             st.rerun()
+
