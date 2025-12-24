@@ -13,6 +13,28 @@ anti_lexicon: array of words/phrases to avoid (max 30)
 metaphor_policy: string
 profanity_policy: string
 """
+build_instructions()
+pov = vb.get("pov", "")
+tense = vb.get("tense", "")
+rhythm = vb.get("sentence_rhythm", "")
+imagery = vb.get("imagery_profile", "")
+dialogue = vb.get("dialogue_profile", "")
+anti = vb.get("anti_lexicon", [])
+
+return f"""
+...
+Voice Bible:
+- POV: {pov}
+- Tense: {tense}
+- Sentence rhythm: {rhythm}
+- Imagery: {imagery}
+- Dialogue: {dialogue}
+- Style notes: {style}
+- Do: {do}
+- Don't: {dont}
+- Lexicon: {lex}
+- Avoid: {anti}
+""".strip()
 
 def make_voice_learn_payload(sample_text: str) -> str:
     return f"""
