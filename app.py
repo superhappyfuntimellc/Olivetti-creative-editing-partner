@@ -13,7 +13,7 @@ from typing import List, Tuple, Dict, Any, Optional
 os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-5"
 try:
     OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")  # type: ignore[attr-defined]
     OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", DEFAULT_MODEL)  # type: ignore[attr-defined]
@@ -1201,3 +1201,4 @@ with right:
 # SAFETY NET SAVE EVERY RERUN
 # ============================================================
 save_all_to_disk()
+
