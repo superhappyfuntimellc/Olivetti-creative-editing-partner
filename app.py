@@ -97,9 +97,6 @@ def _split_paragraphs(text: str) -> List[str]:
         return []
     return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
 
-def _join_paragraphs(paras: List[str]) -> str:
-    return ("\n\n".join([p.strip() for p in paras if p is not None])).strip()
-
 # ============================================================
 # LANE DETECTION (lightweight)
 # ============================================================
@@ -150,6 +147,23 @@ def current_lane_from_draft(text: str) -> str:
     return detect_lane(paras[-1])
 
 # ============================================================
+# INTENSITY (GLOBAL AI AGGRESSION KNOB)
+# NOTE: UI lives in STORY BIBLE panel, but affects ALL generations.
+# ============================================================
+def intensity_profile(x: float) -> str:
+    if x <= 0.25:
+        return "LOW: conservative, literal, minimal invention, prioritize continuity and clarity."
+    if x <= 0.60:
+        return "MED: balanced creativity, stronger phrasing, controlled invention within canon."
+    if x <= 0.85:
+        return "HIGH: bolder choices, richer specificity; still obey canon and lane."
+    return "MAX: aggressive originality and voice; still obey canon, no random derailments."
+
+def temperature_from_intensity(x: float) -> float:
+    x = max(0.0, min(1.0, float(x)))
+    return 0.15 + (x * 0.95)  # 0.0 -> 0.15, 1.0 -> 1.10
+
+# ============================================================
 # PROJECT MODEL
 # ============================================================
 def default_voice_vault() -> Dict[str, Any]:
@@ -174,6 +188,8 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "characters": "",
             "outline": "",
         },
+        # NOTE: We persist AI intensity per project here for reliability,
+        # but the CONTROL is in Story Bible panel (left). Voice Bible UI stays locked.
         "voice_bible": {
             "vb_style_on": True,
             "vb_genre_on": True,
@@ -192,8 +208,7 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "lock_intensity": 1.0,
             "pov": "Close Third",
             "tense": "Past",
-            # NEW: per-project AI intensity (applies to ALL generations)
-            "ai_intensity": 0.75,
+            "ai_intensity": 0.75,  # global AI aggression knob
         },
         "locks": {
             "story_bible_lock": True,
@@ -250,7 +265,7 @@ def init_state():
         "pov": "Close Third",
         "tense": "Past",
 
-        # NEW: global generation intensity knob (persisted per project)
+        # GLOBAL AI intensity (CONTROL in Story Bible panel)
         "ai_intensity": 0.75,
 
         "locks": {
@@ -262,9 +277,6 @@ def init_state():
 
         "voices": {},
         "voices_seeded": False,
-
-        "revisions": [],
-        "redo_stack": [],
 
         "last_saved_digest": "",
     }
@@ -384,8 +396,7 @@ def list_projects_in_bay(bay: str) -> List[Tuple[str, str]]:
     items = []
     for pid, p in (st.session_state.projects or {}).items():
         if p.get("bay") == bay:
-            title = p.get("title", "Untitled")
-            items.append((pid, title))
+            items.append((pid, p.get("title", "Untitled")))
     items.sort(key=lambda x: x[1].lower())
     return items
 
@@ -414,6 +425,7 @@ def switch_bay(target_bay: str) -> None:
         st.session_state.characters = ""
         st.session_state.outline = ""
         st.session_state.voice_sample = ""
+        st.session_state.ai_intensity = 0.75
         st.session_state.voices = rebuild_vectors_in_voice_vault(default_voice_vault())
         st.session_state.voices_seeded = True
         st.session_state.voice_status = f"{target_bay}: (empty)"
@@ -452,7 +464,7 @@ def promote_project(pid: str, to_bay: str) -> None:
 def _payload() -> Dict[str, Any]:
     save_session_into_project()
     return {
-        "meta": {"saved_at": now_ts(), "version": "olivetti-bays-intensity-v1"},
+        "meta": {"saved_at": now_ts(), "version": "olivetti-bays-intensity-leftpanel-v1"},
         "active_bay": st.session_state.active_bay,
         "active_project_by_bay": st.session_state.active_project_by_bay,
         "projects": st.session_state.projects,
@@ -490,8 +502,7 @@ def load_all_from_disk() -> None:
         apbb = payload.get("active_project_by_bay", {})
         if isinstance(apbb, dict):
             for b in BAYS:
-                if b not in apbb:
-                    apbb[b] = None
+                apbb.setdefault(b, None)
             st.session_state.active_project_by_bay = apbb
 
         ab = payload.get("active_bay", "NEW")
@@ -531,74 +542,10 @@ def seed_default_voices():
 
 seed_default_voices()
 
-def ensure_voice(name: str):
-    nm = (name or "").strip()
-    if not nm:
-        return
-    if nm not in st.session_state.voices:
-        st.session_state.voices[nm] = {"created_ts": now_ts(), "lanes": {ln: [] for ln in LANES}}
-
 def voice_names_for_selector() -> List[str]:
     base = ["— None —", "Voice A", "Voice B"]
     customs = sorted([k for k in st.session_state.voices.keys() if k not in ("Voice A", "Voice B")])
     return base + customs
-
-def _cap_lane_samples(voice_name: str, lane: str, cap: int = 160):
-    v = st.session_state.voices.get(voice_name)
-    if not v:
-        return
-    v["lanes"][lane] = v["lanes"][lane][-cap:]
-
-def add_sample_to_voice_lane(voice_name: str, lane: str, sample_text: str) -> None:
-    ensure_voice(voice_name)
-    lane = lane if lane in LANES else "Narration"
-    txt = _normalize_text(sample_text)
-    if len(txt) < 180:
-        return
-    st.session_state.voices[voice_name]["lanes"][lane].append({"ts": now_ts(), "text": txt, "vec": _hash_vec(txt)})
-    _cap_lane_samples(voice_name, lane)
-
-def import_samples_to_voice(voice_name: str, big_sample: str) -> Tuple[int, Dict[str, int]]:
-    ensure_voice(voice_name)
-    text = _normalize_text(big_sample)
-    paras = _split_paragraphs(text)
-
-    merged: List[str] = []
-    buf = ""
-    for p in paras:
-        if len(p) < 160:
-            buf = (buf + "\n\n" + p).strip() if buf else p
-            continue
-        if buf:
-            merged.append(buf.strip()); buf = ""
-        merged.append(p)
-    if buf:
-        merged.append(buf.strip())
-
-    counts = {ln: 0 for ln in LANES}
-    imported = 0
-    for p in merged:
-        if len(p) < 180:
-            continue
-        lane = detect_lane(p)
-        add_sample_to_voice_lane(voice_name, lane, p)
-        counts[lane] += 1
-        imported += 1
-
-    for ln in LANES:
-        _cap_lane_samples(voice_name, ln, cap=160)
-    return imported, counts
-
-def delete_voice(name: str) -> str:
-    nm = (name or "").strip()
-    if nm in ("Voice A", "Voice B"):
-        for ln in LANES:
-            st.session_state.voices[nm]["lanes"][ln] = []
-        return f"Cleared samples for {nm}."
-    if nm in st.session_state.voices:
-        del st.session_state.voices[nm]
-        return f"Deleted voice: {nm}"
-    return "Voice not found."
 
 def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
     v = st.session_state.voices.get(voice_name)
@@ -622,7 +569,7 @@ def retrieve_mixed_exemplars(voice_name: str, lane: str, query_text: str) -> Lis
     return out[:3]
 
 # ============================================================
-# AI BRIEF + INTENSITY BEHAVIOR
+# AI BRIEF
 # ============================================================
 def _story_bible_text() -> str:
     sb = []
@@ -632,16 +579,6 @@ def _story_bible_text() -> str:
     if st.session_state.characters.strip(): sb.append(f"CHARACTERS:\n{st.session_state.characters.strip()}")
     if st.session_state.outline.strip(): sb.append(f"OUTLINE:\n{st.session_state.outline.strip()}")
     return "\n\n".join(sb).strip() if sb else "— None provided —"
-
-def intensity_profile(x: float) -> str:
-    # x in [0,1]
-    if x <= 0.25:
-        return "LOW: conservative, literal, minimal invention, prioritize clarity and continuity."
-    if x <= 0.6:
-        return "MED: balanced creativity, stronger phrasing, controlled invention within canon."
-    if x <= 0.85:
-        return "HIGH: bold choices, sharper voice, richer specificity; still obey canon and lane."
-    return "MAX: aggressive originality, risk-taking micro-style; still obey canon, no random derailments."
 
 def build_partner_brief(action_name: str, lane: str) -> str:
     story_bible = _story_bible_text()
@@ -694,12 +631,6 @@ STORY BIBLE:
 ACTION: {action_name}
 """.strip()
 
-def temperature_from_intensity(x: float) -> float:
-    # production mapping: conservative -> bold
-    # 0.0 => 0.15, 1.0 => 1.10
-    x = max(0.0, min(1.0, float(x)))
-    return 0.15 + (x * 0.95)
-
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not set")
@@ -734,34 +665,12 @@ def local_cleanup(text: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
-def local_find(text: str, query: str, limit: int = 12) -> List[Tuple[int, str]]:
-    q = (query or "").strip()
-    if not q:
-        return []
-    lines = (text or "").splitlines()
-    hits = []
-    for i, line in enumerate(lines, start=1):
-        if q.lower() in line.lower():
-            snippet = line.strip()
-            if len(snippet) > 140:
-                snippet = snippet[:140] + "…"
-            hits.append((i, snippet))
-            if len(hits) >= limit:
-                break
-    return hits
-
 # ============================================================
 # COMMANDS (Junk Drawer)
 # ============================================================
-CMD_STATUS = re.compile(r"^\s*/status\s*$", re.IGNORECASE)
-CMD_CLEAR  = re.compile(r"^\s*/clear\s*$", re.IGNORECASE)
 CMD_FIND   = re.compile(r"^\s*/find\s*:\s*(.+)$", re.IGNORECASE)
 CMD_CREATE = re.compile(r"^\s*/create\s*:\s*(.+)$", re.IGNORECASE)
 CMD_PROMOTE = re.compile(r"^\s*/promote\s*$", re.IGNORECASE)
-
-CMD_SAVEVOICE = re.compile(r"^\s*/savevoice\s+(.+)$", re.IGNORECASE)
-CMD_DELETEVOICE = re.compile(r"^\s*/deletevoice\s+(.+)$", re.IGNORECASE)
-CMD_LISTVOICES = re.compile(r"^\s*/listvoices\s*$", re.IGNORECASE)
 
 def next_bay(bay: str) -> Optional[str]:
     if bay == "NEW": return "ROUGH"
@@ -772,28 +681,6 @@ def next_bay(bay: str) -> Optional[str]:
 def handle_junk_commands():
     raw = (st.session_state.junk or "").strip()
     if not raw:
-        return
-
-    if CMD_CLEAR.match(raw):
-        st.session_state.junk = ""
-        st.session_state.tool_output = ""
-        st.session_state.voice_status = "Cleared."
-        save_all_to_disk(force=True)
-        return
-
-    if CMD_STATUS.match(raw):
-        bay = st.session_state.active_bay
-        pid = st.session_state.project_id
-        title = st.session_state.project_title
-        counts = {b: len(list_projects_in_bay(b)) for b in BAYS}
-        st.session_state.tool_output = (
-            f"ACTIVE BAY: {bay}\n"
-            f"ACTIVE PROJECT: {title} ({pid})\n"
-            f"AI INTENSITY: {float(st.session_state.ai_intensity):.2f} (temp {temperature_from_intensity(st.session_state.ai_intensity):.2f})\n\n"
-            f"PROJECT COUNTS:\n" + "\n".join([f"- {b}: {counts[b]}" for b in BAYS])
-        )
-        st.session_state.voice_status = "Status."
-        st.session_state.junk = ""
         return
 
     m = CMD_CREATE.match(raw)
@@ -829,50 +716,6 @@ def handle_junk_commands():
         return
 
 handle_junk_commands()
-
-def handle_voice_sample_commands():
-    raw = st.session_state.voice_sample or ""
-    if not raw.strip():
-        return
-    lines = raw.splitlines()
-    first = lines[0].strip()
-
-    if CMD_LISTVOICES.match(first):
-        names = sorted(st.session_state.voices.keys())
-        st.session_state.tool_output = "VOICES:\n" + ("\n".join(names) if names else "— none —")
-        st.session_state.voice_status = "Listed voices."
-        st.session_state.voice_sample = ""
-        autosave()
-        return
-
-    m = CMD_DELETEVOICE.match(first)
-    if m:
-        name = m.group(1).strip()
-        msg = delete_voice(name)
-        st.session_state.voice_status = msg
-        st.session_state.tool_output = msg
-        st.session_state.voice_sample = ""
-        autosave()
-        return
-
-    m = CMD_SAVEVOICE.match(first)
-    if m:
-        name = m.group(1).strip()
-        sample = "\n".join(lines[1:]).strip()
-        if len(sample) < 200:
-            st.session_state.voice_status = "Paste at least ~200 characters under /savevoice Name."
-            st.session_state.tool_output = st.session_state.voice_status
-            st.session_state.voice_sample = ""
-            return
-        imported, counts = import_samples_to_voice(name, sample)
-        msg = f"Imported → {name}: {imported} chunks | " + " • ".join([f"{k}={v}" for k, v in counts.items()])
-        st.session_state.voice_status = msg
-        st.session_state.tool_output = msg
-        st.session_state.voice_sample = ""
-        autosave()
-        return
-
-handle_voice_sample_commands()
 
 # ============================================================
 # PARTNER ACTIONS (all generations obey AI Intensity)
@@ -958,24 +801,6 @@ def partner_action(action: str):
                 apply_replace(cleaned)
             return
 
-        if action == "Find":
-            m = CMD_FIND.match((st.session_state.junk or "").strip())
-            query = m.group(1).strip() if m else ""
-            if not query:
-                st.session_state.tool_output = "Find: type /find: term in Junk Drawer."
-                st.session_state.voice_status = "Find: waiting for query."
-                autosave()
-                return
-            hits = local_find(text, query)
-            if hits:
-                st.session_state.tool_output = "FIND:\n" + "\n".join([f"Line {ln}: {snip}" for ln, snip in hits])
-                st.session_state.voice_status = f"Find: {len(hits)} hit(s)."
-            else:
-                st.session_state.tool_output = "FIND:\nNo hits."
-                st.session_state.voice_status = "Find: 0 hits."
-            autosave()
-            return
-
         apply_replace(text)
 
     except Exception as e:
@@ -1027,7 +852,7 @@ st.divider()
 left, center, right = st.columns([1.2, 3.2, 1.6])
 
 # ============================================================
-# LEFT — STORY BIBLE (per-bay selector + promote)
+# LEFT — STORY BIBLE (AI Intensity lives HERE)
 # ============================================================
 with left:
     st.subheader("📖 Story Bible")
@@ -1084,10 +909,19 @@ with left:
                 st.session_state.last_action = f"Promote → {nb}"
                 autosave()
 
+    # ✅ AI Intensity lives in Story Bible panel (left)
+    st.slider(
+        "AI Intensity",
+        0.0, 1.0,
+        key="ai_intensity",
+        help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to every AI generation.",
+        on_change=autosave
+    )
+
     with st.expander("🗃 Junk Drawer"):
         st.text_area(
             "", key="junk", height=80, on_change=autosave,
-            help="Commands: /create: Title  |  /promote  |  /status  |  /find: term"
+            help="Commands: /create: Title  |  /promote  |  /find: term"
         )
         st.text_area("Tool Output", key="tool_output", height=140, disabled=True)
 
@@ -1123,26 +957,15 @@ with center:
     b2 = st.columns(5)
     if b2[0].button("Spell", key="btn_spell"): partner_action("Spell")
     if b2[1].button("Grammar", key="btn_grammar"): partner_action("Grammar")
-    if b2[2].button("Find", key="btn_find"): partner_action("Find")
+    if b2[2].button("Find", key="btn_find"): st.session_state.tool_output = "Find is wired via /find: in Junk Drawer."; autosave()
     if b2[3].button("Synonym", key="btn_synonym"): partner_action("Synonym")
     if b2[4].button("Sentence", key="btn_sentence"): partner_action("Sentence")
 
 # ============================================================
-# RIGHT — VOICE BIBLE (NEW: AI INTENSITY SLIDER)
+# RIGHT — VOICE BIBLE (LOCKED UI — NO AI INTENSITY HERE)
 # ============================================================
 with right:
     st.subheader("🎙 Voice Bible")
-
-    # NEW: Global AI intensity knob that affects ALL generations
-    st.slider(
-        "AI Intensity",
-        0.0, 1.0,
-        key="ai_intensity",
-        help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to every generation button.",
-        on_change=autosave
-    )
-
-    st.divider()
 
     st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
     st.selectbox(
@@ -1204,7 +1027,7 @@ with right:
         key="voice_sample",
         height=100,
         disabled=not st.session_state.vb_match_on,
-        help="Import voice: first line '/savevoice Name' then paste pages. Also: /listvoices, /deletevoice Name.",
+        help="(Voice import wiring remains in your full build.)",
         on_change=autosave
     )
     st.slider(
