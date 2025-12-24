@@ -3,13 +3,13 @@ from openai import OpenAI
 import time
 
 # ============================================================
-# APP CONFIG (LOCKED)
+# CONFIG
 # ============================================================
 st.set_page_config(page_title="🫒 Olivetti", layout="wide")
 client = OpenAI()
 
 # ============================================================
-# SAFE SESSION INIT (NO DUPES, NO BREAKS)
+# SAFE SESSION INIT
 # ============================================================
 def init(key, value):
     if key not in st.session_state:
@@ -30,7 +30,7 @@ STATE_DEFAULTS = {
     "sample": "",
     "intensity": 0.5,
     "voice_lock": False,
-    "focus": False,
+    "focus": False,   # retained for state safety, no longer used
     "last_save": time.time(),
 }
 
@@ -38,13 +38,13 @@ for k, v in STATE_DEFAULTS.items():
     init(k, v)
 
 # ============================================================
-# AUTOSAVE (SILENT / SAFE)
+# AUTOSAVE (SAFE, SILENT)
 # ============================================================
 def autosave():
     st.session_state.last_save = time.time()
 
 # ============================================================
-# VOICE ENGINE (IMMUTABLE)
+# VOICE ENGINE (PURE / IMMUTABLE)
 # ============================================================
 def build_voice_block():
     blocks = [
@@ -66,7 +66,7 @@ def build_voice_block():
     return "\n".join(blocks)
 
 # ============================================================
-# AI CORE (HARDENED — NO UI TOUCH)
+# AI CORE (HARDENED)
 # ============================================================
 PROMPTS = {
     "write": "Continue writing naturally.",
@@ -117,7 +117,7 @@ TEXT:
         pass
 
 # ============================================================
-# TOP BAR (LOCKED)
+# TOP BAR (UNCHANGED)
 # ============================================================
 top = st.columns([2,1,1,1,1])
 top[0].markdown("## 🫒 **Olivetti**")
@@ -134,23 +134,34 @@ st.divider()
 left, center, right = st.columns([1.3, 3.4, 1.3], gap="large")
 
 # ============================================================
-# LEFT — STORY BIBLE (ORDER PRESERVED)
+# LEFT — STORY BIBLE (UNCHANGED)
 # ============================================================
 with left:
     with st.expander("📖 Story Bible", expanded=True):
         st.text_area("Junk Drawer", key="junk", height=70, on_change=autosave)
         st.text_area("Synopsis", key="synopsis", height=70, on_change=autosave)
-        st.selectbox("Genre / Style", ["Literary", "Noir", "Thriller", "Comedy"], key="genre")
+        st.selectbox(
+            "Genre / Style",
+            ["Literary", "Noir", "Thriller", "Comedy"],
+            key="genre",
+        )
         st.text_area("World Elements", key="world", height=70, on_change=autosave)
         st.text_area("Characters", key="characters", height=70, on_change=autosave)
         st.text_area("Outline", key="outline", height=120, on_change=autosave)
 
 # ============================================================
-# CENTER — WRITING DESK (ALWAYS VISIBLE)
+# CENTER — WRITING DESK (EXPANDABLE)
 # ============================================================
 with center:
     st.markdown("### ✍️ Writing Desk")
-    st.text_area("", key="text", height=600, on_change=autosave)
+
+    # Increased default height; textarea remains user-resizable
+    st.text_area(
+        "",
+        key="text",
+        height=800,
+        on_change=autosave,
+    )
 
     r1 = st.columns(5)
     if r1[0].button("Write", key="w1"): run_ai("write")
@@ -167,12 +178,20 @@ with center:
     if r2[4].button("Sentence Improve", key="e5"): run_ai("sentence")
 
 # ============================================================
-# RIGHT — VOICE BIBLE (LOCKED ORDER)
+# RIGHT — VOICE BIBLE (UNCHANGED)
 # ============================================================
 with right:
     with st.expander("🎭 Voice Bible", expanded=True):
-        st.selectbox("Writing Style", ["Neutral", "Minimal", "Expressive"], key="style")
-        st.selectbox("Genre Voice", ["Literary", "Hardboiled", "Poetic"], key="voice")
+        st.selectbox(
+            "Writing Style",
+            ["Neutral", "Minimal", "Expressive"],
+            key="style",
+        )
+        st.selectbox(
+            "Genre Voice",
+            ["Literary", "Hardboiled", "Poetic"],
+            key="voice",
+        )
 
         voices = ["— None —"] + list(st.session_state.trained_voices.keys())
         st.selectbox("Trained Voices", voices, key="trained_voice")
@@ -193,16 +212,9 @@ with right:
         st.toggle("Voice Lock", key="voice_lock")
 
 # ============================================================
-# FOCUS MODE (SAFE)
+# FOCUS MODE — DISABLED (BUTTON RETAINED, NO EFFECT)
 # ============================================================
-if st.session_state.focus:
-    st.markdown(
-        "<style>[data-testid='stSidebar']{display:none;}</style>",
-        unsafe_allow_html=True,
-    )
-
 st.divider()
 f = st.columns(2)
-f[0].button("🔒 Focus Mode", key="focus_btn",
-            on_click=lambda: st.session_state.update({"focus": True}))
-f[1].caption("Olivetti — Hardened Build")
+f[0].button("🔒 Focus Mode", key="focus_btn")  # no-op, layout preserved
+f[1].caption("Olivetti — Stable Build")
