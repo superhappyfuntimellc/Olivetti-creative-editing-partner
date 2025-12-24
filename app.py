@@ -350,7 +350,7 @@ def new_project_payload(title: str) -> Dict[str, Any]:
         "action_controls": default_action_controls(),
         "import_controls": default_import_controls(),
         "imports_log": [],
-        "locks": {"story_bible_lock": True, "voice_fingerprint_lock": True, "lane_lock": False, "forced_lane": "Narration"},
+        "locks": {"story_bible_lock": True, "story_bible_edit_unlocked": False, "story_bible_last_unlock_ts": "", "voice_fingerprint_lock": True, "lane_lock": False, "forced_lane": "Narration"},
         "voices": default_voice_vault(),
     }
 
@@ -366,6 +366,7 @@ def init_state():
         "workspace": default_workspace(),
         "workspace_title": "",
         "desk_workspace_title": "",  # (NEW) alias input for desk, synced to workspace_title
+        "sb_unlock_toggle": False,  # Hard lock UI state
 
         "project_id": None,
         "project_title": "—",
@@ -387,7 +388,7 @@ def init_state():
         # Voice Bible scalars
         **default_voice_bible(),
 
-        "locks": {"story_bible_lock": True, "voice_fingerprint_lock": True, "lane_lock": False, "forced_lane": "Narration"},
+        "locks": {"story_bible_lock": True, "story_bible_edit_unlocked": False, "story_bible_last_unlock_ts": "", "voice_fingerprint_lock": True, "lane_lock": False, "forced_lane": "Narration"},
 
         "voices": {},
         "voices_seeded": False,
@@ -613,7 +614,20 @@ def load_project_into_session(pid: str) -> None:
     st.session_state.idea_bank_last = st.session_state.junk
 
     vb_apply_to_session(p.get("voice_bible", default_voice_bible()))
-    st.session_state.locks = p.get("locks", st.session_state.locks)
+    locks = p.get("locks", {}) or {}
+    if not isinstance(locks, dict):
+        locks = {}
+    # Hard lock defaults (older autosaves may not have these keys)
+    locks.setdefault("story_bible_lock", True)
+    locks.setdefault("story_bible_edit_unlocked", False)
+    locks.setdefault("story_bible_last_unlock_ts", "")
+    locks.setdefault("voice_fingerprint_lock", True)
+    locks.setdefault("lane_lock", False)
+    locks.setdefault("forced_lane", "Narration")
+    st.session_state.locks = locks
+    p["locks"] = locks
+    # Sync the unlock toggle widget with project state
+    st.session_state.sb_unlock_toggle = bool(locks.get("story_bible_edit_unlocked", False))
 
     st.session_state.voices = rebuild_vectors_in_voice_vault(p.get("voices", default_voice_vault()))
     st.session_state.voices_seeded = True
@@ -1022,6 +1036,10 @@ def local_find(term: str) -> str:
 # ============================================================
 # PROMOTE IDEAS → CANON
 # ============================================================
+def story_bible_locked_for_edit() -> bool:
+    """Hard lock: Story Bible is read-only unless explicitly unlocked per project."""
+    return bool(st.session_state.project_id) and (not bool(st.session_state.locks.get("story_bible_edit_unlocked", False)))
+
 def idea_lines_from_bank(bank_text: str) -> List[str]:
     lines_raw = [ln.strip() for ln in (bank_text or "").splitlines()]
     lines = [ln for ln in lines_raw if ln]
@@ -1059,6 +1077,14 @@ def promote_selected_ideas(target: str, selected: List[str], remove_from_ideas: 
     if not selected:
         st.session_state.tool_output = "Promote: nothing selected."
         st.session_state.voice_status = "Promote: no selection"
+        return
+
+    # Hard lock: promoting into Story Bible requires explicit unlock per project
+    if story_bible_locked_for_edit() and target in ("Synopsis", "Genre/Style Notes", "World", "Characters", "Outline"):
+        st.session_state.tool_output = "Story Bible is LOCKED (read-only). Toggle \"Unlock Story Bible Editing\" to promote into canon."
+        st.session_state.voice_status = "Story Bible locked"
+        st.session_state.last_action = "Promote blocked"
+        autosave()
         return
 
     if target == "Synopsis":
@@ -1572,6 +1598,30 @@ with left:
                 st.session_state.last_action = f"Promote → {nb}"
                 autosave()
 
+
+    # Hard lock: Story Bible is read-only unless explicitly unlocked per project
+    if st.session_state.project_id:
+        # keep widget state synced to the project lock
+        st.session_state.sb_unlock_toggle = bool(st.session_state.locks.get("story_bible_edit_unlocked", False))
+
+        def _sb_unlock_changed():
+            st.session_state.locks["story_bible_edit_unlocked"] = bool(st.session_state.sb_unlock_toggle)
+            if st.session_state.sb_unlock_toggle:
+                st.session_state.locks["story_bible_last_unlock_ts"] = now_ts()
+            st.session_state.last_action = "Story Bible Unlock" if st.session_state.sb_unlock_toggle else "Story Bible Relock"
+            autosave()
+
+        st.checkbox(
+            "Unlock Story Bible Editing",
+            key="sb_unlock_toggle",
+            on_change=_sb_unlock_changed,
+            help="HARD LOCK (per project): OFF = read-only canon. ON = edits allowed.",
+        )
+        if not bool(st.session_state.locks.get("story_bible_edit_unlocked", False)):
+            st.caption("🔒 Story Bible is locked (read-only). Toggle above to edit.")
+    elif bay == "NEW":
+        st.caption("Story Bible workspace is editable. It becomes locked to a project when you press Start Project.")
+
     st.slider(
         "AI Intensity (Global)",
         0.0, 1.0,
@@ -1597,7 +1647,13 @@ with left:
         )
         st.selectbox("Merge Mode", IMPORT_MERGE_MODES, key="import_merge_mode", on_change=autosave)
 
-        if st.button("Import → Break Down → Populate Story Bible", key="import_run"):
+        if st.button("Import → Break Down → Populate Story Bible", key="import_run", disabled=story_bible_locked_for_edit()):
+            if story_bible_locked_for_edit():
+                st.session_state.tool_output = "Import blocked: Story Bible is LOCKED (read-only). Toggle \"Unlock Story Bible Editing\" first."
+                st.session_state.voice_status = "Story Bible locked"
+                st.session_state.last_action = "Import blocked"
+                autosave()
+                st.stop()
             paste = (st.session_state.import_paste or "").strip()
             file_text, fname = read_uploaded_text(up)
             src_text = paste if paste else file_text
@@ -1651,19 +1707,19 @@ with left:
         st.text_area("Tool Output", key="tool_output", height=160, disabled=True)
 
     with st.expander("📝 Synopsis"):
-        st.text_area("", key="synopsis", height=100, on_change=autosave)
+        st.text_area("", key="synopsis", height=100, on_change=autosave, disabled=story_bible_locked_for_edit())
 
     with st.expander("🎭 Genre / Style Notes"):
-        st.text_area("", key="genre_style_notes", height=80, on_change=autosave)
+        st.text_area("", key="genre_style_notes", height=80, on_change=autosave, disabled=story_bible_locked_for_edit())
 
     with st.expander("🌍 World Elements"):
-        st.text_area("", key="world", height=100, on_change=autosave)
+        st.text_area("", key="world", height=100, on_change=autosave, disabled=story_bible_locked_for_edit())
 
     with st.expander("👤 Characters"):
-        st.text_area("", key="characters", height=120, on_change=autosave)
+        st.text_area("", key="characters", height=120, on_change=autosave, disabled=story_bible_locked_for_edit())
 
     with st.expander("🧱 Outline"):
-        st.text_area("", key="outline", height=160, on_change=autosave)
+        st.text_area("", key="outline", height=160, on_change=autosave, disabled=story_bible_locked_for_edit())
 
 # ============================================================
 # CENTER — WRITING DESK
