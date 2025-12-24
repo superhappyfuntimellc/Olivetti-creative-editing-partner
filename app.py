@@ -28,20 +28,191 @@ st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_st
 
 st.markdown(
     """
+
     <style>
-    div[data-testid="stTextArea"] textarea {
+    :root{
+      --bg0:#07090d;
+      --bg1:#0b0f16;
+      --panel:rgba(17,21,28,.82);
+      --panel2:rgba(22,28,38,.78);
+      --stroke:rgba(202,168,106,.22);
+      --stroke2:rgba(255,255,255,.08);
+      --accent:#caa86a;   /* brass */
+      --accent2:#6dd6ff;  /* cool highlight */
+      --text:#e9edf5;
+      --muted:rgba(233,237,245,.72);
+      --paper:#fbf7ee;
+      --ink:#14161a;
+    }
+
+
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    h1, h2, h3, h4, h5, .stSubheader{
+      font-family: ui-serif, Georgia, "Palatino Linotype", Palatino, serif;
+    }
+
+    /* App chrome */
+    .stApp{
+      background:
+        radial-gradient(1200px 800px at 20% 0%, rgba(109,214,255,.10), transparent 60%),
+        radial-gradient(900px 700px at 90% 10%, rgba(202,168,106,.12), transparent 55%),
+        linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
+      color: var(--text);
+    }
+
+    /* Reduce the default Streamlit top header clutter (keeps functionality) */
+    header[data-testid="stHeader"]{
+      background: transparent;
+    }
+
+    /* Sidebar = control console */
+    [data-testid="stSidebar"]{
+      background: linear-gradient(180deg, rgba(13,16,23,.92), rgba(10,12,18,.86));
+      border-right: 1px solid var(--stroke);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.03) inset, 10px 0 40px rgba(0,0,0,.35);
+    }
+    [data-testid="stSidebar"] *{ color: var(--text); }
+
+    /* Main container padding + max width */
+    section.main > div.block-container{
+      padding-top: 1.25rem;
+      padding-bottom: 2rem;
+      max-width: 1500px;
+    }
+
+    /* Expanders = glass panels */
+    details[data-testid="stExpander"]{
+      background: var(--panel);
+      border: 1px solid var(--stroke2);
+      border-radius: 16px;
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,.25) inset,
+        0 12px 30px rgba(0,0,0,.28);
+      overflow: hidden;
+    }
+    details[data-testid="stExpander"] > summary{
+      padding: 0.65rem 0.9rem !important;
+      font-size: 0.95rem !important;
+      letter-spacing: .2px;
+      color: var(--text);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,0));
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    details[data-testid="stExpander"][open] > summary{
+      border-bottom: 1px solid rgba(202,168,106,.16);
+    }
+
+    /* Subheaders */
+    h2, h3{
+      letter-spacing: .4px;
+    }
+    .stSubheader, h3{
+      color: var(--text);
+    }
+    .stCaption, [data-testid="stMarkdownContainer"] p{
+      color: var(--muted);
+    }
+
+    /* Inputs */
+    input[type="text"], textarea{
+      border-radius: 14px !important;
+    }
+
+    /* Text areas: "paper on desk" feel */
+    div[data-testid="stTextArea"] textarea{
       font-size: 18px !important;
       line-height: 1.65 !important;
       padding: 18px !important;
       resize: vertical !important;
       min-height: 520px !important;
+
+      background: var(--paper) !important;
+      color: var(--ink) !important;
+      border: 1px solid rgba(20,22,26,.18) !important;
+      box-shadow:
+        0 1px 0 rgba(255,255,255,.55) inset,
+        0 10px 24px rgba(0,0,0,.18) !important;
     }
-    button[kind="secondary"], button[kind="primary"] {
+    div[data-testid="stTextArea"] textarea:focus{
+      outline: none !important;
+      border: 1px solid rgba(202,168,106,.55) !important;
+      box-shadow:
+        0 0 0 3px rgba(202,168,106,.18),
+        0 10px 24px rgba(0,0,0,.20) !important;
+    }
+
+    /* Buttons = brass + steel */
+    button[kind="secondary"], button[kind="primary"]{
       font-size: 16px !important;
-      padding: 0.6rem 0.9rem !important;
+      padding: 0.62rem 0.95rem !important;
+      border-radius: 14px !important;
+      border: 1px solid rgba(255,255,255,.10) !important;
+      transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, filter .12s ease;
     }
-    label, .stSelectbox label, .stSlider label { font-size: 14px !important; }
+    button[kind="primary"]{
+      background:
+        linear-gradient(180deg, rgba(202,168,106,.95), rgba(150,118,64,.92)) !important;
+      color: #161616 !important;
+      box-shadow:
+        0 10px 24px rgba(0,0,0,.28),
+        0 0 0 1px rgba(0,0,0,.22) inset !important;
+    }
+    button[kind="secondary"]{
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)) !important;
+      color: var(--text) !important;
+      box-shadow:
+        0 8px 18px rgba(0,0,0,.22),
+        0 0 0 1px rgba(0,0,0,.25) inset !important;
+    }
+    button:hover{
+      transform: translateY(-1px);
+      border-color: rgba(202,168,106,.35) !important;
+      box-shadow:
+        0 12px 28px rgba(0,0,0,.30),
+        0 0 0 1px rgba(202,168,106,.20) inset !important;
+      filter: brightness(1.03);
+    }
+    button:active{
+      transform: translateY(0px);
+      filter: brightness(.99);
+    }
+
+    /* Tabs */
+    [data-testid="stTabs"] [data-baseweb="tab-list"]{
+      gap: 8px;
+    }
+    [data-testid="stTabs"] button[role="tab"]{
+      border-radius: 999px !important;
+      padding: 0.35rem 0.8rem !important;
+      background: rgba(255,255,255,.04) !important;
+      border: 1px solid rgba(255,255,255,.08) !important;
+      color: var(--text) !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"]{
+      background: rgba(202,168,106,.18) !important;
+      border-color: rgba(202,168,106,.28) !important;
+    }
+
+    /* Dividers */
+    hr{
+      border-color: rgba(255,255,255,.08) !important;
+    }
+
+    /* Make selectbox / slider labels a touch larger */
+    label, .stSelectbox label, .stSlider label{
+      font-size: 14px !important;
+      color: rgba(233,237,245,.85) !important;
+    }
+
+    /* Reduce empty-space at bottom of widgets */
+    .stMarkdown{ margin-bottom: .25rem; }
+
     </style>
+
     """,
     unsafe_allow_html=True
 )
