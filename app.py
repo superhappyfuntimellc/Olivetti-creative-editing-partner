@@ -818,12 +818,16 @@ def load_workspace_into_session() -> None:
     st.session_state.characters = sb.get("characters", "") or ""
     st.session_state.outline = sb.get("outline", "") or ""
     st.session_state.voice_sample = w.get("voice_sample", "") or ""
-    st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
+   
     st.session_state.voices = rebuild_vectors_in_voice_vault(w.get("voices", default_voice_vault()))
     st.session_state.voices_seeded = True
     st.session_state.style_banks = rebuild_vectors_in_style_banks(w.get("style_banks", default_style_banks()))
     st.session_state.workspace_title = w.get("title", "") or ""
-
+if "ai_intensity" not in st.session_state:
+    st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
+else:
+    st.session_state["ai_intensity_pending"] = float(w.get("ai_intensity", 0.75))
+    st.session_state["_apply_pending_widget_state"] = True
 
 def reset_workspace_story_bible(keep_templates: bool = True) -> None:
     old = st.session_state.sb_workspace or default_story_bible_workspace()
@@ -843,6 +847,7 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
 # ============================================================
 def init_state() -> None:
     defaults: Dict[str, Any] = {
+        "ai_intensity": 0.75,
         "active_bay": "NEW",
         "projects": {},
         "active_project_by_bay": {b: None for b in BAYS},
@@ -901,6 +906,11 @@ def init_state() -> None:
 
 
 init_state()
+# Apply pending widget values BEFORE widgets are created
+if st.session_state.pop("_apply_pending_widget_state", False):
+    if "ai_intensity_pending" in st.session_state:
+    st.session_state["ai_intensity"] = float(st.session_state.pop("ai_intensity_pending"))
+   
 
 
 # ============================================================
@@ -1105,8 +1115,10 @@ def create_project_from_current_bible(title: str) -> str:
 
     if source == "workspace":
         reset_workspace_story_bible(keep_templates=True)
+st.rerun()
 
     return p["id"]
+
 
 
 def promote_project(pid: str, to_bay: str) -> None:
@@ -1921,14 +1933,17 @@ def cb_create_project() -> None:
     st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
     st.session_state.last_action = "Create Project"
     autosave()
+    st.rerun()
 
 
 def cb_new_workspace_bible() -> None:
     """Mint a fresh workspace Story Bible ID (workspace-only)."""
     reset_workspace_story_bible(keep_templates=True)
+    
     st.session_state.voice_status = "Workspace: new Story Bible minted"
     st.session_state.last_action = "New Story Bible"
     autosave()
+    st.rerun()
 
 
 def cb_promote_to(target_bay: str) -> None:
