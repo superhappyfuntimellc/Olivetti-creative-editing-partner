@@ -1,13 +1,300 @@
+# ============================================================
+# OLIVETTI CREATIVE EDITING PARTNER
+# Professional-Grade AI Author Engine
+# ============================================================
+#
+# SYSTEM ARCHITECTURE (Spiderweb of Intelligent, Trainable Functions):
+#
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                    USER TRAINING INPUTS                          │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ 1. Style Banks → Upload/paste samples → Per-lane training       │
+# │ 2. Voice Vault → Add voice samples → Semantic vector storage    │
+# │ 3. Story Bible → Import/generate → Canon enforcement            │
+# │ 4. Voice Bible → Enable controls → Real-time modulation         │
+# └─────────────────────────────────────────────────────────────────┘
+#                              ↓
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                   INTELLIGENT RETRIEVAL                          │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ • retrieve_style_exemplars() ← Context-aware semantic search    │
+# │ • retrieve_mixed_exemplars() ← Voice vault vector matching      │
+# │ • _story_bible_text() ← Canon assembly                          │
+# │ • engine_style_directive() ← Style guidance generation          │
+# └─────────────────────────────────────────────────────────────────┘
+#                              ↓
+# ┌─────────────────────────────────────────────────────────────────┐
+# │              UNIFIED AI BRIEF CONSTRUCTION                       │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ build_partner_brief(action, lane):                              │
+# │   ✓ AI Intensity → temperature_from_intensity()                 │
+# │   ✓ Writing Style → engine_style_directive() + exemplars        │
+# │   ✓ Genre Influence → mood/pacing directives                    │
+# │   ✓ Trained Voice → semantic retrieval of user samples          │
+# │   ✓ Match My Style → one-shot adaptation                        │
+# │   ✓ Voice Lock → hard constraints (MANDATORY)                   │
+# │   ✓ POV/Tense → technical specs                                 │
+# │   ✓ Story Bible → canon enforcement                             │
+# │   ✓ Lane Detection → context-aware mode (Dialogue/Narration)    │
+# └─────────────────────────────────────────────────────────────────┘
+#                              ↓
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                 UNIFIED AI GENERATION                            │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ call_openai(brief, task, text):                                 │
+# │   → OpenAI API with temperature from AI Intensity               │
+# │   → System prompt = full Voice Bible brief                      │
+# │   → User prompt = action-specific task                          │
+# │   → Returns professional-grade prose                            │
+# └─────────────────────────────────────────────────────────────────┘
+#                              ↓
+# ┌─────────────────────────────────────────────────────────────────┐
+# │               ALL ACTIONS USE SAME ENGINE                        │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ • partner_action(Write/Rewrite/Expand/etc) ← Writing desk       │
+# │ • generate_story_bible_section() ← Story Bible generation       │
+# │ • sb_breakdown_ai() ← Import document parsing                   │
+# │ ALL route through build_partner_brief() + call_openai()         │
+# └─────────────────────────────────────────────────────────────────┘
+#                              ↓
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                  ADAPTIVE FEEDBACK LOOP                          │
+# ├─────────────────────────────────────────────────────────────────┤
+# │ User adds training → Vector storage → Semantic retrieval →      │
+# │ → Better exemplars → Improved AI brief → Higher quality prose   │
+# │                                                                  │
+# │ CONTINUOUS IMPROVEMENT: More training = Better adaptation        │
+# └─────────────────────────────────────────────────────────────────┘
+#
+# VERIFICATION CHECKLIST (All ✓ = Fully Connected):
+# ✓ AI Intensity → temperature_from_intensity() → call_openai()
+# ✓ Style Banks → retrieve_style_exemplars() → build_partner_brief()
+# ✓ Voice Vault → retrieve_mixed_exemplars() → build_partner_brief()
+# ✓ Story Bible → _story_bible_text() → build_partner_brief()
+# ✓ Voice Bible Controls → build_partner_brief() → ALL AI actions
+# ✓ Write/Rewrite/Expand → partner_action() → build_partner_brief()
+# ✓ Generate Synopsis/etc → generate_story_bible_section() → Voice Bible
+# ✓ Import → sb_breakdown_ai() → call_openai() → Voice Bible
+# ✓ Status Display → _get_voice_bible_summary() → Real-time feedback
+# ✓ Bay System → Project management → Story Bible linking
+#
+# DATA FLOW EXAMPLE (Write Action):
+# User clicks "Write" 
+#   → queue_action("Write")
+#   → partner_action("Write")
+#   → lane = current_lane_from_draft(text)  [Context detection]
+#   → brief = build_partner_brief("Write", lane)
+#        → ai_x = st.session_state.ai_intensity  [0.75]
+#        → story_bible = _story_bible_text()  [Canon]
+#        → style_exemplars = retrieve_style_exemplars(...)  [Semantic search]
+#        → voice_exemplars = retrieve_mixed_exemplars(...)  [Vector match]
+#        → Returns: 500-line unified prompt with ALL controls
+#   → out = call_openai(brief, task, text)
+#        → temperature = temperature_from_intensity(0.75) = 0.86
+#        → OpenAI API call with full brief
+#        → Returns: Professional prose matching ALL Voice Bible settings
+#   → apply_append(out)  [Add to draft]
+#   → status = "Write complete (AI:HIGH • Style:LYRICAL • Genre:Literary)"
+#
+# RESULT: Spiderweb fully connected. Every component feeds into unified AI.
+# ============================================================
+
+import os
+import re
 import os
 import re
 import math
 import json
 import hashlib
+import logging
+import traceback
+import zipfile
 from io import BytesIO
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
-
+from functools import wraps, lru_cache
+from contextlib import contextmanager
 import streamlit as st
+
+# Optional DOCX support (import/export). UI will gracefully degrade if missing.
+try:
+    from docx import Document  # type: ignore
+    from docx.shared import Pt, Inches  # type: ignore
+    from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+# Optional EPUB support
+try:
+    from ebooklib import epub  # type: ignore
+    EPUB_AVAILABLE = True
+except ImportError:
+    EPUB_AVAILABLE = False
+
+# Optional PDF support (lightweight fpdf2)
+try:
+    from fpdf import FPDF  # type: ignore
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+
+# Optional audio export support (gTTS)
+try:
+    from gtts import gTTS  # type: ignore
+    GTTS_AVAILABLE = True
+except ImportError:
+    GTTS_AVAILABLE = False
+
+# ============================================================
+# LOGGING & ERROR HANDLING INFRASTRUCTURE
+# ============================================================
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('olivetti.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("Olivetti")
+
+class OlivettiError(Exception):
+    """Base exception for Olivetti-specific errors"""
+    pass
+
+class AIServiceError(OlivettiError):
+    """Errors related to AI service calls"""
+    pass
+
+class DataValidationError(OlivettiError):
+    """Errors related to data validation"""
+    pass
+
+class StorageError(OlivettiError):
+    """Errors related to file storage operations"""
+    pass
+
+def safe_execute(func_name: str = "", fallback_value: Any = None, show_error: bool = True):
+    """Decorator for safe function execution with error handling"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            name = func_name or func.__name__
+            try:
+                return func(*args, **kwargs)
+            except OlivettiError as e:
+                logger.error(f"{name} failed with OlivettiError: {e}")
+                if show_error:
+                    st.error(f"⚠️ {name}: {str(e)}")
+                return fallback_value
+            except Exception as e:
+                logger.error(f"{name} failed with unexpected error: {e}\n{traceback.format_exc()}")
+                if show_error:
+                    st.error(f"❌ Unexpected error in {name}. Check logs for details.")
+                return fallback_value
+        return wrapper
+    return decorator
+
+@contextmanager
+def error_boundary(context: str, silent: bool = False):
+    """Context manager for error boundaries"""
+    try:
+        yield
+    except OlivettiError as e:
+        logger.error(f"Error in {context}: {e}")
+        if not silent:
+            st.error(f"⚠️ {context}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in {context}: {e}\n{traceback.format_exc()}")
+        if not silent:
+            st.error(f"❌ Unexpected error in {context}. Check logs for details.")
+
+def validate_text_input(text: str, field_name: str, max_length: int = 1000000, min_length: int = 0) -> str:
+    """Validate text input with length constraints"""
+    if not isinstance(text, str):
+        raise DataValidationError(f"{field_name} must be a string")
+    if len(text) < min_length:
+        raise DataValidationError(f"{field_name} must be at least {min_length} characters")
+    if len(text) > max_length:
+        raise DataValidationError(f"{field_name} exceeds maximum length of {max_length} characters")
+    return text
+
+def validate_dict(data: Any, field_name: str) -> Dict:
+    """Validate dictionary data"""
+    if not isinstance(data, dict):
+        raise DataValidationError(f"{field_name} must be a dictionary")
+    return data
+
+# ============================================================
+# MODULE IMPORTS (Production Architecture)
+# ============================================================
+# Olivetti uses a modular architecture for maintainability.
+# For single-file deployment, keep all code in this file.
+# For development, split into focused modules.
+
+# Optional module imports - graceful degradation if not available
+try:
+    from voice_bible import (
+        build_partner_brief as _vb_build_brief,
+        temperature_from_intensity as _vb_temp,
+        get_voice_bible_summary as _vb_summary,
+        engine_style_directive as _vb_style_directive
+    )
+    HAS_VOICE_BIBLE_MODULE = True
+except ImportError:
+    HAS_VOICE_BIBLE_MODULE = False
+    logger.info("voice_bible.py not found, using inline implementations")
+
+try:
+    from voice_vault import (
+        add_voice_sample as _vv_add,
+        delete_voice_sample as _vv_delete,
+        retrieve_mixed_exemplars as _vv_retrieve,
+        get_voice_vault_stats as _vv_stats,
+        list_voices as _vv_list,
+        create_voice as _vv_create,
+        delete_voice as _vv_delete_voice
+    )
+    HAS_VOICE_VAULT_MODULE = True
+except ImportError:
+    HAS_VOICE_VAULT_MODULE = False
+    logger.info("voice_vault.py not found, using inline implementations")
+
+try:
+    from style_banks import (
+        create_style_bank as _sb_create,
+        add_style_exemplar as _sb_add,
+        retrieve_style_exemplars as _sb_retrieve,
+        get_style_bank_stats as _sb_stats
+    )
+    HAS_STYLE_BANKS_MODULE = True
+except ImportError:
+    HAS_STYLE_BANKS_MODULE = False
+    logger.info("style_banks.py not found, using inline implementations")
+
+try:
+    from story_bible import (
+        get_story_bible_text as _story_get,
+        update_story_bible_section as _story_update
+    )
+    HAS_STORY_BIBLE_MODULE = True
+except ImportError:
+    HAS_STORY_BIBLE_MODULE = False
+    logger.info("story_bible.py not found, using inline implementations")
+
+try:
+    from ai_gateway import (
+        call_openai as _ai_call,
+        has_openai_key as _ai_has_key,
+        get_ai_status as _ai_status
+    )
+    HAS_AI_GATEWAY_MODULE = True
+except ImportError:
+    HAS_AI_GATEWAY_MODULE = False
+    logger.info("ai_gateway.py not found, using inline implementations")
 
 # ============================================================
 # OLIVETTI DESK — one file, production-stable, paste+click
@@ -38,6 +325,15 @@ OPENAI_MODEL = _get_openai_model()
 def has_openai_key() -> bool:
     return bool(os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty())
 
+def get_ai_intensity_safe() -> float:
+    """Get AI intensity with safe fallback to prevent crashes."""
+    try:
+        val = st.session_state.get("ai_intensity", 0.75)
+        val = float(val)
+        return max(0.0, min(1.0, val))
+    except (ValueError, TypeError, AttributeError):
+        return 0.75
+
 def require_openai_key() -> str:
     """Stop the app with a clear message if no OpenAI key is configured."""
     key = os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty()
@@ -54,123 +350,735 @@ def require_openai_key() -> str:
 # ============================================================
 st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
 
-# Sexy, readable UI skin — no feature changes
+# Olivetti Quaderno-inspired UI — Sleek, sexy, fun, easy
 st.markdown(
     """
 <style>
+/* ========== OLIVETTI QUADERNO LUXE PALETTE ========== */
 :root{
-  --bg0:#07090d;
-  --bg1:#0b0f16;
-  --panel:rgba(17,21,28,.82);
-  --panel2:rgba(22,28,38,.78);
-  --stroke:rgba(202,168,106,.22);
-  --stroke2:rgba(255,255,255,.08);
-  --accent:#caa86a;
-  --text:#e9edf5;
-  --muted:rgba(233,237,245,.72);
-  --paper:#fbf7ee;
-  --ink:#14161a;
+  --olivetti-cream: #f5f0e8;
+  --olivetti-beige: #e8dcc8;
+  --olivetti-tan: #d4c4a8;
+  --olivetti-bronze: #b8956a;
+  --olivetti-gold: #cda35d;
+  --olivetti-charcoal: #2a2520;
+  --olivetti-dark: #1a1614;
+  --olivetti-lcd: #3d4a3a;
+  --olivetti-lcd-text: #c8d5b8;
+  
+  --accent-primary: #d4c4a8;
+  --accent-gold: #cda35d;
+  --accent-glow: rgba(212, 196, 168, 0.35);
+  --text-primary: #f5f0e8;
+  --text-muted: rgba(245, 240, 232, 0.7);
+  --panel-bg: rgba(42, 37, 32, 0.75);
+  --paper-bg: #fffef9;
+  --paper-text: #1a1614;
 }
+
+/* ========== TYPOGRAPHY (Italian Elegance) ========== */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Libre+Baskerville:wght@400;700&family=Playfair+Display:wght@600;700&display=swap');
 
 html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-}
-h1, h2, h3, h4, h5, .stSubheader{
-  font-family: ui-serif, Georgia, "Palatino Linotype", Palatino, serif;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 14px;
+  letter-spacing: 0.4px;
 }
 
+h1, h2, h3, h4, h5, h6, .stSubheader{
+  font-family: 'Playfair Display', 'Libre Baskerville', Georgia, serif;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--accent-gold);
+  text-shadow: 
+    0 2px 12px rgba(205, 163, 93, 0.5),
+    0 4px 24px rgba(0, 0, 0, 0.4);
+  background: linear-gradient(145deg, #e8dcc8 0%, #cda35d 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ========== MAIN BACKGROUND (Luxe Quaderno hardware) ========== */
 .stApp{
-  background:
-    radial-gradient(1200px 800px at 20% 0%, rgba(109,214,255,.10), transparent 60%),
-    radial-gradient(900px 700px at 90% 10%, rgba(202,168,106,.12), transparent 55%),
-    linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
-  color: var(--text);
+  background: 
+    /* Noise texture */
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><filter id="n"><feTurbulence baseFrequency="0.9" numOctaves="4"/></filter><rect width="300" height="300" filter="url(%23n)" opacity="0.03"/></svg>'),
+    /* Metallic sheen */
+    repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      rgba(212, 196, 168, 0.03) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    /* Spotlight effects */
+    radial-gradient(ellipse at 20% 10%, rgba(205, 163, 93, 0.15), transparent 40%),
+    radial-gradient(ellipse at 80% 90%, rgba(184, 149, 106, 0.12), transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(212, 196, 168, 0.08), transparent 60%),
+    /* Deep gradient base */
+    linear-gradient(135deg, 
+      #14120f 0%, 
+      #1a1614 20%,
+      #2a2520 50%,
+      #1a1614 80%,
+      #14120f 100%
+    );
+  color: var(--text-primary);
+  position: relative;
 }
 
-header[data-testid="stHeader"]{ background: transparent; }
+.stApp::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 200px;
+  background: radial-gradient(ellipse at top, rgba(205, 163, 93, 0.1), transparent);
+  pointer-events: none;
+  z-index: 0;
+}
 
+header[data-testid="stHeader"]{ 
+  background: linear-gradient(180deg, rgba(26, 22, 20, 0.9), transparent);
+  border-bottom: 2px solid rgba(205, 163, 93, 0.3);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+/* ========== SIDEBAR (Premium Control Panel) ========== */
 [data-testid="stSidebar"]{
-  background: linear-gradient(180deg, rgba(13,16,23,.92), rgba(10,12,18,.86));
-  border-right: 1px solid var(--stroke);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.03) inset, 10px 0 40px rgba(0,0,0,.35);
+  background: 
+    /* Brushed metal texture */
+    repeating-linear-gradient(
+      180deg,
+      rgba(212, 196, 168, 0.02) 0px,
+      transparent 1px,
+      transparent 2px,
+      rgba(212, 196, 168, 0.02) 3px
+    ),
+    linear-gradient(180deg, 
+      rgba(42, 37, 32, 0.98) 0%, 
+      rgba(26, 22, 20, 1) 100%
+    );
+  border-right: 4px solid;
+  border-image: linear-gradient(180deg, #cda35d 0%, #b8956a 50%, #cda35d 100%) 1;
+  box-shadow: 
+    inset -3px 0 15px rgba(205, 163, 93, 0.15),
+    12px 0 40px rgba(0, 0, 0, 0.6),
+    inset 0 0 60px rgba(26, 22, 20, 0.5);
 }
-[data-testid="stSidebar"] *{ color: var(--text); }
+
+[data-testid="stSidebar"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(180deg, 
+    transparent 0%,
+    rgba(205, 163, 93, 0.5) 20%,
+    rgba(205, 163, 93, 0.8) 50%,
+    rgba(205, 163, 93, 0.5) 80%,
+    transparent 100%
+  );
+  box-shadow: 0 0 20px rgba(205, 163, 93, 0.4);
+}
+
+[data-testid="stSidebar"] *{ 
+  color: var(--text-primary); 
+}
 
 section.main > div.block-container{
-  padding-top: 1.25rem;
-  padding-bottom: 2rem;
-  max-width: 1500px;
+  padding-top: 2rem;
+  padding-bottom: 3rem;
+  max-width: 1600px;
 }
 
+/* ========== EXPANDERS (Luxe LCD Panels) ========== */
 details[data-testid="stExpander"]{
-  background: var(--panel);
-  border: 1px solid var(--stroke2);
-  border-radius: 16px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset, 0 12px 30px rgba(0,0,0,.28);
+  background: 
+    linear-gradient(135deg, rgba(61, 74, 58, 0.25), rgba(61, 74, 58, 0.15));
+  border: 2px solid rgba(200, 213, 184, 0.3);
+  border-radius: 10px;
+  box-shadow: 
+    0 6px 16px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(200, 213, 184, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
   overflow: hidden;
+  margin: 1rem 0;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
 }
-details[data-testid="stExpander"] > summary{
-  padding: 0.65rem 0.9rem !important;
-  font-size: 0.95rem !important;
-  letter-spacing: .2px;
-  color: var(--text);
-  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,0));
-  border-bottom: 1px solid rgba(255,255,255,.06);
-}
-details[data-testid="stExpander"][open] > summary{ border-bottom: 1px solid rgba(202,168,106,.16); }
 
-div[data-testid="stTextArea"] textarea{
-  font-size: 18px !important;
-  line-height: 1.65 !important;
-  padding: 18px !important;
-  resize: vertical !important;
-  min-height: 520px !important;
-  background: var(--paper) !important;
-  color: var(--ink) !important;
-  border: 1px solid rgba(20,22,26,.18) !important;
-  box-shadow: 0 1px 0 rgba(255,255,255,.55) inset, 0 10px 24px rgba(0,0,0,.18) !important;
+details[data-testid="stExpander"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%,
+    rgba(200, 213, 184, 0.4) 50%,
+    transparent 100%
+  );
 }
+
+details[data-testid="stExpander"]:hover{
+  border-color: rgba(205, 163, 93, 0.5);
+  box-shadow: 
+    0 8px 24px rgba(0, 0, 0, 0.6),
+    0 4px 12px rgba(205, 163, 93, 0.2),
+    inset 0 1px 0 rgba(205, 163, 93, 0.25),
+    0 0 20px rgba(205, 163, 93, 0.15);
+  transform: translateY(-2px);
+}
+
+details[data-testid="stExpander"] > summary{
+  padding: 1rem 1.3rem !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase;
+  color: var(--olivetti-lcd-text) !important;
+  background: 
+    linear-gradient(180deg, 
+      rgba(61, 74, 58, 0.4) 0%, 
+      rgba(61, 74, 58, 0.2) 100%
+    );
+  border-bottom: 1px solid rgba(200, 213, 184, 0.2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  text-shadow: 0 0 10px rgba(200, 213, 184, 0.3);
+}
+
+details[data-testid="stExpander"] > summary:hover{
+  background: 
+    linear-gradient(180deg, 
+      rgba(61, 74, 58, 0.5) 0%, 
+      rgba(61, 74, 58, 0.3) 100%
+    );
+  color: var(--accent-gold) !important;
+  text-shadow: 0 0 15px rgba(205, 163, 93, 0.5);
+}
+
+details[data-testid="stExpander"][open] > summary{ 
+  border-bottom: 2px solid rgba(205, 163, 93, 0.4);
+  background: 
+    linear-gradient(180deg, 
+      rgba(205, 163, 93, 0.2) 0%, 
+      rgba(61, 74, 58, 0.2) 100%
+    );
+  box-shadow: inset 0 -2px 8px rgba(205, 163, 93, 0.15);
+}
+
+/* ========== TEXT AREAS (Luxe Typewriter Paper) ========== */
+div[data-testid="stTextArea"] textarea{
+  font-family: 'Courier New', 'Courier', monospace !important;
+  font-size: 17px !important;
+  line-height: 1.75 !important;
+  padding: 28px !important;
+  resize: vertical !important;
+  min-height: 540px !important;
+  background: 
+    /* Paper texture */
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 1.7rem,
+      rgba(212, 196, 168, 0.08) 1.7rem,
+      rgba(212, 196, 168, 0.08) calc(1.7rem + 1px)
+    ),
+    linear-gradient(135deg, #fffef9 0%, #fbf9f4 100%) !important;
+  color: var(--paper-text) !important;
+  border: 4px solid rgba(205, 163, 93, 0.4) !important;
+  border-radius: 6px !important;
+  box-shadow: 
+    /* Inner shadow for depth */
+    inset 0 3px 12px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    /* Outer glow and elevation */
+    0 10px 30px rgba(0, 0, 0, 0.4),
+    0 4px 12px rgba(205, 163, 93, 0.2),
+    0 0 40px rgba(205, 163, 93, 0.08) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
 div[data-testid="stTextArea"] textarea:focus{
   outline: none !important;
-  border: 1px solid rgba(202,168,106,.55) !important;
-  box-shadow: 0 0 0 3px rgba(202,168,106,.18), 0 10px 24px rgba(0,0,0,.20) !important;
+  border: 4px solid rgba(205, 163, 93, 0.8) !important;
+  box-shadow: 
+    /* Intense focus glow */
+    0 0 0 4px rgba(205, 163, 93, 0.25),
+    0 0 0 8px rgba(205, 163, 93, 0.1),
+    inset 0 3px 12px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 14px 40px rgba(0, 0, 0, 0.5),
+    0 6px 20px rgba(205, 163, 93, 0.3),
+    0 0 60px rgba(205, 163, 93, 0.2) !important;
+  transform: translateY(-2px);
 }
 
+/* ========== BUTTONS (Premium Function Keys) ========== */
 button[kind="secondary"], button[kind="primary"]{
-  font-size: 16px !important;
-  padding: 0.62rem 0.95rem !important;
-  border-radius: 14px !important;
-  border: 1px solid rgba(255,255,255,.10) !important;
-  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, filter .12s ease;
-}
-button[kind="primary"]{
-  background: linear-gradient(180deg, rgba(202,168,106,.95), rgba(150,118,64,.92)) !important;
-  color: #161616 !important;
-  box-shadow: 0 10px 24px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.22) inset !important;
-}
-button[kind="secondary"]{
-  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)) !important;
-  color: var(--text) !important;
-  box-shadow: 0 8px 18px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.25) inset !important;
-}
-button:hover{
-  transform: translateY(-1px);
-  border-color: rgba(202,168,106,.35) !important;
-  box-shadow: 0 12px 28px rgba(0,0,0,.30), 0 0 0 1px rgba(202,168,106,.20) inset !important;
-  filter: brightness(1.03);
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  padding: 0.85rem 1.4rem !important;
+  border-radius: 8px !important;
+  border: 2px solid transparent !important;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  text-transform: uppercase;
+  position: relative;
+  overflow: hidden;
 }
 
-[data-testid="stTabs"] [data-baseweb="tab-list"]{ gap: 8px; }
-[data-testid="stTabs"] button[role="tab"]{
-  border-radius: 999px !important;
-  padding: 0.35rem 0.8rem !important;
-  background: rgba(255,255,255,.04) !important;
-  border: 1px solid rgba(255,255,255,.08) !important;
-  color: var(--text) !important;
+button[kind="primary"]{
+  background: linear-gradient(145deg, #e8dcc8 0%, #cda35d 50%, #b8956a 100%) !important;
+  color: #1a1614 !important;
+  border-color: rgba(184, 149, 106, 0.6) !important;
+  box-shadow: 
+    0 6px 16px rgba(205, 163, 93, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 2px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.25) !important;
+  font-weight: 700 !important;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
 }
+
+button[kind="primary"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s;
+}
+
+button[kind="primary"]:hover::before {
+  left: 100%;
+}
+
+button[kind="secondary"]{
+  background: 
+    linear-gradient(145deg, 
+      rgba(245, 240, 232, 0.12) 0%, 
+      rgba(245, 240, 232, 0.06) 100%
+    ) !important;
+  color: var(--text-primary) !important;
+  border-color: rgba(212, 196, 168, 0.4) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(245, 240, 232, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+button:hover{
+  transform: translateY(-3px) scale(1.03) !important;
+  border-color: var(--accent-gold) !important;
+  box-shadow: 
+    0 10px 28px rgba(205, 163, 93, 0.4),
+    0 4px 16px rgba(205, 163, 93, 0.3),
+    0 0 25px rgba(205, 163, 93, 0.2),
+    inset 0 2px 0 rgba(255, 255, 255, 0.3) !important;
+  filter: brightness(1.2) saturate(1.1) !important;
+}
+
+button:active{
+  transform: translateY(-1px) scale(1.00) !important;
+  box-shadow: 
+    0 4px 12px rgba(205, 163, 93, 0.3),
+    inset 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* ========== TABS (Luxe LCD Segments) ========== */
+[data-testid="stTabs"] [data-baseweb="tab-list"]{ 
+  gap: 8px; 
+  border-bottom: 3px solid;
+  border-image: linear-gradient(90deg, 
+    transparent 0%,
+    rgba(205, 163, 93, 0.3) 20%,
+    rgba(205, 163, 93, 0.5) 50%,
+    rgba(205, 163, 93, 0.3) 80%,
+    transparent 100%
+  ) 1;
+  padding-bottom: 4px;
+}
+
+[data-testid="stTabs"] button[role="tab"]{
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  border-radius: 8px 8px 0 0 !important;
+  padding: 0.75rem 1.3rem !important;
+  background: 
+    linear-gradient(180deg, 
+      rgba(61, 74, 58, 0.3) 0%, 
+      rgba(61, 74, 58, 0.15) 100%
+    ) !important;
+  border: 2px solid rgba(200, 213, 184, 0.25) !important;
+  border-bottom: none !important;
+  color: var(--olivetti-lcd-text) !important;
+  transition: all 0.2s ease !important;
+  position: relative;
+  text-shadow: 0 0 8px rgba(200, 213, 184, 0.2);
+}
+
+[data-testid="stTabs"] button[role="tab"]:hover{
+  background: 
+    linear-gradient(180deg, 
+      rgba(61, 74, 58, 0.4) 0%, 
+      rgba(61, 74, 58, 0.25) 100%
+    ) !important;
+  color: var(--accent-gold) !important;
+  text-shadow: 0 0 15px rgba(205, 163, 93, 0.5);
+  border-color: rgba(205, 163, 93, 0.3) !important;
+}
+
 [data-testid="stTabs"] button[aria-selected="true"]{
-  background: rgba(202,168,106,.18) !important;
-  border-color: rgba(202,168,106,.28) !important;
+  background: 
+    linear-gradient(180deg, 
+      rgba(205, 163, 93, 0.3) 0%, 
+      rgba(205, 163, 93, 0.15) 50%,
+      transparent 100%
+    ) !important;
+  border-color: rgba(205, 163, 93, 0.6) !important;
+  color: var(--accent-gold) !important;
+  box-shadow: 
+    0 -3px 12px rgba(205, 163, 93, 0.3),
+    inset 0 1px 0 rgba(205, 163, 93, 0.2),
+    0 0 20px rgba(205, 163, 93, 0.15) !important;
+  text-shadow: 0 0 20px rgba(205, 163, 93, 0.6);
+}
+
+/* ========== SLIDERS (Premium Tactile Controls) ========== */
+div[data-baseweb="slider"] {
+  padding: 0.75rem 0 !important;
+}
+
+div[data-baseweb="slider"] div[role="slider"] {
+  background: 
+    radial-gradient(circle, #e8dcc8 0%, #cda35d 50%, #b8956a 100%) !important;
+  border: 3px solid rgba(184, 149, 106, 0.8) !important;
+  box-shadow: 
+    0 3px 12px rgba(205, 163, 93, 0.5),
+    0 1px 4px rgba(0, 0, 0, 0.3),
+    0 0 15px rgba(205, 163, 93, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+  width: 22px !important;
+  height: 22px !important;
+  transition: all 0.2s ease !important;
+}
+
+div[data-baseweb="slider"] div[role="slider"]:hover {
+  transform: scale(1.15);
+  box-shadow: 
+    0 4px 16px rgba(205, 163, 93, 0.6),
+    0 0 20px rgba(205, 163, 93, 0.4) !important;
+}
+
+div[data-baseweb="slider"] div[data-baseweb="slider-track"] {
+  background: 
+    linear-gradient(90deg, 
+      rgba(205, 163, 93, 0.3) 0%, 
+      rgba(205, 163, 93, 0.5) 100%
+    ) !important;
+  height: 5px !important;
+  border-radius: 3px !important;
+  box-shadow: 
+    inset 0 1px 3px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ========== METRICS (Luxe LCD Display) ========== */
+div[data-testid="metric-container"] {
+  background: 
+    linear-gradient(135deg, 
+      rgba(61, 74, 58, 0.3) 0%, 
+      rgba(61, 74, 58, 0.2) 100%
+    );
+  border: 2px solid rgba(200, 213, 184, 0.4);
+  border-radius: 8px;
+  padding: 0.8rem !important;
+  box-shadow: 
+    inset 0 3px 10px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(200, 213, 184, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+div[data-testid="metric-container"]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%,
+    rgba(200, 213, 184, 0.3) 50%,
+    transparent 100%
+  );
+}
+
+div[data-testid="metric-container"] [data-testid="stMetricLabel"] {
+  color: var(--olivetti-lcd-text) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px rgba(200, 213, 184, 0.3);
+}
+
+div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+  color: var(--accent-gold) !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  text-shadow: 
+    0 0 12px rgba(205, 163, 93, 0.5),
+    0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* ========== CHECKBOX (Elegant Toggle Switches) ========== */
+label[data-baseweb="checkbox"] {
+  padding: 0.5rem 0 !important;
+  transition: all 0.2s ease;
+}
+
+label[data-baseweb="checkbox"]:hover {
+  transform: translateX(2px);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent-gold) !important;
+  width: 20px !important;
+  height: 20px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  filter: drop-shadow(0 0 4px rgba(205, 163, 93, 0.3));
+}
+
+input[type="checkbox"]:checked {
+  filter: drop-shadow(0 0 8px rgba(205, 163, 93, 0.5));
+}
+
+/* ========== DIVIDERS (Luxe Panel Separators) ========== */
+hr {
+  border: none !important;
+  height: 3px !important;
+  background: 
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(205, 163, 93, 0.2) 5%,
+      rgba(205, 163, 93, 0.6) 50%,
+      rgba(205, 163, 93, 0.2) 95%,
+      transparent 100%
+    ) !important;
+  margin: 2rem 0 !important;
+  position: relative;
+  box-shadow: 0 2px 8px rgba(205, 163, 93, 0.2);
+}
+
+hr::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+}
+
+/* ========== CAPTIONS (Refined Status Text) ========== */
+.stCaption {
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 11px !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.5px !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ========== SUCCESS/WARNING/ERROR (Premium LCD Messages) ========== */
+.stSuccess, .stWarning, .stError, .stInfo {
+  font-family: 'IBM Plex Mono', monospace !important;
+  border-left: 4px solid !important;
+  border-radius: 8px !important;
+  padding: 1rem 1.2rem !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+}
+
+.stSuccess {
+  background: 
+    linear-gradient(135deg, 
+      rgba(200, 213, 184, 0.2) 0%, 
+      rgba(200, 213, 184, 0.1) 100%
+    ) !important;
+  border-color: var(--olivetti-lcd-text) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(200, 213, 184, 0.2);
+}
+
+.stWarning {
+  background: 
+    linear-gradient(135deg, 
+      rgba(212, 196, 168, 0.2) 0%, 
+      rgba(212, 196, 168, 0.1) 100%
+    ) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(212, 196, 168, 0.2);
+}
+
+.stError {
+  background: 
+    linear-gradient(135deg, 
+      rgba(184, 149, 106, 0.2) 0%, 
+      rgba(184, 149, 106, 0.1) 100%
+    ) !important;
+  border-color: var(--olivetti-bronze) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(184, 149, 106, 0.2);
+}
+
+.stInfo {
+  background: 
+    linear-gradient(135deg, 
+      rgba(61, 74, 58, 0.2) 0%, 
+      rgba(61, 74, 58, 0.1) 100%
+    ) !important;
+  border-color: var(--olivetti-lcd) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(61, 74, 58, 0.2);
+}
+
+/* ========== SCROLLBAR (Premium Quaderno Theme) ========== */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(26, 22, 20, 0.6);
+  border-radius: 8px;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #e8dcc8 0%, #cda35d 50%, #b8956a 100%);
+  border-radius: 8px;
+  border: 3px solid rgba(26, 22, 20, 0.6);
+  box-shadow: 
+    0 0 8px rgba(205, 163, 93, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #f5f0e8 0%, #e8dcc8 50%, #cda35d 100%);
+  box-shadow: 
+    0 0 12px rgba(205, 163, 93, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* ========== INPUT FIELDS (Refined Controls) ========== */
+input[type="text"], input[type="number"], select, textarea:not([data-testid="stTextArea"] textarea) {
+  background: rgba(245, 240, 232, 0.08) !important;
+  border: 2px solid rgba(212, 196, 168, 0.3) !important;
+  border-radius: 6px !important;
+  color: var(--text-primary) !important;
+  padding: 0.6rem 0.8rem !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  transition: all 0.2s ease !important;
+}
+
+input[type="text"]:focus, input[type="number"]:focus, select:focus {
+  outline: none !important;
+  border-color: rgba(205, 163, 93, 0.6) !important;
+  box-shadow: 
+    0 0 0 3px rgba(205, 163, 93, 0.2),
+    0 4px 12px rgba(205, 163, 93, 0.2) !important;
+  background: rgba(245, 240, 232, 0.12) !important;
+}
+
+/* ========== FILE UPLOADER (Premium Style) ========== */
+[data-testid="stFileUploader"] {
+  border: 2px dashed rgba(205, 163, 93, 0.4) !important;
+  border-radius: 10px !important;
+  padding: 1.5rem !important;
+  background: rgba(61, 74, 58, 0.1) !important;
+  transition: all 0.3s ease !important;
+}
+
+[data-testid="stFileUploader"]:hover {
+  border-color: rgba(205, 163, 93, 0.7) !important;
+  background: rgba(61, 74, 58, 0.15) !important;
+  box-shadow: 0 0 20px rgba(205, 163, 93, 0.15);
+}
+
+/* ========== SELECTBOX (Elegant Dropdowns) ========== */
+[data-baseweb="select"] {
+  border-radius: 6px !important;
+  background: rgba(245, 240, 232, 0.08) !important;
+  border: 2px solid rgba(212, 196, 168, 0.3) !important;
+  transition: all 0.2s ease !important;
+}
+
+[data-baseweb="select"]:hover {
+  border-color: rgba(205, 163, 93, 0.5) !important;
+  box-shadow: 0 0 15px rgba(205, 163, 93, 0.15);
+}
+
+/* ========== ANIMATIONS ========== */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* ========== OLIVETTI BRANDING ACCENT ========== */
+.stApp::after {
+  content: '';
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 80px;
+  height: 80px;
+  background: 
+    radial-gradient(circle, 
+      rgba(205, 163, 93, 0.1) 0%, 
+      transparent 70%
+    );
+  border-radius: 50%;
+  pointer-events: none;
+  animation: glow-pulse 4s ease-in-out infinite;
+  z-index: 1000;
 }
 </style>
 """,
@@ -187,7 +1095,7 @@ BAYS = ["NEW", "ROUGH", "EDIT", "FINAL"]
 ENGINE_STYLES = ["NARRATIVE", "DESCRIPTIVE", "EMOTIONAL", "LYRICAL"]
 AUTOSAVE_DIR = "autosave"
 AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "olivetti_state.json")
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB guardrail
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB - Increased from 10MB for larger manuscripts
 
 WORD_RE = re.compile(r"[A-Za-z']+")
 
@@ -234,7 +1142,9 @@ def _tokenize(text: str) -> List[str]:
     return [w.lower() for w in WORD_RE.findall(text or "")]
 
 
-def _hash_vec(text: str, dims: int = 512) -> List[float]:
+@lru_cache(maxsize=1024)
+def _hash_vec_cached(text: str, dims: int = 512) -> tuple:
+    """Cached version of hash vector computation - returns tuple for hashability"""
     vec = [0.0] * dims
     toks = _tokenize(text)
     for t in toks:
@@ -243,7 +1153,12 @@ def _hash_vec(text: str, dims: int = 512) -> List[float]:
     for i, v in enumerate(vec):
         if v > 0:
             vec[i] = 1.0 + math.log(v)
-    return vec
+    return tuple(vec)
+
+
+def _hash_vec(text: str, dims: int = 512) -> List[float]:
+    """Compute hash vector with caching for performance"""
+    return list(_hash_vec_cached(text, dims))
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
@@ -354,6 +1269,372 @@ def delete_voice_sample(voice_name: str, lane: str, index_from_end: int = 0) -> 
     v["lanes"][lane] = arr
     st.session_state.voices[vn] = v
     return True
+
+
+def analyze_style_samples(text: str) -> List[Dict[str, Any]]:
+    """
+    Analyze text for strongest writing samples based on:
+    - Sentence variety and rhythm
+    - Vocabulary richness (unique words)
+    - Imagery and sensory language
+    - Syntactic complexity
+    Returns list of highlighted samples with scores.
+    """
+    if not text or not text.strip():
+        return []
+    
+    # Split into sentences
+    import re
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+    if not sentences:
+        return []
+    
+    scored_samples = []
+    
+    for i, sent in enumerate(sentences):
+        if len(sent) < 10:  # Skip very short sentences
+            continue
+            
+        words = _tokenize(sent)
+        if len(words) < 3:
+            continue
+        
+        # Vocabulary richness (unique words ratio)
+        unique_ratio = len(set(words)) / max(len(words), 1)
+        
+        # Sensory/imagery words
+        sensory_words = {"saw", "see", "seen", "looked", "felt", "feel", "heard", "hear", "smelled", "smell", "tasted", "taste",
+                        "touch", "sound", "sight", "color", "light", "dark", "bright", "shadow", "whisper", "shout",
+                        "warm", "cold", "hot", "cool", "soft", "hard", "rough", "smooth", "bitter", "sweet", "sour"}
+        sensory_count = sum(1 for w in words if w.lower() in sensory_words)
+        
+        # Sentence length variance (prefer medium-length sentences with complexity)
+        length_score = 1.0 - abs(len(words) - 15) / 30.0  # Optimal around 15 words
+        length_score = max(0.0, min(1.0, length_score))
+        
+        # Strong verbs (action)
+        strong_verbs = ACTION_VERBS
+        verb_count = sum(1 for w in words if w.lower() in strong_verbs)
+        
+        # Thought/interiority depth
+        thought_count = sum(1 for w in words if w.lower() in THOUGHT_WORDS)
+        
+        # Calculate composite score
+        score = (
+            unique_ratio * 30.0 +          # Vocabulary richness
+            sensory_count * 15.0 +         # Sensory language
+            length_score * 20.0 +          # Optimal length
+            verb_count * 10.0 +            # Action/dynamism
+            thought_count * 5.0            # Depth
+        )
+        
+        scored_samples.append({
+            "text": sent,
+            "score": score,
+            "index": i,
+            "words": len(words),
+            "unique_ratio": unique_ratio,
+            "sensory": sensory_count,
+            "verbs": verb_count
+        })
+    
+    # Sort by score and return top samples
+    scored_samples.sort(key=lambda x: x["score"], reverse=True)
+    return scored_samples[:10]  # Top 10 samples
+
+
+def extract_entities(text: str) -> Dict[str, List[str]]:
+    """
+    Extract named entities from text for canon checking.
+    Returns dict with entity types: characters, locations, dates, objects.
+    """
+    import re
+    
+    entities = {
+        "characters": [],
+        "locations": [],
+        "dates": [],
+        "objects": []
+    }
+    
+    if not text or not text.strip():
+        return entities
+    
+    # Find capitalized words (potential character names)
+    capitalized = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text)
+    entities["characters"] = list(set(capitalized))[:20]  # Limit to top 20
+    
+    # Find day/month/time references
+    date_patterns = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+                     'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+                     'September', 'October', 'November', 'December']
+    for pattern in date_patterns:
+        if pattern in text:
+            entities["dates"].append(pattern)
+    
+    return entities
+
+
+def analyze_canon_conformity(draft_text: str) -> List[Dict[str, Any]]:
+    """
+    Analyze draft against Story Bible for continuity violations.
+    Returns list of potential issues with confidence scores.
+    """
+    if not draft_text or not draft_text.strip():
+        return []
+    
+    issues = []
+    
+    # Get Story Bible content
+    synopsis = (st.session_state.synopsis or "").lower()
+    characters_bible = (st.session_state.characters or "").lower()
+    world_bible = (st.session_state.world or "").lower()
+    outline_bible = (st.session_state.outline or "").lower()
+    
+    # If Story Bible is empty, no canon to check
+    if not any([synopsis, characters_bible, world_bible, outline_bible]):
+        return []
+    
+    # Split draft into paragraphs for analysis
+    paragraphs = [p.strip() for p in draft_text.split('\n\n') if p.strip()]
+    
+    for para_idx, para in enumerate(paragraphs):
+        para_lower = para.lower()
+        words = _tokenize(para)
+        
+        # Check for character trait contradictions
+        # Look for descriptions that might conflict
+        if characters_bible:
+            # Eye color check
+            eye_colors = ['blue eyes', 'green eyes', 'brown eyes', 'gray eyes', 'grey eyes', 'hazel eyes', 'amber eyes']
+            for color in eye_colors:
+                if color in para_lower:
+                    # Check if Story Bible says different
+                    for other_color in eye_colors:
+                        if other_color != color and other_color in characters_bible:
+                            # Extract character name near the eye color
+                            import re
+                            match = re.search(r'([A-Z][a-z]+).*?' + color.replace(' ', r'\s+'), para, re.IGNORECASE)
+                            if match:
+                                char_name = match.group(1)
+                                if char_name.lower() in characters_bible:
+                                    issues.append({
+                                        "type": "character_trait",
+                                        "severity": "error",
+                                        "confidence": 85,
+                                        "paragraph_index": para_idx,
+                                        "text_snippet": para[:100],
+                                        "issue": f"'{char_name}' has {color} in draft, but Story Bible suggests {other_color}",
+                                        "resolution_options": ["Update Story Bible", "Fix Draft", "Ignore"]
+                                    })
+        
+        # Check for dead character mentions
+        death_markers = ['died', 'dead', 'killed', 'perished', 'deceased']
+        for marker in death_markers:
+            if marker in para_lower:
+                # Find character name near death marker
+                import re
+                match = re.search(r'([A-Z][a-z]+).*?' + marker, para, re.IGNORECASE)
+                if match:
+                    dead_char = match.group(1).lower()
+                    # Check if this character appears later in draft
+                    later_paras = paragraphs[para_idx + 1:]
+                    for later_idx, later_para in enumerate(later_paras, start=para_idx + 1):
+                        if dead_char in later_para.lower():
+                            # Check if they're doing living things
+                            living_verbs = ['said', 'walked', 'ran', 'thought', 'smiled', 'laughed', 'grabbed']
+                            if any(verb in later_para.lower() for verb in living_verbs):
+                                issues.append({
+                                    "type": "continuity",
+                                    "severity": "error",
+                                    "confidence": 75,
+                                    "paragraph_index": later_idx,
+                                    "text_snippet": later_para[:100],
+                                    "issue": f"'{match.group(1)}' appears active after being marked as {marker}",
+                                    "resolution_options": ["Fix Draft", "Ignore"]
+                                })
+                                break
+        
+        # Check for timeline contradictions
+        if outline_bible:
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            for day in days:
+                if day in para_lower:
+                    # Check if outline specifies different day for this event
+                    # Look for event keywords in paragraph
+                    event_keywords = ['heist', 'meeting', 'battle', 'ceremony', 'wedding', 'funeral', 'attack']
+                    for event in event_keywords:
+                        if event in para_lower:
+                            # Check if outline mentions this event with different day
+                            for other_day in days:
+                                if other_day != day and event in outline_bible and other_day in outline_bible:
+                                    issues.append({
+                                        "type": "timeline",
+                                        "severity": "warning",
+                                        "confidence": 60,
+                                        "paragraph_index": para_idx,
+                                        "text_snippet": para[:100],
+                                        "issue": f"Event '{event}' on {day.title()}, but outline may indicate {other_day.title()}",
+                                        "resolution_options": ["Update Outline", "Fix Draft", "Ignore"]
+                                    })
+        
+        # Check for world-building contradictions
+        if world_bible:
+            # Technology level check
+            modern_tech = ['phone', 'computer', 'car', 'internet', 'email', 'television', 'airplane']
+            medieval_tech = ['sword', 'horse', 'castle', 'knight', 'dragon', 'magic', 'spell']
+            
+            has_modern = any(tech in para_lower for tech in modern_tech)
+            has_medieval = any(tech in para_lower for tech in medieval_tech)
+            
+            if has_modern and has_medieval:
+                if 'medieval' in world_bible or 'fantasy' in world_bible:
+                    issues.append({
+                        "type": "world_building",
+                        "severity": "warning",
+                        "confidence": 70,
+                        "paragraph_index": para_idx,
+                        "text_snippet": para[:100],
+                        "issue": "Modern technology in medieval/fantasy setting (Story Bible suggests period setting)",
+                        "resolution_options": ["Update World", "Fix Draft", "Ignore"]
+                    })
+    
+    # Filter out ignored issues
+    ignored_flags = st.session_state.get("canon_ignored_flags", [])
+    filtered_issues = []
+    for issue in issues:
+        flag_id = f"{issue['type']}_{issue['paragraph_index']}_{issue['issue'][:30]}"
+        if flag_id not in ignored_flags:
+            filtered_issues.append(issue)
+    
+    return filtered_issues
+
+
+def analyze_voice_conformity(text: str) -> List[Dict[str, Any]]:
+    """
+    Analyze how well text conforms to active Voice Bible controls.
+    Returns list of paragraphs with conformity scores (0-100).
+    Higher score = better conformity, lower = more deviation.
+    """
+    if not text or not text.strip():
+        return []
+    
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    if not paragraphs:
+        return []
+    
+    results = []
+    
+    for idx, para in enumerate(paragraphs):
+        words = _tokenize(para)
+        if len(words) < 3:
+            continue
+        
+        score = 100.0  # Start at perfect conformity
+        issues = []
+        
+        # Check POV conformity (if technical controls enabled)
+        if st.session_state.vb_technical_on:
+            pov = st.session_state.pov
+            first_person = sum(1 for w in words if w.lower() in ['i', 'me', 'my', 'mine', 'myself', 'we', 'us', 'our'])
+            third_person = sum(1 for w in words if w.lower() in ['he', 'she', 'they', 'him', 'her', 'them', 'his', 'hers', 'their'])
+            
+            if pov == "First" and third_person > first_person:
+                score -= 20
+                issues.append("POV mismatch: too much third-person")
+            elif pov in ["Close Third", "Omniscient"] and first_person > third_person * 0.5:
+                score -= 20
+                issues.append("POV mismatch: too much first-person")
+        
+        # Check tense conformity (if technical controls enabled)
+        if st.session_state.vb_technical_on:
+            tense = st.session_state.tense
+            past_markers = sum(1 for w in words if w.endswith('ed') or w in ['was', 'were', 'had', 'did'])
+            present_markers = sum(1 for w in words if w.endswith('s') and len(w) > 2 or w in ['is', 'are', 'am', 'does', 'do'])
+            
+            if tense == "Past" and present_markers > past_markers:
+                score -= 15
+                issues.append("Tense mismatch: too much present tense")
+            elif tense == "Present" and past_markers > present_markers:
+                score -= 15
+                issues.append("Tense mismatch: too much past tense")
+        
+        # Check style conformity (if style engine enabled)
+        if st.session_state.vb_style_on:
+            style = st.session_state.writing_style
+            
+            # LYRICAL expects poetic/sensory language
+            if style == "LYRICAL":
+                sensory_count = sum(1 for w in words if w.lower() in {
+                    "light", "dark", "shadow", "sound", "whisper", "touch", "soft", "rough",
+                    "color", "bright", "warm", "cold", "scent", "taste"
+                })
+                if sensory_count < len(words) * 0.03:  # Less than 3% sensory
+                    score -= 15
+                    issues.append("Style: needs more sensory/poetic language")
+            
+            # SPARSE expects brevity
+            elif style == "SPARSE":
+                avg_word_len = sum(len(w) for w in words) / max(len(words), 1)
+                if avg_word_len > 5.5:
+                    score -= 15
+                    issues.append("Style: words too long for sparse style")
+            
+            # ORNATE expects complexity
+            elif style == "ORNATE":
+                avg_word_len = sum(len(w) for w in words) / max(len(words), 1)
+                if avg_word_len < 4.5:
+                    score -= 15
+                    issues.append("Style: needs more elaborate vocabulary")
+        
+        # Check genre conformity (if genre intelligence enabled)
+        if st.session_state.vb_genre_on:
+            genre = st.session_state.genre
+            
+            # NOIR expects hardboiled tone
+            if genre == "Noir":
+                noir_words = sum(1 for w in words if w.lower() in {
+                    "dark", "shadow", "night", "smoke", "rain", "gun", "blood", "dead", "dame"
+                })
+                if noir_words < 1 and len(words) > 30:
+                    score -= 10
+                    issues.append("Genre: lacks noir atmosphere")
+            
+            # HORROR expects tension
+            elif genre == "Horror":
+                horror_words = sum(1 for w in words if w.lower() in {
+                    "fear", "terror", "scream", "blood", "dark", "shadow", "death", "cold", "alone"
+                })
+                if horror_words < 1 and len(words) > 30:
+                    score -= 10
+                    issues.append("Genre: lacks horror elements")
+        
+        # Check voice lock violations (if enabled)
+        if st.session_state.vb_lock_on and st.session_state.voice_lock_prompt:
+            lock_prompt = st.session_state.voice_lock_prompt.lower()
+            if "no adverb" in lock_prompt or "never adverb" in lock_prompt:
+                adverbs = sum(1 for w in words if w.endswith('ly'))
+                if adverbs > 0:
+                    score -= 25
+                    issues.append(f"Voice Lock: {adverbs} adverb(s) found")
+            if "no passive" in lock_prompt or "never passive" in lock_prompt:
+                passive = sum(1 for w in words if w in ['was', 'were', 'been', 'being'])
+                if passive > 0:
+                    score -= 20
+                    issues.append("Voice Lock: passive voice detected")
+        
+        # Ensure score stays in bounds
+        score = max(0.0, min(100.0, score))
+        
+        results.append({
+            "text": para,
+            "score": score,
+            "index": idx,
+            "words": len(words),
+            "issues": issues
+        })
+    
+    return results
 
 
 def retrieve_exemplars(voice_name: str, lane: str, query_text: str, k: int = 3) -> List[str]:
@@ -512,6 +1793,65 @@ def temperature_from_intensity(x: float) -> float:
     return 0.15 + (x * 0.95)
 
 
+def _get_voice_bible_summary() -> str:
+    """Generate a brief summary of active Voice Bible controls for status display."""
+    parts = []
+    ai_int = get_ai_intensity_safe()
+    
+    # AI Intensity is always shown
+    if ai_int <= 0.25:
+        parts.append("AI:LOW")
+    elif ai_int <= 0.60:
+        parts.append("AI:MED")
+    elif ai_int <= 0.85:
+        parts.append("AI:HIGH")
+    else:
+        parts.append("AI:MAX")
+    
+    # Show active Voice Bible controls
+    if st.session_state.vb_style_on:
+        parts.append(f"Style:{st.session_state.writing_style}")
+    if st.session_state.vb_genre_on:
+        parts.append(f"Genre:{st.session_state.genre}")
+    if st.session_state.vb_trained_on and st.session_state.trained_voice != "— None —":
+        parts.append(f"Voice:{st.session_state.trained_voice}")
+    if st.session_state.vb_match_on:
+        parts.append("Match:ON")
+    if st.session_state.vb_lock_on:
+        parts.append("🔒Lock:ON")
+    if st.session_state.vb_technical_on:
+        parts.append(f"Tech:{st.session_state.pov}/{st.session_state.tense}")
+    
+    return " • ".join(parts) if len(parts) > 1 else parts[0] if parts else "Defaults"
+
+
+def _verify_system_integrity() -> Dict[str, bool]:
+    """
+    ═══════════════════════════════════════════════════════════════
+    SYSTEM INTEGRITY CHECK - Verifies all components are connected.
+    Run at startup to ensure the spiderweb is fully wired.
+    ═══════════════════════════════════════════════════════════════
+    """
+    checks = {
+        "ai_intensity_exists": "ai_intensity" in st.session_state,
+        "story_bible_sections": all(k in st.session_state for k in ["synopsis", "genre_style_notes", "world", "characters", "outline"]),
+        "voice_bible_controls": all(k in st.session_state for k in ["vb_style_on", "vb_genre_on", "vb_trained_on", "vb_match_on", "vb_lock_on", "vb_technical_on"]),
+        "style_banks_exist": "style_banks" in st.session_state,
+        "voices_exist": "voices" in st.session_state,
+        "project_system": all(k in st.session_state for k in ["projects", "active_bay", "project_id"]),
+        "functions_callable": all(callable(f) for f in [
+            build_partner_brief, 
+            call_openai, 
+            partner_action, 
+            retrieve_style_exemplars,
+            retrieve_mixed_exemplars,
+            generate_story_bible_section,
+            temperature_from_intensity
+        ]),
+    }
+    return checks
+
+
 # ============================================================
 # PROJECT MODEL
 # ============================================================
@@ -549,6 +1889,7 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "vb_trained_on": False,
             "vb_match_on": False,
             "vb_lock_on": False,
+            "vb_technical_on": True,
             "writing_style": "Neutral",
             "genre": "Literary",
             "trained_voice": "— None —",
@@ -559,6 +1900,7 @@ def new_project_payload(title: str) -> Dict[str, Any]:
             "trained_intensity": 0.7,
             "match_intensity": 0.8,
             "lock_intensity": 1.0,
+            "technical_intensity": 0.8,
             "pov": "Close Third",
             "tense": "Past",
             "ai_intensity": 0.75,
@@ -801,13 +2143,15 @@ def save_workspace_from_session() -> None:
 
 
 def set_ai_intensity(val: float) -> None:
-    """Safely set ai_intensity without mutating widget-bound state after creation."""
-    val = float(val)
-    if "ai_intensity" not in st.session_state:
+    """Safely set ai_intensity with bounds checking."""
+    try:
+        val = float(val)
+        # Ensure value is within valid range [0.0, 1.0]
+        val = max(0.0, min(1.0, val))
         st.session_state["ai_intensity"] = val
-    else:
-        st.session_state["ai_intensity_pending"] = val
-        st.session_state["_apply_pending_widget_state"] = True
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid AI intensity value: {val}, defaulting to 0.75")
+        st.session_state["ai_intensity"] = 0.75
 
 
 def load_workspace_into_session() -> None:
@@ -871,6 +2215,7 @@ def init_state() -> None:
         "vb_trained_on": False,
         "vb_match_on": False,
         "vb_lock_on": False,
+        "vb_technical_on": True,
         "writing_style": "Neutral",
         "genre": "Literary",
         "trained_voice": "— None —",
@@ -881,6 +2226,7 @@ def init_state() -> None:
         "trained_intensity": 0.7,
         "match_intensity": 0.8,
         "lock_intensity": 1.0,
+        "technical_intensity": 0.8,
         "pov": "Close Third",
         "tense": "Past",
         "ai_intensity": 0.75,
@@ -895,6 +2241,12 @@ def init_state() -> None:
         "voices_seeded": False,
         "style_banks": rebuild_vectors_in_style_banks(default_style_banks()),
         "last_saved_digest": "",
+        "analyzed_style_samples": [],
+        "voice_heatmap_data": [],
+        "show_voice_heatmap": False,
+        "canon_guardian_on": False,
+        "canon_issues": [],
+        "canon_ignored_flags": [],
 
         # internal UI helpers (not widgets)
         "ui_notice": "",
@@ -902,15 +2254,16 @@ def init_state() -> None:
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+    
+    # Initialize performance monitoring and rate limiting
+    if "perf_monitor" not in st.session_state:
+        from performance import PerformanceMonitor, RateLimiter
+        st.session_state.perf_monitor = PerformanceMonitor()
+        st.session_state.rate_limiter = RateLimiter(calls_per_minute=10)
+        logger.info("Performance monitoring and rate limiting initialized")
 
 
 init_state()
-
-
-# Apply pending widget values BEFORE widgets are created
-if st.session_state.pop("_apply_pending_widget_state", False):
-    if "ai_intensity_pending" in st.session_state:
-        st.session_state["ai_intensity"] = float(st.session_state.pop("ai_intensity_pending"))
 
 
 
@@ -940,6 +2293,7 @@ def load_project_into_session(pid: str) -> None:
         "vb_trained_on",
         "vb_match_on",
         "vb_lock_on",
+        "vb_technical_on",
         "writing_style",
         "genre",
         "trained_voice",
@@ -950,6 +2304,7 @@ def load_project_into_session(pid: str) -> None:
         "trained_intensity",
         "match_intensity",
         "lock_intensity",
+        "technical_intensity",
         "pov",
         "tense",
         "ai_intensity",
@@ -990,6 +2345,7 @@ def save_session_into_project() -> None:
         "vb_trained_on": st.session_state.vb_trained_on,
         "vb_match_on": st.session_state.vb_match_on,
         "vb_lock_on": st.session_state.vb_lock_on,
+        "vb_technical_on": st.session_state.vb_technical_on,
         "writing_style": st.session_state.writing_style,
         "genre": st.session_state.genre,
         "trained_voice": st.session_state.trained_voice,
@@ -1000,6 +2356,7 @@ def save_session_into_project() -> None:
         "trained_intensity": st.session_state.trained_intensity,
         "match_intensity": st.session_state.match_intensity,
         "lock_intensity": st.session_state.lock_intensity,
+        "technical_intensity": st.session_state.technical_intensity,
         "pov": st.session_state.pov,
         "tense": st.session_state.tense,
         "ai_intensity": float(st.session_state.ai_intensity),
@@ -1160,64 +2517,87 @@ def _digest(payload: Dict[str, Any]) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
 
+@safe_execute("Autosave", fallback_value=None, show_error=False)
 def save_all_to_disk(force: bool = False) -> None:
-    """Autosave state to disk with an atomic write and a simple backup."""
+    """Autosave state to disk with atomic write and rotating backups."""
+    os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+    payload = _payload()
+    dig = _digest(payload)
+    
+    if (not force) and dig == st.session_state.last_saved_digest:
+        logger.debug("Skipping autosave - no changes detected")
+        return
+
+    tmp_path = AUTOSAVE_PATH + ".tmp"
+    
+    # Create rotating backups (keep last 5)
     try:
-        os.makedirs(AUTOSAVE_DIR, exist_ok=True)
-        payload = _payload()
-        dig = _digest(payload)
-        if (not force) and dig == st.session_state.last_saved_digest:
-            return
-
-        tmp_path = AUTOSAVE_PATH + ".tmp"
-        bak_path = AUTOSAVE_PATH + ".bak"
-
-        try:
-            if os.path.exists(AUTOSAVE_PATH):
-                import shutil
-
-                shutil.copy2(AUTOSAVE_PATH, bak_path)
-        except Exception:
-            pass
-
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, AUTOSAVE_PATH)
-
-        st.session_state.last_saved_digest = dig
+        if os.path.exists(AUTOSAVE_PATH):
+            import shutil
+            
+            # Rotate existing backups
+            for i in range(4, 0, -1):
+                old_bak = f"{AUTOSAVE_PATH}.bak{i}"
+                new_bak = f"{AUTOSAVE_PATH}.bak{i+1}"
+                if os.path.exists(old_bak):
+                    shutil.move(old_bak, new_bak)
+            
+            # Create new backup
+            shutil.copy2(AUTOSAVE_PATH, f"{AUTOSAVE_PATH}.bak1")
+            logger.debug("Created rotating backup")
     except Exception as e:
-        st.session_state.voice_status = f"Autosave warning: {e}"
+        logger.warning(f"Failed to create backup: {e}")
+
+    # Atomic write
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, AUTOSAVE_PATH)
+
+    st.session_state.last_saved_digest = dig
+    logger.info(f"Autosave completed ({len(st.session_state.projects)} projects, {len(payload)} bytes)")
 
 
+@safe_execute("Load autosave", show_error=True)
 def load_all_from_disk() -> None:
     main_path = AUTOSAVE_PATH
-    bak_path = AUTOSAVE_PATH + ".bak"
+    
+    # Try loading from main file and rotating backups
+    backup_paths = [main_path] + [f"{AUTOSAVE_PATH}.bak{i}" for i in range(1, 6)]
 
     def _boot_new() -> None:
         st.session_state.sb_workspace = st.session_state.get("sb_workspace") or default_story_bible_workspace()
         switch_bay("NEW")
 
-    if (not os.path.exists(main_path)) and (not os.path.exists(bak_path)):
+    # Check if any autosave exists
+    if not any(os.path.exists(p) for p in backup_paths):
+        logger.info("No autosave found, booting fresh workspace")
         _boot_new()
         return
 
     payload = None
     loaded_from = "primary"
     last_err = None
-    for path, label in ((main_path, "primary"), (bak_path, "backup")):
+    
+    # Try loading from main file, then backups in order
+    for i, path in enumerate(backup_paths):
         if not os.path.exists(path):
             continue
+        
+        label = "primary" if i == 0 else f"backup{i}"
         try:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             loaded_from = label
+            logger.info(f"Successfully loaded from {label} autosave: {path}")
             break
         except Exception as e:
             last_err = e
+            logger.warning(f"Failed to load {label} autosave: {e}")
             payload = None
 
     if payload is None:
-        st.session_state.voice_status = f"Load warning: {last_err}"
+        logger.error(f"All autosave loads failed. Last error: {last_err}")
+        st.session_state.voice_status = f"⚠️ All autosave files corrupted. Starting fresh."
         _boot_new()
         return
 
@@ -1280,7 +2660,9 @@ def load_all_from_disk() -> None:
         src = "autosave" if loaded_from == "primary" else "backup autosave"
         st.session_state.voice_status = f"Loaded {src} ({saved_at})."
         st.session_state.last_saved_digest = _digest(_payload())
+        logger.info(f"Successfully initialized workspace with {len(st.session_state.projects)} projects")
     except Exception as e:
+        logger.error(f"Failed to process loaded payload: {e}\n{traceback.format_exc()}")
         st.session_state.voice_status = f"Load warning: {e}"
         _boot_new()
 
@@ -1298,44 +2680,62 @@ def autosave() -> None:
 # ============================================================
 # IMPORT / EXPORT
 # ============================================================
+@safe_execute("File upload", fallback_value=("", ""), show_error=True)
 def _read_uploaded_text(uploaded) -> Tuple[str, str]:
-    """Read .txt/.md/.docx from Streamlit UploadedFile."""
+    """Read .txt/.md/.docx from Streamlit UploadedFile with validation."""
     if uploaded is None:
         return "", ""
+    
     name = getattr(uploaded, "name", "") or ""
     raw = uploaded.getvalue()
+    
     if raw is None:
+        logger.warning(f"Upload failed: no data in {name}")
         return "", name
+    
     if len(raw) > MAX_UPLOAD_BYTES:
-        return "", name
+        logger.warning(f"Upload rejected: {name} exceeds {MAX_UPLOAD_BYTES} bytes")
+        raise DataValidationError(f"File too large: {name} ({len(raw)} bytes). Max: {MAX_UPLOAD_BYTES} bytes")
+    
     ext = os.path.splitext(name.lower())[1]
+    logger.info(f"Processing upload: {name} ({len(raw)} bytes, {ext})")
 
     if ext in (".txt", ".md", ".markdown", ".text", ""):
         try:
-            return raw.decode("utf-8"), name
-        except Exception:
+            content = raw.decode("utf-8")
+            logger.info(f"Decoded text file: {len(content)} chars")
+            return content, name
+        except UnicodeDecodeError:
+            logger.warning(f"UTF-8 decode failed, trying with errors=ignore")
             return raw.decode("utf-8", errors="ignore"), name
 
     if ext == ".docx":
+        if not DOCX_AVAILABLE:
+            raise DataValidationError("DOCX support not available. Install python-docx (pip install python-docx).")
         try:
-            from docx import Document  # python-docx
-
             doc = Document(BytesIO(raw))
             parts = []
             for p in doc.paragraphs:
                 t = (p.text or "").strip()
                 if t:
                     parts.append(t)
-            return "\n\n".join(parts), name
-        except Exception:
+            result = "\n\n".join(parts)
+            logger.info(f"Extracted from DOCX: {len(result)} chars, {len(parts)} paragraphs")
+            return result, name
+        except Exception as e:
+            logger.warning(f"DOCX extraction failed: {e}, trying fallback")
             try:
                 return raw.decode("utf-8", errors="ignore"), name
             except Exception:
                 return "", name
 
+    # Unknown extension - try as text
     try:
-        return raw.decode("utf-8", errors="ignore"), name
-    except Exception:
+        content = raw.decode("utf-8", errors="ignore")
+        logger.info(f"Decoded unknown file type as text: {len(content)} chars")
+        return content, name
+    except Exception as e:
+        logger.error(f"Failed to decode {name}: {e}")
         return "", name
 
 
@@ -1507,6 +2907,24 @@ def import_library_bundle(bundle: Dict[str, Any]) -> int:
     return imported
 
 
+def _bundle_summary(obj: Dict[str, Any]) -> str:
+    """Return a short human-readable summary of a bundle for UI feedback."""
+    meta = obj.get("meta") if isinstance(obj, dict) else {}
+    btype = (meta or {}).get("type", "unknown")
+    if btype == "library_bundle":
+        projs = obj.get("projects") if isinstance(obj.get("projects"), dict) else {}
+        return f"Library bundle • {len(projs)} project(s)"
+    if btype == "project_bundle":
+        p = obj.get("project") or {}
+        title = p.get("title", "Untitled") if isinstance(p, dict) else "Untitled"
+        return f"Project bundle • {title}"
+    if obj.get("projects"):
+        return "Library bundle (no meta)"
+    if obj.get("project"):
+        return "Project bundle (no meta)"
+    return "Unrecognized bundle"
+
+
 # ============================================================
 # JUNK DRAWER COMMANDS
 # ============================================================
@@ -1613,6 +3031,12 @@ def _story_bible_text() -> str:
 
 
 def build_partner_brief(action_name: str, lane: str) -> str:
+    """
+    ═══════════════════════════════════════════════════════════════
+    CORE INTEGRATION HUB - Assembles all Voice Bible controls into
+    a unified AI prompt. Used by ALL AI generation functions.
+    ═══════════════════════════════════════════════════════════════
+    """
     story_bible = _story_bible_text()
     vb = []
     if st.session_state.vb_style_on:
@@ -1625,9 +3049,11 @@ def build_partner_brief(action_name: str, lane: str) -> str:
         vb.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
     if st.session_state.vb_lock_on and (st.session_state.voice_lock_prompt or "").strip():
         vb.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
+    if st.session_state.vb_technical_on:
+        vb.append(f"Technical Controls: POV={st.session_state.pov}, Tense={st.session_state.tense} (enforcement {st.session_state.technical_intensity:.2f})")
     voice_controls = "\n\n".join(vb).strip() if vb else "— None enabled —"
 
-    # Engine Style (trainable banks)
+    # Engine Style (trainable banks) → Semantic retrieval of trained samples
     style_name = (st.session_state.writing_style or "").strip().upper()
     style_directive = ""
     style_exemplars: List[str] = []
@@ -1636,14 +3062,15 @@ def build_partner_brief(action_name: str, lane: str) -> str:
         ctx2 = (st.session_state.main_text or "")[-2500:]
         q2 = ctx2 if ctx2.strip() else (st.session_state.synopsis or "")
         k = 1 + int(max(0.0, min(1.0, float(st.session_state.style_intensity))) * 2.0)
-        style_exemplars = retrieve_style_exemplars(style_name, lane, q2, k=k)
+        style_exemplars = retrieve_style_exemplars(style_name, lane, q2, k=k)  # ← INTELLIGENT RETRIEVAL
 
+    # Trained Voice → Vector-based semantic matching
     exemplars: List[str] = []
     tv = st.session_state.trained_voice
     if st.session_state.vb_trained_on and tv and tv != "— None —":
         ctx = (st.session_state.main_text or "")[-2500:]
         query = ctx if ctx.strip() else st.session_state.synopsis
-        exemplars = retrieve_mixed_exemplars(tv, lane, query)
+        exemplars = retrieve_mixed_exemplars(tv, lane, query)  # ← ADAPTIVE RETRIEVAL
     ex_block = "\n\n---\n\n".join(exemplars) if exemplars else "— None —"
     style_ex_block = "\n\n---\n\n".join(style_exemplars) if style_exemplars else "— None —"
 
@@ -1680,27 +3107,91 @@ ACTION: {action_name}
 """.strip()
 
 
+@safe_execute("AI Generation", fallback_value="[AI generation failed]", show_error=True)
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
+    """
+    ═══════════════════════════════════════════════════════════════
+    UNIFIED AI GATEWAY - Single entry point for ALL AI generation.
+    Applies AI Intensity → Temperature conversion automatically.
+    Includes error handling, rate limiting, and logging.
+    ═══════════════════════════════════════════════════════════════
+    """
+    # Rate limiting check
+    if hasattr(st.session_state, 'rate_limiter'):
+        if not st.session_state.rate_limiter.check_rate_limit():
+            wait_time = st.session_state.rate_limiter.wait_time()
+            logger.warning(f"Rate limit exceeded, need to wait {wait_time:.1f}s")
+            raise AIServiceError(f"⏱️ Rate limit reached. Please wait {int(wait_time)}s before next request.")
+    
+    # Validate inputs
+    validate_text_input(system_brief, "system_brief", max_length=50000, min_length=10)
+    validate_text_input(user_task, "user_task", max_length=10000, min_length=5)
+    validate_text_input(text, "draft_text", max_length=100000)
+    
     key = require_openai_key()
+    
     try:
         from openai import OpenAI
-    except Exception as e:
-        raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
+    except ImportError as e:
+        logger.error("OpenAI SDK not installed")
+        raise AIServiceError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
 
     try:
-        client = OpenAI(api_key=key, timeout=60)
+        client = OpenAI(api_key=key, timeout=90, max_retries=3)
     except TypeError:
         client = OpenAI(api_key=key)
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenAI client: {e}")
+        raise AIServiceError(f"Failed to initialize AI client: {e}") from e
 
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": system_brief},
-            {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
-        ],
-        temperature=temperature_from_intensity(st.session_state.ai_intensity),
-    )
-    return (resp.choices[0].message.content or "").strip()
+    temperature = temperature_from_intensity(st.session_state.ai_intensity)
+    
+    logger.info(f"AI call: model={OPENAI_MODEL}, temp={temperature:.2f}, brief={len(system_brief)}chars, text={len(text)}chars")
+    
+    # Track performance
+    import time
+    start_time = time.time()
+    
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_brief},
+                {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
+            ],
+            temperature=temperature,
+        )
+        result = (resp.choices[0].message.content or "").strip()
+        
+        # Log completion stats
+        if hasattr(resp, 'usage') and resp.usage:
+            logger.info(f"AI response: {resp.usage.total_tokens} tokens, {len(result)} chars")
+        else:
+            logger.info(f"AI response: {len(result)} chars")
+        
+        # Record performance metrics
+        duration = time.time() - start_time
+        if hasattr(st.session_state, 'perf_monitor'):
+            st.session_state.perf_monitor.record_ai_call(duration)
+        logger.info(f"AI call completed in {duration:.2f}s")
+            
+        return result
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"OpenAI API call failed after {time.time() - start_time:.2f}s: {error_msg}")
+        
+        # Classify error types
+        if "rate_limit" in error_msg.lower():
+            raise AIServiceError("⏱️ Rate limit exceeded. Please wait a moment and try again.") from e
+        elif "insufficient_quota" in error_msg.lower() or "quota" in error_msg.lower():
+            raise AIServiceError("💳 API quota exceeded. Check your OpenAI billing.") from e
+        elif "invalid_api_key" in error_msg.lower():
+            raise AIServiceError("🔑 Invalid API key. Check your OpenAI credentials.") from e
+        elif "timeout" in error_msg.lower():
+            raise AIServiceError("⏰ Request timed out. Try with shorter text or try again.") from e
+        else:
+            raise AIServiceError(f"AI service error: {error_msg}") from e
 
 
 def local_cleanup(text: str) -> str:
@@ -1757,19 +3248,365 @@ def _merge_section(existing: str, incoming: str, mode: str) -> str:
     return (ex + "\n\n" + inc).strip()
 
 
+def format_manuscript_standard(title: str, author: str, text: str, word_count: int) -> str:
+    """
+    Format text according to industry-standard manuscript guidelines:
+    - Title page with word count
+    - Proper spacing and indentation
+    - Chapter breaks
+    - Page headers
+    """
+    lines = []
+    
+    # Title Page
+    lines.append(f"{author}")
+    lines.append(f"{word_count} words")
+    lines.append("")
+    lines.append("")
+    lines.append("")
+    lines.append("")
+    lines.append(f"{title.upper()}")
+    lines.append("")
+    lines.append(f"by {author}")
+    lines.append("")
+    lines.append("")
+    lines.append("\n" * 10)  # Page break
+    lines.append("")
+    
+    # Format body text
+    paragraphs = text.split('\n\n')
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        
+        # Detect chapter headings (all caps or starts with "Chapter")
+        if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
+            lines.append("\n" * 3)  # Extra spacing before chapter
+            lines.append(para)
+            lines.append("")
+        else:
+            # Regular paragraph with proper indentation
+            lines.append(f"    {para}")
+            lines.append("")
+    
+    return "\n".join(lines)
+
+
+def format_ebook_html(title: str, author: str, text: str) -> str:
+    """
+    Format text as clean HTML suitable for ebook conversion.
+    Includes proper semantic markup for chapters, paragraphs, etc.
+    """
+    html = []
+    html.append('<!DOCTYPE html>')
+    html.append('<html lang="en">')
+    html.append('<head>')
+    html.append('    <meta charset="UTF-8">')
+    html.append('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+    html.append(f'    <title>{title}</title>')
+    html.append('    <style>')
+    html.append('        body { font-family: Georgia, serif; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px; }')
+    html.append('        h1 { text-align: center; margin: 2em 0; font-size: 2em; }')
+    html.append('        h2 { text-align: center; margin: 2em 0 1em 0; page-break-before: always; }')
+    html.append('        p { text-indent: 2em; margin: 0 0 1em 0; }')
+    html.append('        p.first { text-indent: 0; }')
+    html.append('        .title-page { text-align: center; margin: 4em 0; page-break-after: always; }')
+    html.append('        .author { font-size: 1.2em; margin-top: 1em; }')
+    html.append('    </style>')
+    html.append('</head>')
+    html.append('<body>')
+    
+    # Title page
+    html.append('    <div class="title-page">')
+    html.append(f'        <h1>{title}</h1>')
+    html.append(f'        <p class="author">by {author}</p>')
+    html.append('    </div>')
+    
+    # Body text
+    paragraphs = text.split('\n\n')
+    in_chapter = False
+    first_in_chapter = True
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        
+        # Detect chapter headings
+        if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
+            html.append(f'    <h2>{para}</h2>')
+            in_chapter = True
+            first_in_chapter = True
+        else:
+            # Regular paragraph
+            p_class = ' class="first"' if first_in_chapter else ''
+            html.append(f'    <p{p_class}>{para}</p>')
+            first_in_chapter = False
+    
+    html.append('</body>')
+    html.append('</html>')
+    
+    return '\n'.join(html)
+
+
+def build_epub_bytes(title: str, author: str, text: str) -> Optional[bytes]:
+        if not EPUB_AVAILABLE:
+                return None
+        book = epub.EpubBook()
+        book.set_title(title or "Untitled")
+        book.add_author(author or "Author")
+
+        # Title page
+        c_over = epub.EpubHtml(title="Title", file_name="title.xhtml", lang="en")
+        c_over.content = f"""
+        <h1>{title}</h1>
+        <p>by {author}</p>
+        """
+        book.add_item(c_over)
+
+        # Body
+        paragraphs = text.split("\n\n")
+        chap_items = []
+        chap_html = []
+        for para in paragraphs:
+                para = para.strip()
+                if not para:
+                        continue
+                if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
+                        if chap_html:
+                                ch = epub.EpubHtml(title="Chapter", file_name=f"chap_{len(chap_items)}.xhtml", lang="en")
+                                ch.content = """<html><body>""" + """\n""".join(chap_html) + """</body></html>"""
+                                book.add_item(ch)
+                                chap_items.append(ch)
+                                chap_html = []
+                        chap_html.append(f"<h2>{para}</h2>")
+                else:
+                        chap_html.append(f"<p>{para}</p>")
+        if chap_html:
+                ch = epub.EpubHtml(title="Chapter", file_name=f"chap_{len(chap_items)}.xhtml", lang="en")
+                ch.content = """<html><body>""" + """\n""".join(chap_html) + """</body></html>"""
+                book.add_item(ch)
+                chap_items.append(ch)
+
+        # Spine / TOC
+        spine = ['nav', c_over] + chap_items
+        book.toc = tuple(chap_items)
+        book.spine = spine
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+
+        buf = BytesIO()
+        epub.write_epub(buf, book)
+        return buf.getvalue()
+
+
+def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
+        if not PDF_AVAILABLE:
+                return None
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        pdf.set_font("Times", 'B', 16)
+        pdf.multi_cell(0, 10, txt=title or "Untitled", align='C')
+        pdf.ln(6)
+        pdf.set_font("Times", '', 12)
+        pdf.multi_cell(0, 8, txt=f"by {author or 'Author'}", align='C')
+        pdf.ln(10)
+        pdf.set_font("Times", '', 12)
+        paragraphs = text.split("\n\n")
+        for para in paragraphs:
+                para = para.strip()
+                if not para:
+                        continue
+                if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
+                        pdf.ln(4)
+                        pdf.set_font("Times", 'B', 13)
+                        pdf.multi_cell(0, 8, txt=para, align='C')
+                        pdf.set_font("Times", '', 12)
+                        pdf.ln(2)
+                else:
+                        pdf.multi_cell(0, 8, txt=para)
+                        pdf.ln(2)
+        return pdf.output(dest='S').encode('latin1')
+
+
+def build_kindle_package(title: str, author: str, text: str) -> bytes:
+        html = format_ebook_html(title, author, text)
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("index.html", html)
+                opf = f"""
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">{title}</dc:title>
+        <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">{author}</dc:creator>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="bookid">urn:uuid:placeholder</dc:identifier>
+    </metadata>
+    <manifest>
+        <item id="html" href="index.html" media-type="text/html" />
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="html" />
+    </spine>
+</package>
+"""
+                toc = f"""
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="urn:uuid:placeholder"/>
+    </head>
+    <docTitle><text>{title}</text></docTitle>
+    <navMap>
+        <navPoint id="navPoint-1" playOrder="1">
+            <navLabel><text>Start</text></navLabel>
+            <content src="index.html"/>
+        </navPoint>
+    </navMap>
+</ncx>
+"""
+                zf.writestr("content.opf", opf)
+                zf.writestr("toc.ncx", toc)
+        return buf.getvalue()
+
+
+# ============================================================
+# STORY BIBLE AI GENERATION
+# ============================================================
+def generate_story_bible_section(section_type: str) -> None:
+    """Generate content for a specific Story Bible section using AI.
+    RESPECTS ALL VOICE BIBLE SETTINGS - uses same engine as writing actions."""
+    if not has_openai_key():
+        st.session_state.tool_output = f"AI generation requires OPENAI_API_KEY to be configured."
+        st.session_state.voice_status = f"{section_type}: AI unavailable"
+        autosave()
+        return
+
+    # Gather context from existing Story Bible sections and draft
+    context_parts = []
+    if st.session_state.main_text:
+        context_parts.append(f"DRAFT TEXT:\n{st.session_state.main_text[:3000]}")
+    if st.session_state.synopsis and section_type != "Synopsis":
+        context_parts.append(f"SYNOPSIS:\n{st.session_state.synopsis}")
+    if st.session_state.genre_style_notes and section_type != "Genre/Style":
+        context_parts.append(f"GENRE/STYLE:\n{st.session_state.genre_style_notes}")
+    if st.session_state.world and section_type != "World":
+        context_parts.append(f"WORLD:\n{st.session_state.world}")
+    if st.session_state.characters and section_type != "Characters":
+        context_parts.append(f"CHARACTERS:\n{st.session_state.characters}")
+    if st.session_state.outline and section_type != "Outline":
+        context_parts.append(f"OUTLINE:\n{st.session_state.outline}")
+    
+    context = "\n\n---\n\n".join(context_parts) if context_parts else "No context available yet."
+
+    # Section-specific generation prompts
+    prompts = {
+        "Synopsis": "Write a concise, compelling 2-3 paragraph synopsis that captures the story's core conflict, main characters, and stakes. Be specific with names and situations.",
+        "Genre/Style": "Describe the genre, tone, voice, and stylistic approach for this story. Include specific markers like 'hardboiled detective', 'lyrical literary fiction', 'tight thriller prose', etc.",
+        "World": "Detail the world, setting, and key locations. Include rules, atmosphere, time period, and any special systems (magic, technology, social structures). Be concrete and specific.",
+        "Characters": "List and describe the main characters with names, roles, relationships, motivations, and key traits. Format as a character list with details.",
+        "Outline": "Create a story outline with acts, major beats, key scenes, and turning points. Structure it clearly with progression from beginning to end.",
+    }
+
+    try:
+        task = prompts.get(section_type, f"Generate {section_type} content for the Story Bible.")
+        
+        # BUILD FULL VOICE BIBLE BRIEF - same as writing actions
+        # This ensures Story Bible generation respects ALL Voice Bible controls
+        vb_controls = []
+        if st.session_state.vb_style_on:
+            vb_controls.append(f"Writing Style: {st.session_state.writing_style} (intensity {st.session_state.style_intensity:.2f})")
+        if st.session_state.vb_genre_on:
+            vb_controls.append(f"Genre Influence: {st.session_state.genre} (intensity {st.session_state.genre_intensity:.2f})")
+        if st.session_state.vb_trained_on and st.session_state.trained_voice and st.session_state.trained_voice != "— None —":
+            vb_controls.append(f"Trained Voice: {st.session_state.trained_voice} (intensity {st.session_state.trained_intensity:.2f})")
+        if st.session_state.vb_match_on and (st.session_state.voice_sample or "").strip():
+            vb_controls.append(f"Match Sample (intensity {st.session_state.match_intensity:.2f}):\n{st.session_state.voice_sample.strip()}")
+        if st.session_state.vb_lock_on and (st.session_state.voice_lock_prompt or "").strip():
+            vb_controls.append(f"VOICE LOCK (strength {st.session_state.lock_intensity:.2f}):\n{st.session_state.voice_lock_prompt.strip()}")
+        
+        voice_brief = "\n\n".join(vb_controls) if vb_controls else "— No Voice Bible controls active —"
+        
+        ai_x = float(st.session_state.ai_intensity)
+        brief = f"""You are a story development expert helping build a comprehensive Story Bible.
+
+AI INTENSITY: {ai_x:.2f}
+INTENSITY PROFILE: {intensity_profile(ai_x)}
+
+VOICE CONTROLS (apply these to your output):
+{voice_brief}
+
+POV: {st.session_state.pov}
+TENSE: {st.session_state.tense}
+
+EXISTING CONTEXT:
+{context}"""
+        
+        result = call_openai(brief, task, "")
+        
+        if result:
+            if section_type == "Synopsis":
+                st.session_state.synopsis = result.strip()
+            elif section_type == "Genre/Style":
+                st.session_state.genre_style_notes = result.strip()
+            elif section_type == "World":
+                st.session_state.world = result.strip()
+            elif section_type == "Characters":
+                st.session_state.characters = result.strip()
+            elif section_type == "Outline":
+                st.session_state.outline = result.strip()
+            
+            st.session_state.voice_status = f"Generated: {section_type} (Voice Bible applied)"
+            st.session_state.last_action = f"Generate {section_type}"
+            autosave()
+    except Exception as e:
+        st.session_state.tool_output = f"AI generation error: {str(e)}"
+        st.session_state.voice_status = f"{section_type}: generation failed"
+        autosave()
+
+
 # ============================================================
 # ACTIONS (queued for Streamlit safety)
 # ============================================================
 def partner_action(action: str) -> None:
+    """
+    ═══════════════════════════════════════════════════════════════
+    WRITING ACTIONS ROUTER - All bottom bar functions route here.
+    Uses build_partner_brief() → Ensures ALL actions use Voice Bible.
+    Includes analytics tracking for all actions.
+    ═══════════════════════════════════════════════════════════════
+    """
     text = st.session_state.main_text or ""
     lane = current_lane_from_draft(text)
-    brief = build_partner_brief(action, lane=lane)
+    brief = build_partner_brief(action, lane=lane)  # ← UNIFIED BRIEF with ALL Voice Bible controls
     use_ai = has_openai_key()
+    
+    # Track action start
+    start_word_count = len(text.split()) if text else 0
 
     def apply_replace(result: str) -> None:
         if result and result.strip():
             st.session_state.main_text = result.strip()
             st.session_state.last_action = action
+            # Show Voice Bible was applied
+            vb_summary = _get_voice_bible_summary()
+            st.session_state.voice_status = f"{action} complete ({vb_summary})"
+            
+            # Track analytics
+            end_word_count = len(result.split())
+            if hasattr(st.session_state, 'analytics'):
+                st.session_state.analytics.track_event(action.lower(), {
+                    "word_count": end_word_count,
+                    "words_changed": end_word_count - start_word_count,
+                    "lane": lane,
+                    "use_ai": use_ai,
+                })
+            
             autosave()
 
     def apply_append(result: str) -> None:
@@ -1779,6 +3616,20 @@ def partner_action(action: str) -> None:
             else:
                 st.session_state.main_text = result.strip()
             st.session_state.last_action = action
+            # Show Voice Bible was applied
+            vb_summary = _get_voice_bible_summary()
+            st.session_state.voice_status = f"{action} complete ({vb_summary})"
+            
+            # Track analytics
+            end_word_count = len(st.session_state.main_text.split())
+            if hasattr(st.session_state, 'analytics'):
+                st.session_state.analytics.track_event(action.lower(), {
+                    "word_count": end_word_count,
+                    "words_added": end_word_count - start_word_count,
+                    "lane": lane,
+                    "use_ai": use_ai,
+                })
+            
             autosave()
 
     try:
@@ -1964,7 +3815,7 @@ with top:
             Bay: <b>{st.session_state.active_bay}</b>
             &nbsp;•&nbsp; Project: <b>{st.session_state.project_title}</b>
             &nbsp;•&nbsp; Autosave: {st.session_state.autosave_time or '—'}
-            <br/>AI Intensity: {float(st.session_state.ai_intensity):.2f}
+            <br/>AI Intensity: {get_ai_intensity_safe():.2f}
             &nbsp;•&nbsp; Status: {st.session_state.voice_status}
         </div>
         """,
@@ -2071,15 +3922,32 @@ with left:
         else:
             st.caption("Workspace is always editable. This lock applies after a project is created.")
 
-    # ✅ AI Intensity lives in Story Bible panel (left)
-    st.slider(
-        "AI Intensity",
-        0.0,
-        1.0,
-        key="ai_intensity",
-        help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to every AI generation.",
-        on_change=autosave,
-    )
+    # ✅ AI Intensity - MASTER CONTROL for all AI generation
+    st.divider()
+    st.subheader("🎚️ AI Intensity (Master Control)")
+    st.caption("⚙️ Controls ALL AI generation. Voice Bible settings apply on top of this base intensity.")
+    
+    ai_int_col1, ai_int_col2 = st.columns([3, 1])
+    with ai_int_col1:
+        st.slider(
+            "AI Intensity",
+            0.0,
+            1.0,
+            key="ai_intensity",
+            help="0.0 = conservative/precise, 1.0 = bold/creative. Applies to EVERY AI action.",
+            on_change=autosave,
+        )
+    with ai_int_col2:
+        current_ai = get_ai_intensity_safe()
+        if current_ai <= 0.25:
+            label, desc = "LOW", "Conservative"
+        elif current_ai <= 0.60:
+            label, desc = "MED", "Balanced"
+        elif current_ai <= 0.85:
+            label, desc = "HIGH", "Bold"
+        else:
+            label, desc = "MAX", "Creative"
+        st.metric("Mode", label, desc)
 
     # Project controls
     action_cols = st.columns([1, 1])
@@ -2196,29 +4064,210 @@ with left:
                 "characters": st.session_state.characters,
                 "outline": st.session_state.outline,
             }
+            
+            # Word count
+            word_count = len(draft_txt.split())
+            
+            st.caption(f"**Draft Stats:** {word_count:,} words • Bay: {st.session_state.active_bay}")
+            
+            # Professional formatting options
+            if st.session_state.active_bay == "FINAL":
+                st.info("✨ **FINAL Bay** - Professional manuscript formatting available")
+            
+            # Manuscript formatting inputs
+            with st.expander("📖 Manuscript Formatting Options", expanded=st.session_state.active_bay == "FINAL"):
+                author_name = st.text_input("Author Name", value="Author Name", key="export_author")
+                st.caption("Professional manuscript format follows industry standards (Shunn format)")
 
-            st.download_button("Download Draft (.txt)", data=draft_txt, file_name=f"{stem}_draft.txt", mime="text/plain")
-            st.download_button(
-                "Download Draft (.md)",
-                data=draft_markdown(title, draft_txt, meta),
-                file_name=f"{stem}_draft.md",
-                mime="text/markdown",
-            )
+            st.subheader("Standard Exports")
+            col_exp1, col_exp2 = st.columns(2)
+            
+            with col_exp1:
+                st.download_button("Download Draft (.txt)", data=draft_txt, file_name=f"{stem}_draft.txt", mime="text/plain", use_container_width=True)
+            with col_exp2:
+                st.download_button(
+                    "Download Draft (.md)",
+                    data=draft_markdown(title, draft_txt, meta),
+                    file_name=f"{stem}_draft.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+            
             st.download_button(
                 "Download Story Bible (.md)",
                 data=story_bible_markdown(title, sb_dict, meta),
                 file_name=f"{stem}_story_bible.md",
                 mime="text/markdown",
+                use_container_width=True
             )
+            
+            st.subheader("📖 Professional Formats")
+            
+            # Manuscript format
+            manuscript_txt = format_manuscript_standard(title, st.session_state.get("export_author", "Author Name"), draft_txt, word_count)
+            col_man1, col_man2 = st.columns(2)
+            with col_man1:
+                st.download_button(
+                    "📝 Manuscript (.txt)",
+                    data=manuscript_txt,
+                    file_name=f"{stem}_manuscript.txt",
+                    mime="text/plain",
+                    help="Industry-standard manuscript format (Shunn format)",
+                    use_container_width=True
+                )
+            
+            # eBook HTML
+            ebook_html = format_ebook_html(title, st.session_state.get("export_author", "Author Name"), draft_txt)
+            with col_man2:
+                st.download_button(
+                    "📱 eBook (.html)",
+                    data=ebook_html,
+                    file_name=f"{stem}_ebook.html",
+                    mime="text/html",
+                    help="Clean HTML for ebook conversion (import into Calibre/Kindle Create)",
+                    use_container_width=True
+                )
+            # EPUB
+            epub_bytes = build_epub_bytes(title, st.session_state.get("export_author", "Author Name"), draft_txt) if EPUB_AVAILABLE else None
+            if EPUB_AVAILABLE:
+                st.download_button(
+                    "📗 EPUB (.epub)",
+                    data=epub_bytes or b"",
+                    file_name=f"{stem}.epub",
+                    mime="application/epub+zip",
+                    help="Ready-to-load EPUB (uses ebooklib)",
+                    use_container_width=True,
+                    disabled=epub_bytes is None
+                )
+            else:
+                st.caption("EPUB export unavailable (install ebooklib to enable).")
 
-            try:
-                from docx import Document  # type: ignore
+            # PDF
+            pdf_bytes = build_pdf_bytes(title, st.session_state.get("export_author", "Author Name"), draft_txt) if PDF_AVAILABLE else None
+            if PDF_AVAILABLE:
+                st.download_button(
+                    "📄 PDF (.pdf)",
+                    data=pdf_bytes or b"",
+                    file_name=f"{stem}.pdf",
+                    mime="application/pdf",
+                    help="Lightweight PDF export (fpdf2)",
+                    use_container_width=True,
+                    disabled=pdf_bytes is None
+                )
+            else:
+                st.caption("PDF export unavailable (install fpdf2 to enable).")
 
+            # Kindle package (HTML + OPF + NCX zip)
+            kindle_zip = build_kindle_package(title, st.session_state.get("export_author", "Author Name"), draft_txt)
+            st.download_button(
+                "📦 Kindle Package (.zip)",
+                data=kindle_zip,
+                file_name=f"{stem}_kindle_package.zip",
+                mime="application/zip",
+                help="Contains index.html, content.opf, toc.ncx for Kindle ingestion",
+                use_container_width=True
+            )
+            
+            st.caption("💡 **Tip:** Import .html into Calibre or Kindle Create to generate EPUB/MOBI files")
+
+            st.divider()
+            st.subheader("🔊 Audio Export (Text-to-Speech)")
+            
+            st.caption("📢 Generate audio narration of your work for accessibility or review")
+            
+            if not GTTS_AVAILABLE:
+                st.warning("⚠️ Audio export unavailable. Install gTTS: `pip install gTTS`")
+                st.caption("Use online TTS services like [Natural Reader](https://www.naturalreaders.com/) or [TTSReader](https://ttsreader.com/)")
+            else:
+                # TTS Settings
+                tts_col1, tts_col2, tts_col3 = st.columns(3)
+                with tts_col1:
+                    tts_language = st.selectbox(
+                        "Language",
+                        [("en", "English"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian")],
+                        format_func=lambda x: x[1],
+                        key="tts_language_select"
+                    )
+                with tts_col2:
+                    tts_accent = st.selectbox(
+                        "Accent",
+                        [("com", "US"), ("co.uk", "UK"), ("com.au", "Australia"), ("ca", "Canada")],
+                        format_func=lambda x: x[1],
+                        key="tts_accent_select"
+                    )
+                with tts_col3:
+                    tts_speed = st.checkbox(
+                        "Slow Speed",
+                        value=False,
+                        key="tts_slow_select",
+                        help="Enable slower narration for learning/accessibility"
+                    )
+                
+                # Full text audio generation (no character limit)
+                tts_text = draft_txt
+                
+                # Generate audio file
+                if st.button("🎙️ Generate Audio File (MP3)", key="tts_generate", use_container_width=True):
+                    if not tts_text.strip():
+                        st.warning("No text to convert. Write something in the draft first.")
+                    else:
+                        with st.spinner(f"Generating audio from {len(tts_text.split())} words..."):
+                            try:
+                                # Generate audio using gTTS
+                                lang_code = tts_language[0]
+                                tld = tts_accent[0]
+                                
+                                tts = gTTS(
+                                    text=tts_text,
+                                    lang=lang_code,
+                                    tld=tld,
+                                    slow=tts_speed
+                                )
+                                
+                                # Save to bytes
+                                audio_buffer = BytesIO()
+                                tts.write_to_fp(audio_buffer)
+                                audio_buffer.seek(0)
+                                audio_bytes = audio_buffer.read()
+                                
+                                # Calculate duration estimate (rough: 150 words per minute normal, 100 slow)
+                                word_count = len(tts_text.split())
+                                wpm = 100 if tts_speed else 150
+                                duration_minutes = word_count / wpm
+                                
+                                st.success(f"✅ Audio generated: ~{duration_minutes:.1f} minutes ({word_count:,} words)")
+                                
+                                # Download button
+                                st.download_button(
+                                    "📥 Download Audio (MP3)",
+                                    data=audio_bytes,
+                                    file_name=f"{stem}_audio.mp3",
+                                    mime="audio/mpeg",
+                                    use_container_width=True
+                                )
+                                
+                                # Audio player
+                                st.audio(audio_bytes, format="audio/mp3")
+                                
+                            except Exception as e:
+                                logger.error(f"Audio generation failed: {e}")
+                                st.error(f"Audio generation failed: {str(e)}")
+                                st.caption("Try reducing text length or check internet connection (gTTS requires online access).")
+                
+                st.caption("💡 **Full text converted** - No character limits. Audio generation requires internet connection.")
+
+            st.divider()
+            st.subheader("�📄 DOCX Export")
+
+            if not DOCX_AVAILABLE:
+                st.caption("DOCX export unavailable (install python-docx to enable).")
+            else:
                 def _docx_bytes(doc: "Document") -> bytes:
                     buf = BytesIO()
                     doc.save(buf)
                     return buf.getvalue()
 
+                # Standard draft DOCX
                 d = Document()
                 d.add_heading(f"Draft — {title}", level=0)
                 for mk, mv in meta.items():
@@ -2227,14 +4276,58 @@ with left:
                 d.add_paragraph("")
                 for para in _split_paragraphs(draft_txt):
                     d.add_paragraph(para)
-                st.download_button(
-                    "Download Draft (.docx)",
-                    data=_docx_bytes(d),
-                    file_name=f"{stem}_draft.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
-            except Exception:
-                st.caption("DOCX export unavailable (python-docx not installed).")
+                
+                col_doc1, col_doc2 = st.columns(2)
+                with col_doc1:
+                    st.download_button(
+                        "Download Draft (.docx)",
+                        data=_docx_bytes(d),
+                        file_name=f"{stem}_draft.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+                
+                # Professional manuscript DOCX
+                md = Document()
+                section = md.sections[0]
+                section.top_margin = Inches(1)
+                section.bottom_margin = Inches(1)
+                section.left_margin = Inches(1)
+                section.right_margin = Inches(1)
+                
+                p = md.add_paragraph()
+                p.add_run(st.session_state.get("export_author", "Author Name")).bold = True
+                p.add_run(f"\n{word_count:,} words")
+                
+                md.add_page_break()
+                
+                title_para = md.add_heading(title.upper(), level=1)
+                title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                by_para = md.add_paragraph(f"by {st.session_state.get('export_author', 'Author Name')}")
+                by_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                md.add_page_break()
+                
+                for para_text in _split_paragraphs(draft_txt):
+                    if para_text.isupper() or para_text.startswith("Chapter") or para_text.startswith("CHAPTER"):
+                        ch = md.add_heading(para_text, level=2)
+                        ch.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    else:
+                        p = md.add_paragraph(para_text)
+                        p_format = p.paragraph_format
+                        p_format.first_line_indent = Inches(0.5)
+                        p_format.space_after = Pt(0)
+                
+                with col_doc2:
+                    st.download_button(
+                        "📝 Manuscript (.docx)",
+                        data=_docx_bytes(md),
+                        file_name=f"{stem}_manuscript.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        help="Professional manuscript format with proper margins and spacing",
+                        use_container_width=True
+                    )
 
         with tab_bundle:
             st.caption("Bundle exports are merge-safe (imports never wipe your library).")
@@ -2269,29 +4362,35 @@ with left:
                             obj = json.loads((raw or b"").decode("utf-8"))
                         except Exception:
                             obj = None
-                        if isinstance(obj, dict) and obj.get("projects"):
-                            n = import_library_bundle(obj)
-                            st.session_state.voice_status = f"Imported library bundle: {n} projects merged."
-                            st.session_state.last_action = "Import Library Bundle"
+                        if not isinstance(obj, dict):
+                            st.session_state.tool_output = "Import bundle: invalid JSON structure."
                             autosave()
-                        elif isinstance(obj, dict) and obj.get("project"):
-                            pid = import_project_bundle(obj, target_bay=target_bay, rename=rename)
-                            if pid:
-                                st.session_state.voice_status = f"Imported project bundle → {pid}"
-                                st.session_state.last_action = "Import Project Bundle"
-                                autosave()
-                                if switch_after:
-                                    switch_bay(target_bay)
-                                    load_project_into_session(pid)
-                                    st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
-                                    autosave()
-                                    st.rerun()
-                            else:
-                                st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
-                                autosave()
                         else:
-                            st.session_state.tool_output = "Import bundle: bundle type not recognized."
-                            autosave()
+                            summary = _bundle_summary(obj)
+                            st.session_state.tool_output = f"Detected: {summary}"
+                            if obj.get("projects"):
+                                n = import_library_bundle(obj)
+                                st.session_state.voice_status = f"Imported library bundle: {n} project(s) merged."
+                                st.session_state.last_action = "Import Library Bundle"
+                                autosave()
+                            elif obj.get("project"):
+                                pid = import_project_bundle(obj, target_bay=target_bay, rename=rename)
+                                if pid:
+                                    st.session_state.voice_status = f"Imported project bundle → {pid}"
+                                    st.session_state.last_action = "Import Project Bundle"
+                                    autosave()
+                                    if switch_after:
+                                        switch_bay(target_bay)
+                                        load_project_into_session(pid)
+                                        st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
+                                        autosave()
+                                        st.rerun()
+                                else:
+                                    st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
+                                    autosave()
+                            else:
+                                st.session_state.tool_output = "Import bundle: bundle type not recognized."
+                                autosave()
 
     # Junk Drawer + Story Bible sections (labels hidden safely)
     with st.expander("🗃 Junk Drawer"):
@@ -2307,6 +4406,10 @@ with left:
 
     with st.expander("📝 Synopsis"):
         st.text_area("Synopsis", key="synopsis", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+        if not sb_locked and has_openai_key():
+            if st.button("✨ Generate Synopsis", key="gen_synopsis"):
+                generate_story_bible_section("Synopsis")
+                st.rerun()
 
     with st.expander("🎭 Genre / Style Notes"):
         st.text_area(
@@ -2317,9 +4420,17 @@ with left:
             label_visibility="collapsed",
             disabled=sb_locked,
         )
+        if not sb_locked and has_openai_key():
+            if st.button("✨ Generate Genre/Style", key="gen_genre"):
+                generate_story_bible_section("Genre/Style")
+                st.rerun()
 
     with st.expander("🌍 World Elements"):
         st.text_area("World", key="world", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+        if not sb_locked and has_openai_key():
+            if st.button("✨ Generate World", key="gen_world"):
+                generate_story_bible_section("World")
+                st.rerun()
 
     with st.expander("👤 Characters"):
         st.text_area(
@@ -2330,9 +4441,17 @@ with left:
             label_visibility="collapsed",
             disabled=sb_locked,
         )
+        if not sb_locked and has_openai_key():
+            if st.button("✨ Generate Characters", key="gen_characters"):
+                generate_story_bible_section("Characters")
+                st.rerun()
 
     with st.expander("🧱 Outline"):
         st.text_area("Outline", key="outline", height=160, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+        if not sb_locked and has_openai_key():
+            if st.button("✨ Generate Outline", key="gen_outline"):
+                generate_story_bible_section("Outline")
+                st.rerun()
 
 
 # ============================================================
@@ -2340,71 +4459,294 @@ with left:
 # ============================================================
 with center:
     st.subheader("✍️ Writing Desk")
-    st.text_area("Draft", key="main_text", height=650, on_change=autosave, label_visibility="collapsed")
+    
+    # Voice Bible Status - Show what's controlling AI generation
+    vb_status = _get_voice_bible_summary()
+    st.caption(f"🎚️ **Active Controls:** {vb_status}")
+    
+    # Canon Guardian + Heatmap row
+    col_tools1, col_tools2, col_tools3, col_tools4 = st.columns([2, 1, 2, 1])
+    with col_tools1:
+        st.checkbox("📖 Canon Guardian", key="canon_guardian_on", help="Real-time continuity validation against Story Bible")
+    with col_tools2:
+        if st.button("🔍 Check", key="btn_check_canon", disabled=not st.session_state.canon_guardian_on, use_container_width=True):
+            text = (st.session_state.main_text or "").strip()
+            if text:
+                st.session_state.canon_issues = analyze_canon_conformity(text)
+                error_count = sum(1 for i in st.session_state.canon_issues if i['severity'] == 'error')
+                warn_count = sum(1 for i in st.session_state.canon_issues if i['severity'] == 'warning')
+                st.session_state.ui_notice = f"📖 Found {error_count} error(s), {warn_count} warning(s)"
+            else:
+                st.session_state.ui_notice = "⚠️ No text to check"
+                st.session_state.canon_issues = []
+    
+    with col_tools3:
+        st.checkbox("🔥 Voice Heatmap", key="show_voice_heatmap", help="Analyze how well your draft follows Voice Bible controls")
+    with col_tools4:
+        if st.button("🔄 Analyze", key="btn_analyze_heatmap", disabled=not st.session_state.show_voice_heatmap, use_container_width=True):
+            text = (st.session_state.main_text or "").strip()
+            if text:
+                st.session_state.voice_heatmap_data = analyze_voice_conformity(text)
+                st.session_state.ui_notice = f"✅ Analyzed {len(st.session_state.voice_heatmap_data)} paragraph(s)"
+            else:
+                st.session_state.ui_notice = "⚠️ No text to analyze"
+                st.session_state.voice_heatmap_data = []
+    
+    # Show color-coded text view when heatmap is enabled
+    if st.session_state.show_voice_heatmap and st.session_state.voice_heatmap_data:
+        st.caption("📊 **Live Heatmap View** (Green = On target, Yellow = Minor issues, Red = Major deviation)")
+        
+        # Build colored HTML view
+        html_parts = ['<div style="background-color: #1e1e1e; padding: 15px; border-radius: 5px; font-family: monospace; line-height: 1.8; max-height: 650px; overflow-y: auto;">']
+        
+        for para_data in st.session_state.voice_heatmap_data:
+            score = para_data["score"]
+            # Determine color based on score
+            if score >= 85:
+                bg_color = "rgba(40, 167, 69, 0.3)"  # Green with transparency
+                border_color = "#28a745"
+            elif score >= 70:
+                bg_color = "rgba(255, 193, 7, 0.3)"  # Yellow with transparency
+                border_color = "#ffc107"
+            elif score >= 50:
+                bg_color = "rgba(253, 126, 20, 0.3)"  # Orange with transparency
+                border_color = "#fd7e14"
+            else:
+                bg_color = "rgba(220, 53, 69, 0.3)"  # Red with transparency
+                border_color = "#dc3545"
+            
+            # Add paragraph with inline background color
+            issues_text = f" • {', '.join(para_data['issues'])}" if para_data['issues'] else ""
+            html_parts.append(
+                f'<div style="background-color: {bg_color}; border-left: 3px solid {border_color}; padding: 8px 12px; margin: 4px 0; border-radius: 3px; color: #e0e0e0;">'
+                f'<span style="font-size: 0.8em; color: {border_color}; font-weight: bold;">[{score:.0f}/100{issues_text}]</span><br>'
+                f'{para_data["text"]}'
+                f'</div>'
+            )
+        
+        html_parts.append('</div>')
+        st.markdown(''.join(html_parts), unsafe_allow_html=True)
+        
+        st.caption("⚠️ Edit in text area below, then click 'Analyze' to update heatmap")
+    
+    # Display Canon Guardian issues if enabled
+    if st.session_state.canon_guardian_on and st.session_state.canon_issues:
+        error_count = sum(1 for i in st.session_state.canon_issues if i['severity'] == 'error')
+        warn_count = sum(1 for i in st.session_state.canon_issues if i['severity'] == 'warning')
+        
+        st.warning(f"📖 **Canon Guardian**: {error_count} error(s), {warn_count} warning(s) detected")
+        
+        for idx, issue in enumerate(st.session_state.canon_issues[:5]):  # Show top 5
+            severity_icon = "🔴" if issue['severity'] == 'error' else "🟡"
+            confidence_color = "#dc3545" if issue['severity'] == 'error' else "#ffc107"
+            
+            with st.expander(f"{severity_icon} {issue['type'].replace('_', ' ').title()} (Confidence: {issue['confidence']}%)", expanded=idx==0):
+                st.markdown(
+                    f'<div style="background-color: rgba(220, 53, 69, 0.1); padding: 10px; border-radius: 4px; border-left: 3px solid {confidence_color};">'
+                    f'<strong>Issue:</strong> {issue["issue"]}<br><br>'
+                    f'<strong>Text:</strong> "{issue["text_snippet"]}..."'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                
+                # Resolution buttons
+                st.caption("**Resolution Options:**")
+                res_cols = st.columns(len(issue['resolution_options']))
+                for col_idx, option in enumerate(issue['resolution_options']):
+                    if res_cols[col_idx].button(option, key=f"resolve_{idx}_{col_idx}", use_container_width=True):
+                        if option == "Ignore":
+                            # Add to ignored flags
+                            flag_id = f"{issue['type']}_{issue['paragraph_index']}_{issue['issue'][:30]}"
+                            if "canon_ignored_flags" not in st.session_state:
+                                st.session_state.canon_ignored_flags = []
+                            st.session_state.canon_ignored_flags.append(flag_id)
+                            st.session_state.ui_notice = f"✅ Ignored: {issue['type']}"
+                            st.rerun()
+                        elif option == "Update Story Bible":
+                            st.session_state.ui_notice = "💡 Navigate to Story Bible section to update canon"
+                        elif option == "Fix Draft":
+                            st.session_state.ui_notice = "💡 Edit the highlighted paragraph in your draft"
+                        elif option == "Update Outline":
+                            st.session_state.ui_notice = "💡 Navigate to Story Bible → Outline to update"
+                        elif option == "Update World":
+                            st.session_state.ui_notice = "💡 Navigate to Story Bible → World to update"
+        
+        if len(st.session_state.canon_issues) > 5:
+            st.caption(f"... and {len(st.session_state.canon_issues) - 5} more issues")
+    
+    # Text area for editing (always shown)
+    st.text_area("Draft", key="main_text", height=650 if not (st.session_state.show_voice_heatmap and st.session_state.voice_heatmap_data) else 300, on_change=autosave, label_visibility="collapsed")
 
+
+    # Primary Actions (all respect Voice Bible + AI Intensity)
     b1 = st.columns(5)
-    if b1[0].button("Write", key="btn_write"):
+    if b1[0].button("Write", key="btn_write", help="Continue writing (Voice Bible controlled)"):
         queue_action("Write")
         st.rerun()
-    if b1[1].button("Rewrite", key="btn_rewrite"):
+    if b1[1].button("Rewrite", key="btn_rewrite", help="Rewrite for quality (Voice Bible controlled)"):
         queue_action("Rewrite")
         st.rerun()
-    if b1[2].button("Expand", key="btn_expand"):
+    if b1[2].button("Expand", key="btn_expand", help="Add depth (Voice Bible controlled)"):
         queue_action("Expand")
         st.rerun()
-    if b1[3].button("Rephrase", key="btn_rephrase"):
+    if b1[3].button("Rephrase", key="btn_rephrase", help="Rephrase last sentence (Voice Bible controlled)"):
         queue_action("Rephrase")
         st.rerun()
-    if b1[4].button("Describe", key="btn_describe"):
+    if b1[4].button("Describe", key="btn_describe", help="Add description (Voice Bible controlled)"):
         queue_action("Describe")
         st.rerun()
 
+    # Secondary Actions
     b2 = st.columns(5)
-    if b2[0].button("Spell", key="btn_spell"):
+    if b2[0].button("Spell", key="btn_spell", help="Fix spelling/grammar (Voice Bible controlled)"):
         queue_action("Spell")
         st.rerun()
-    if b2[1].button("Grammar", key="btn_grammar"):
+    if b2[1].button("Grammar", key="btn_grammar", help="Copyedit grammar (Voice Bible controlled)"):
         queue_action("Grammar")
         st.rerun()
-    if b2[2].button("Find", key="btn_find"):
+    if b2[2].button("Find", key="btn_find", help="Search tool (see Junk Drawer)"):
         queue_action("__FIND_HINT__")
         st.rerun()
-    if b2[3].button("Synonym", key="btn_synonym"):
+    if b2[3].button("Synonym", key="btn_synonym", help="Get synonyms for last word (Voice Bible aware)"):
         queue_action("Synonym")
         st.rerun()
-    if b2[4].button("Sentence", key="btn_sentence"):
+    if b2[4].button("Sentence", key="btn_sentence", help="Rewrite last sentence options (Voice Bible aware)"):
         queue_action("Sentence")
         st.rerun()
 
 
 # ============================================================
-# RIGHT — VOICE BIBLE
+# RIGHT — VOICE BIBLE (AUTHOR ENGINE)
 # ============================================================
 with right:
     st.subheader("🎙 Voice Bible")
+    st.caption("Your intelligent, trainable author engine. Each control adapts to your writing.")
+    
+    # Voice Bible Status Summary
+    active_controls = []
+    if st.session_state.vb_style_on:
+        active_controls.append(f"Style:{st.session_state.writing_style}")
+    if st.session_state.vb_genre_on:
+        active_controls.append(f"Genre:{st.session_state.genre}")
+    if st.session_state.vb_trained_on and st.session_state.trained_voice != "— None —":
+        active_controls.append(f"🎤{st.session_state.trained_voice}")
+    if st.session_state.vb_match_on:
+        active_controls.append(f"✨Match {st.session_state.match_intensity:.0%}")
+    if st.session_state.vb_lock_on:
+        active_controls.append(f"🔒Lock {st.session_state.lock_intensity:.0%}")
+    if st.session_state.vb_technical_on:
+        active_controls.append(f"⚙️{st.session_state.pov}/{st.session_state.tense}")
 
-    st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
-    st.selectbox(
-        "Writing Style",
-        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"] + ENGINE_STYLES,
-        key="writing_style",
-        disabled=not st.session_state.vb_style_on,
-        on_change=autosave,
-    )
-    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on, on_change=autosave)
+    if active_controls:
+        st.caption("Active controls: " + " • ".join(active_controls))
+    else:
+        st.warning("⚠️ No Voice Bible controls active. AI will use defaults.")
 
-    with st.expander("🎨 Style Trainer (Engine Styles)", expanded=False):
-        st.caption("Train per-project style banks. These steer the engine styles across all actions.")
+    with st.expander("🎛️ Voice Bible Presets", expanded=False):
+        pcol1, pcol2, pcol3 = st.columns(3)
+        if pcol1.button("Subtle Style", key="vb_preset_subtle"):
+            st.session_state.style_intensity = 0.3
+            st.session_state.match_intensity = 0.3
+            st.session_state.lock_intensity = max(st.session_state.lock_intensity, 0.6)
+            autosave()
+            st.session_state.voice_status = "Preset applied: Subtle"
+        if pcol2.button("Balanced", key="vb_preset_balanced"):
+            st.session_state.style_intensity = 0.55
+            st.session_state.match_intensity = 0.55
+            st.session_state.lock_intensity = max(st.session_state.lock_intensity, 0.7)
+            autosave()
+            st.session_state.voice_status = "Preset applied: Balanced"
+        if pcol3.button("Bold", key="vb_preset_bold"):
+            st.session_state.style_intensity = 0.78
+            st.session_state.match_intensity = 0.78
+            st.session_state.lock_intensity = max(st.session_state.lock_intensity, 0.85)
+            autosave()
+            st.session_state.voice_status = "Preset applied: Bold"
+        st.caption("Presets adjust style/match intensity and ensure lock stays at least moderate.")
+    
+    st.divider()
+
+    # ============ WRITING STYLE (Trainable Engine) ============
+    with st.expander("✍️ Writing Style Engine", expanded=True):
+        st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
+        
+        # Smart style selector with descriptions
+        style_col1, style_col2 = st.columns([2, 1])
+        with style_col1:
+            st.selectbox(
+                "Writing Style",
+                ENGINE_STYLES,
+                key="writing_style",
+                disabled=not st.session_state.vb_style_on,
+                on_change=autosave,
+                help="All ENGINE styles are trainable with your own samples.",
+            )
+        with style_col2:
+            # Smart intensity with contextual feedback
+            current_intensity = st.session_state.style_intensity if st.session_state.vb_style_on else 0.0
+            intensity_label = "Subtle" if current_intensity < 0.35 else "Balanced" if current_intensity < 0.7 else "Strong"
+            st.metric("Style", intensity_label, f"{current_intensity:.0%}")
+        
+        st.slider(
+            "Style Intensity", 
+            0.0, 1.0, 
+            key="style_intensity", 
+            disabled=not st.session_state.vb_style_on, 
+            on_change=autosave,
+            help="Lower = conservative, Higher = distinctive style"
+        )
+
+    with st.expander("🎨 Style Trainer (Adaptive Learning)", expanded=False):
+        st.caption("🧠 Train ENGINE styles with your own writing. The system adapts to your voice patterns.")
+        
+        # Smart training interface
         s_cols = st.columns([1.2, 1.0, 1.0])
-        st_style = s_cols[0].selectbox("Engine style", ENGINE_STYLES, key="style_train_style")
-        st_lane = s_cols[1].selectbox("Lane", LANES, key="style_train_lane")
-        split_mode = s_cols[2].selectbox("Split", ["Paragraphs", "Whole"], key="style_train_split")
+        st_style = s_cols[0].selectbox(
+            "Engine style", 
+            ENGINE_STYLES, 
+            key="style_train_style",
+            help="Choose which ENGINE style to train with your samples"
+        )
+        st_lane = s_cols[1].selectbox(
+            "Lane", 
+            LANES, 
+            key="style_train_lane",
+            help="Train for specific writing modes: Dialogue, Narration, Interiority, or Action"
+        )
+        split_mode = s_cols[2].selectbox(
+            "Split", 
+            ["Paragraphs", "Whole"], 
+            key="style_train_split",
+            help="Paragraphs = multiple samples, Whole = single sample"
+        )
 
-        up = st.file_uploader("Upload training (.txt/.md/.docx)", type=["txt", "md", "docx"], key="style_train_upload")
-        paste = st.text_area("Paste training text", key="style_train_paste", height=140)
+        # Show current training status
+        bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
+        lanes = bank.get("lanes") or {}
+        counts = {ln: len((lanes.get(ln) or [])) for ln in LANES}
+        total_samples = sum(counts.values())
+        
+        if total_samples > 0:
+            st.info(f"✅ {st_style} has {total_samples} training samples across all lanes")
+        else:
+            st.warning(f"⚠️ {st_style} has no training samples yet. Add samples to activate this style.")
+
+        up = st.file_uploader(
+            "Upload training (.txt/.md/.docx)", 
+            type=["txt", "md", "docx"], 
+            key="style_train_upload",
+            help="Upload a document containing your writing style examples"
+        )
+        paste = st.text_area(
+            "Paste training text", 
+            key="style_train_paste", 
+            height=140,
+            placeholder="Paste sample text that represents your desired style...",
+            help="Paste 1-3 paragraphs of your best writing in this style"
+        )
 
         c1, c2, c3 = st.columns([1, 1, 1])
-        if c1.button("Add Samples", key="style_train_add"):
+        if c1.button("Add Samples", key="style_train_add", use_container_width=True):
             ftxt, fname = _read_uploaded_text(up)
             src = _normalize_text((paste or "").strip() if (paste or "").strip() else ftxt)
             if not src.strip():
@@ -2414,10 +4756,11 @@ with right:
             else:
                 n = add_style_samples(st_style, st_lane, src, split_mode=split_mode)
                 st.session_state.voice_status = f"Style Trainer: added {n} sample(s) → {st_style} • {st_lane}"
-                st.session_state.tool_output = _clamp_text(f"Added {n} sample(s) to {st_style} / {st_lane}.\nSource: {fname or 'paste'}")
+                st.session_state.tool_output = _clamp_text(f"✅ Added {n} sample(s) to {st_style} / {st_lane}.\n\nThe engine will now adapt to these patterns when generating {st_lane} content.\n\nSource: {fname or 'paste'}")
                 autosave()
+                st.rerun()
 
-        if c2.button("Delete last", key="style_train_del"):
+        if c2.button("Delete last", key="style_train_del", use_container_width=True):
             if delete_last_style_sample(st_style, st_lane):
                 st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
                 autosave()
@@ -2425,18 +4768,27 @@ with right:
             else:
                 st.warning("Nothing to delete for that style/lane.")
 
-        if c3.button("Clear trainer text", key="style_train_clear"):
+        if c3.button("Clear text", key="style_train_clear", use_container_width=True):
             st.session_state.ui_notice = "Style trainer text cleared."
             queue_action("__STYLE_CLEAR_PASTE__")
             st.rerun()
 
-        st.caption("Lane sample counts:")
-        bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
-        lanes = bank.get("lanes") or {}
-        counts = {ln: len((lanes.get(ln) or [])) for ln in LANES}
-        st.code("  ".join([f"{ln}: {counts[ln]}" for ln in LANES]), language="")
+        # Enhanced lane statistics with visual feedback
+        st.caption("📊 Training samples per lane:")
+        cols_display = st.columns(4)
+        for idx, ln in enumerate(LANES):
+            with cols_display[idx]:
+                count = counts[ln]
+                if count >= 5:
+                    st.metric(ln, count, "✅ Strong")
+                elif count >= 2:
+                    st.metric(ln, count, "⚠️ Good")
+                elif count > 0:
+                    st.metric(ln, count, "➖ Weak")
+                else:
+                    st.metric(ln, count, "❌ None")
 
-        if st.button("Clear THIS lane", key="style_train_clear_lane"):
+        if st.button("Clear THIS lane", key="style_train_clear_lane", use_container_width=True):
             clear_style_lane(st_style, st_lane)
             st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
             autosave()
@@ -2444,40 +4796,70 @@ with right:
 
     st.divider()
 
-    st.checkbox("Enable Genre Influence", key="vb_genre_on", on_change=autosave)
-    st.selectbox(
-        "Genre",
-        ["Literary", "Noir", "Thriller", "Comedy", "Lyrical"],
-        key="genre",
-        disabled=not st.session_state.vb_genre_on,
-        on_change=autosave,
-    )
-    st.slider("Genre Intensity", 0.0, 1.0, key="genre_intensity", disabled=not st.session_state.vb_genre_on, on_change=autosave)
+    # ============ GENRE INFLUENCE (Smart Genre Detection) ============
+    with st.expander("🎭 Genre Intelligence", expanded=False):
+        st.caption("🎯 AI adapts genre markers, pacing, and tone automatically.")
+        
+        col_g1, col_g2 = st.columns([2, 1])
+        with col_g1:
+            st.checkbox("Enable Genre Influence", key="vb_genre_on", on_change=autosave)
+        with col_g2:
+            genre_strength = st.session_state.genre_intensity if st.session_state.vb_genre_on else 0.0
+            st.metric("Genre", f"{genre_strength:.0%}")
+        
+        st.selectbox(
+            "Genre",
+            ["Literary", "Noir", "Thriller", "Comedy", "Lyrical", "Horror", "Romance", "SciFi", "Fantasy"],
+            key="genre",
+            disabled=not st.session_state.vb_genre_on,
+            on_change=autosave,
+            help="Influences pacing, vocabulary, and tonal decisions"
+        )
+        st.slider(
+            "Genre Intensity", 
+            0.0, 1.0, 
+            key="genre_intensity", 
+            disabled=not st.session_state.vb_genre_on, 
+            on_change=autosave,
+            help="How strongly genre conventions influence the writing"
+        )
 
     st.divider()
 
-    st.checkbox("Enable Trained Voice", key="vb_trained_on", on_change=autosave)
-    trained_options = voice_names_for_selector()
-    if st.session_state.trained_voice not in trained_options:
-        st.session_state.trained_voice = "— None —"
-    st.selectbox(
-        "Trained Voice",
-        trained_options,
-        key="trained_voice",
-        disabled=not st.session_state.vb_trained_on,
-        on_change=autosave,
-    )
-    st.slider(
-        "Trained Voice Intensity",
-        0.0,
-        1.0,
-        key="trained_intensity",
-        disabled=not st.session_state.vb_trained_on,
-        on_change=autosave,
-    )
+    # ============ TRAINED VOICE (Vector-Based Retrieval) ============
+    with st.expander("🧬 Trained Voice (Vector Matching)", expanded=False):
+        st.caption("🎓 AI retrieves your best examples contextually using semantic search.")
+        
+        col_t1, col_t2 = st.columns([2, 1])
+        with col_t1:
+            st.checkbox("Enable Trained Voice", key="vb_trained_on", on_change=autosave)
+        with col_t2:
+            trained_str = st.session_state.trained_intensity if st.session_state.vb_trained_on else 0.0
+            st.metric("Voice", f"{trained_str:.0%}")
+        
+        trained_options = voice_names_for_selector()
+        if st.session_state.trained_voice not in trained_options:
+            st.session_state.trained_voice = "— None —"
+        st.selectbox(
+            "Trained Voice",
+            trained_options,
+            key="trained_voice",
+            disabled=not st.session_state.vb_trained_on,
+            on_change=autosave,
+            help="Select a voice you've trained in the Voice Vault"
+        )
+        st.slider(
+            "Trained Voice Intensity",
+            0.0,
+            1.0,
+            key="trained_intensity",
+            disabled=not st.session_state.vb_trained_on,
+            on_change=autosave,
+            help="How closely AI mimics your trained voice patterns"
+        )
 
     with st.expander("🧬 Voice Vault (Training Samples)", expanded=False):
-        st.caption("Drop in passages from your work. Olivetti retrieves the closest exemplars per lane.")
+        st.caption("🎯 Smart semantic retrieval: AI finds your most relevant examples automatically.")
 
         existing_voices = [v for v in (st.session_state.voices or {}).keys()]
         existing_voices = sorted(existing_voices, key=lambda x: (x not in ("Voice A", "Voice B"), x))
@@ -2485,8 +4867,18 @@ with right:
             existing_voices = ["Voice A", "Voice B"]
 
         vcol1, vcol2 = st.columns([2, 1])
-        vault_voice = vcol1.selectbox("Vault voice", existing_voices, key="vault_voice_sel")
-        new_name = vcol2.text_input("New voice", key="vault_new_voice", label_visibility="collapsed", placeholder="New voice name")
+        vault_voice = vcol1.selectbox(
+            "Vault voice", 
+            existing_voices, 
+            key="vault_voice_sel",
+            help="Select a voice to train or manage"
+        )
+        new_name = vcol2.text_input(
+            "New voice", 
+            key="vault_new_voice", 
+            label_visibility="collapsed", 
+            placeholder="New voice name"
+        )
         if vcol2.button("Create", key="vault_create_voice"):
             if create_custom_voice(new_name):
                 st.session_state.voice_status = f"Voice created: {new_name.strip()}"
@@ -2495,24 +4887,51 @@ with right:
             else:
                 st.warning("Could not create that voice (empty or already exists).")
 
-        lane = st.selectbox("Lane", LANES, key="vault_lane_sel")
-        sample = st.text_area("Sample", key="vault_sample_text", height=140, label_visibility="collapsed", placeholder="Paste a passage...")
+        # Show voice statistics
+        v = (st.session_state.voices or {}).get(vault_voice, {})
+        lane_counts = {ln: len((v.get("lanes", {}) or {}).get(ln, []) or []) for ln in LANES}
+        total_vault = sum(lane_counts.values())
+        
+        if total_vault > 0:
+            st.success(f"✅ '{vault_voice}' has {total_vault} samples. AI will adapt to these patterns.")
+        else:
+            st.info(f"ℹ️ '{vault_voice}' has no samples yet. Add samples to train this voice.")
+
+        lane = st.selectbox(
+            "Lane", 
+            LANES, 
+            key="vault_lane_sel",
+            help="Choose which writing mode to train"
+        )
+        sample = st.text_area(
+            "Sample", 
+            key="vault_sample_text", 
+            height=140, 
+            label_visibility="collapsed", 
+            placeholder="Paste a passage from your best writing in this lane...",
+            help="Add examples of your writing. AI uses semantic matching to find relevant samples."
+        )
+        
         a1, a2 = st.columns([1, 1])
-        if a1.button("Add sample", key="vault_add_sample"):
+        if a1.button("Add sample", key="vault_add_sample", use_container_width=True):
             if add_voice_sample(vault_voice, lane, sample):
-                st.session_state.ui_notice = f"Added sample → {vault_voice} • {lane}"
+                st.session_state.ui_notice = f"✅ Added sample → {vault_voice} • {lane}"
                 queue_action("__VAULT_CLEAR_SAMPLE__")
                 autosave()
                 st.rerun()
             else:
                 st.warning("No sample text found.")
 
-        # Quick stats + delete last sample
-        v = (st.session_state.voices or {}).get(vault_voice, {})
-        lane_counts = {ln: len((v.get("lanes", {}) or {}).get(ln, []) or []) for ln in LANES}
-        st.caption("Samples: " + "  ".join([f"{ln}: {lane_counts[ln]}" for ln in LANES]))
+        # Enhanced stats display
+        st.caption("📊 Sample distribution:")
+        cols_v = st.columns(4)
+        for idx, ln in enumerate(LANES):
+            with cols_v[idx]:
+                c = lane_counts[ln]
+                status = "✅" if c >= 3 else "⚠️" if c > 0 else "➖"
+                st.metric(ln, c, status)
 
-        if a2.button("Delete last sample", key="vault_del_last"):
+        if a2.button("Delete last sample", key="vault_del_last", use_container_width=True):
             if delete_voice_sample(vault_voice, lane, index_from_end=0):
                 st.session_state.voice_status = f"Deleted last sample → {vault_voice} • {lane}"
                 autosave()
@@ -2522,32 +4941,133 @@ with right:
 
     st.divider()
 
-    st.checkbox("Enable Match My Style", key="vb_match_on", on_change=autosave)
-    st.text_area(
-        "Style Example",
-        key="voice_sample",
-        height=100,
-        disabled=not st.session_state.vb_match_on,
-        on_change=autosave,
-    )
-    st.slider("Match Intensity", 0.0, 1.0, key="match_intensity", disabled=not st.session_state.vb_match_on, on_change=autosave)
+    # ============ MATCH MY STYLE (One-Shot Adaptation) ============
+    with st.expander("✨ Match My Style (One-Shot)", expanded=False):
+        st.caption("🎨 AI adapts immediately to a single style example. Paste up to 2000 words for deep analysis.")
+        
+        col_m1, col_m2 = st.columns([2, 1])
+        with col_m1:
+            st.checkbox("Enable Match My Style", key="vb_match_on", on_change=autosave)
+        with col_m2:
+            match_str = st.session_state.match_intensity if st.session_state.vb_match_on else 0.0
+            st.metric("Match", f"{match_str:.0%}")
+        
+        st.text_area(
+            "Style Example (up to 2000 words)",
+            key="voice_sample",
+            height=300,
+            max_chars=15000,
+            disabled=not st.session_state.vb_match_on,
+            on_change=autosave,
+            placeholder="Paste your best writing here (up to 2000 words). Click 'Analyze' to identify the strongest passages...",
+            help="AI will adapt its output to match this example's patterns. Analysis highlights your strongest sentences."
+        )
+        
+        col_a1, col_a2 = st.columns([1, 3])
+        with col_a1:
+            if st.button("🔍 Analyze Style", key="analyze_style_btn", use_container_width=True, disabled=not st.session_state.vb_match_on):
+                text = (st.session_state.voice_sample or "").strip()
+                if text:
+                    samples = analyze_style_samples(text)
+                    st.session_state.analyzed_style_samples = samples
+                    if samples:
+                        st.session_state.ui_notice = f"✅ Found {len(samples)} strong writing samples"
+                    else:
+                        st.session_state.ui_notice = "⚠️ Not enough text to analyze. Add more sentences."
+                else:
+                    st.session_state.ui_notice = "⚠️ No text to analyze"
+                    st.session_state.analyzed_style_samples = []
+        
+        # Show analysis results
+        if st.session_state.analyzed_style_samples:
+            st.success(f"📊 **Top {len(st.session_state.analyzed_style_samples)} Strongest Writing Samples** (by score)")
+            for idx, sample in enumerate(st.session_state.analyzed_style_samples[:5], 1):
+                with st.container():
+                    st.markdown(f"**#{idx}** (Score: {sample['score']:.1f})")
+                    st.info(f"✨ {sample['text']}")
+                    st.caption(f"📈 {sample['words']} words • Vocab: {sample['unique_ratio']:.0%} • Sensory: {sample['sensory']} • Verbs: {sample['verbs']}")
+        
+        st.slider(
+            "Match Intensity", 
+            0.0, 1.0, 
+            key="match_intensity", 
+            disabled=not st.session_state.vb_match_on, 
+            on_change=autosave,
+            help="How closely AI mimics the provided example"
+        )
 
     st.divider()
 
-    st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on", on_change=autosave)
-    st.text_area(
-        "Voice Lock Prompt",
-        key="voice_lock_prompt",
-        height=80,
-        disabled=not st.session_state.vb_lock_on,
-        on_change=autosave,
-    )
-    st.slider("Lock Strength", 0.0, 1.0, key="lock_intensity", disabled=not st.session_state.vb_lock_on, on_change=autosave)
+    # ============ VOICE LOCK (Hard Constraints) ============
+    with st.expander("🔒 Voice Lock (Hard Constraint)", expanded=False):
+        st.caption("⚠️ MANDATORY directives. Use for absolute rules like 'never use passive voice'.")
+        
+        col_l1, col_l2 = st.columns([2, 1])
+        with col_l1:
+            st.checkbox("Voice Lock (Hard Constraint)", key="vb_lock_on", on_change=autosave)
+        with col_l2:
+            lock_str = st.session_state.lock_intensity if st.session_state.vb_lock_on else 0.0
+            st.metric("Lock", f"{lock_str:.0%}")
+        
+        st.text_area(
+            "Voice Lock Prompt",
+            key="voice_lock_prompt",
+            height=80,
+            disabled=not st.session_state.vb_lock_on,
+            on_change=autosave,
+            placeholder="Example: 'Never use adverbs. Always use short sentences. No passive voice.'",
+            help="Absolute constraints. AI will enforce these rules strictly."
+        )
+        st.slider(
+            "Lock Strength", 
+            0.0, 1.0, 
+            key="lock_intensity", 
+            disabled=not st.session_state.vb_lock_on, 
+            on_change=autosave,
+            help="Higher = stricter enforcement of constraints"
+        )
 
     st.divider()
 
-    st.selectbox("POV", ["First", "Close Third", "Omniscient"], key="pov", on_change=autosave)
-    st.selectbox("Tense", ["Past", "Present"], key="tense", on_change=autosave)
+    # ============ TECHNICAL CONTROLS (POV/Tense) ============
+    with st.expander("⚙️ Technical Controls (POV/Tense)", expanded=False):
+        st.caption("🎯 Enforces point of view and verb tense consistency across all AI generation.")
+        
+        col_tc1, col_tc2 = st.columns([2, 1])
+        with col_tc1:
+            st.checkbox("Enable Technical Controls", key="vb_technical_on", on_change=autosave)
+        with col_tc2:
+            tech_str = st.session_state.technical_intensity if st.session_state.vb_technical_on else 0.0
+            st.metric("Tech", f"{tech_str:.0%}")
+        
+        col_tech1, col_tech2 = st.columns(2)
+        with col_tech1:
+            st.selectbox(
+                "POV", 
+                ["First", "Close Third", "Omniscient"], 
+                key="pov",
+                disabled=not st.session_state.vb_technical_on,
+                on_change=autosave,
+                help="Point of view for narrative perspective"
+            )
+        with col_tech2:
+            st.selectbox(
+                "Tense", 
+                ["Past", "Present"], 
+                key="tense",
+                disabled=not st.session_state.vb_technical_on,
+                on_change=autosave,
+                help="Verb tense for all actions"
+            )
+        
+        st.slider(
+            "Technical Enforcement",
+            0.0, 1.0,
+            key="technical_intensity",
+            disabled=not st.session_state.vb_technical_on,
+            on_change=autosave,
+            help="How strictly AI enforces POV/Tense rules. Higher = more rigid enforcement."
+        )
 
 
 # ============================================================
