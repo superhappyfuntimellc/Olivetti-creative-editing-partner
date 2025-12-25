@@ -1,5 +1,5 @@
 import os
-import re 
+import re
 import math
 import json
 import hashlib
@@ -20,40 +20,34 @@ os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
 DEFAULT_MODEL = "gpt-4.1-mini"
-try:
-    OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", DEFAULT_MODEL)  # type: ignore[attr-defined]
-except Exception:
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
 def _get_openai_key_or_empty() -> str:
-    """Return key if present (secrets/env), else '' (no UI side effects)."""
     try:
-        key = (st.secrets.get("OPENAI_API_KEY", "") or "").strip()  # type: ignore[attr-defined]
+        return str(st.secrets.get("OPENAI_API_KEY", ""))  # type: ignore[attr-defined]
     except Exception:
-        key = ""
-    if not key:
-        key = (os.getenv("OPENAI_API_KEY", "") or "").strip()
-    return key
+        return ""
 
-# Cached (non-fatal) key presence for UI gating; use require_openai_key() before any API call.
-OPENAI_API_KEY = _get_openai_key_or_empty()
+def _get_openai_model() -> str:
+    try:
+        return str(st.secrets.get("OPENAI_MODEL", DEFAULT_MODEL))  # type: ignore[attr-defined]
+    except Exception:
+        return os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
+OPENAI_MODEL = _get_openai_model()
+
+def has_openai_key() -> bool:
+    return bool(os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty())
 
 def require_openai_key() -> str:
-    """Stop the app with a user-facing message if OPENAI_API_KEY is missing."""
-    key = _get_openai_key_or_empty()
+    """Stop the app with a clear message if no OpenAI key is configured."""
+    key = os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty()
     if not key:
         st.error(
-            """Missing **OPENAI_API_KEY**.
-
-Add it in Streamlit Cloud → App → Settings → Secrets, or set it as an environment variable.
-
-Example Secrets:
-OPENAI_API_KEY = "sk-..."
-"""
+            "OPENAI_API_KEY is not set. Add it as an environment variable (OPENAI_API_KEY) or as a Streamlit secret."
         )
         st.stop()
     return key
+
 
 # ============================================================
 # CONFIG
@@ -806,6 +800,16 @@ def save_workspace_from_session() -> None:
     st.session_state.sb_workspace = w
 
 
+def set_ai_intensity(val: float) -> None:
+    """Safely set ai_intensity without mutating widget-bound state after creation."""
+    val = float(val)
+    if "ai_intensity" not in st.session_state:
+        st.session_state["ai_intensity"] = val
+    else:
+        st.session_state["ai_intensity_pending"] = val
+        st.session_state["_apply_pending_widget_state"] = True
+
+
 def load_workspace_into_session() -> None:
     w = st.session_state.sb_workspace or default_story_bible_workspace()
     sb = w.get("story_bible", {}) or {}
@@ -818,16 +822,12 @@ def load_workspace_into_session() -> None:
     st.session_state.characters = sb.get("characters", "") or ""
     st.session_state.outline = sb.get("outline", "") or ""
     st.session_state.voice_sample = w.get("voice_sample", "") or ""
-   
+    set_ai_intensity(float(w.get("ai_intensity", 0.75)))
     st.session_state.voices = rebuild_vectors_in_voice_vault(w.get("voices", default_voice_vault()))
     st.session_state.voices_seeded = True
     st.session_state.style_banks = rebuild_vectors_in_style_banks(w.get("style_banks", default_style_banks()))
     st.session_state.workspace_title = w.get("title", "") or ""
-if "ai_intensity" not in st.session_state:
-    st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
-else:
-    st.session_state["ai_intensity_pending"] = float(w.get("ai_intensity", 0.75))
-    st.session_state["_apply_pending_widget_state"] = True
+
 
 def reset_workspace_story_bible(keep_templates: bool = True) -> None:
     old = st.session_state.sb_workspace or default_story_bible_workspace()
@@ -847,7 +847,6 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
 # ============================================================
 def init_state() -> None:
     defaults: Dict[str, Any] = {
-        "ai_intensity": 0.75,
         "active_bay": "NEW",
         "projects": {},
         "active_project_by_bay": {b: None for b in BAYS},
@@ -906,13 +905,13 @@ def init_state() -> None:
 
 
 init_state()
+
+
 # Apply pending widget values BEFORE widgets are created
 if st.session_state.pop("_apply_pending_widget_state", False):
     if "ai_intensity_pending" in st.session_state:
         st.session_state["ai_intensity"] = float(st.session_state.pop("ai_intensity_pending"))
 
-    
-   
 
 
 # ============================================================
@@ -1059,7 +1058,7 @@ def switch_bay(target_bay: str) -> None:
             st.session_state.characters = ""
             st.session_state.outline = ""
             st.session_state.voice_sample = ""
-            st.session_state.ai_intensity = 0.75
+            set_ai_intensity(0.75)
             st.session_state.voices = rebuild_vectors_in_voice_vault(default_voice_vault())
             st.session_state.voices_seeded = True
             st.session_state.voice_status = f"{target_bay}: (empty)"
@@ -1117,10 +1116,8 @@ def create_project_from_current_bible(title: str) -> str:
 
     if source == "workspace":
         reset_workspace_story_bible(keep_templates=True)
-st.rerun()
 
     return p["id"]
-
 
 
 def promote_project(pid: str, to_bay: str) -> None:
@@ -1684,46 +1681,27 @@ ACTION: {action_name}
 
 
 def call_openai(system_brief: str, user_task: str, text: str) -> str:
-    """One place for all OpenAI calls (lazy client, key-guarded)."""
-    api_key = require_openai_key()
+    key = require_openai_key()
     try:
         from openai import OpenAI
     except Exception as e:
-        raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai>=2.0.0") from e
+        raise RuntimeError("OpenAI SDK not installed. Add to requirements.txt: openai") from e
 
-    # Create client lazily (never at import-time).
     try:
-        client = OpenAI(api_key=api_key, timeout=60)
+        client = OpenAI(api_key=key, timeout=60)
     except TypeError:
-        client = OpenAI(api_key=api_key)
-
-    draft = (text or "").strip()
-    user_msg = f"{user_task}\n\nDRAFT:\n{draft}"
-
-    # Prefer Responses API when available; fall back to Chat Completions for compatibility.
-    if hasattr(client, "responses"):
-        try:
-            resp = client.responses.create(
-                model=OPENAI_MODEL,
-                instructions=system_brief,
-                input=user_msg,
-                max_output_tokens=900,
-            )
-            out = (getattr(resp, "output_text", None) or "").strip()
-            if out:
-                return out
-        except Exception:
-            pass
+        client = OpenAI(api_key=key)
 
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_brief},
-            {"role": "user", "content": user_msg},
+            {"role": "user", "content": f"{user_task}\n\nDRAFT:\n{text.strip()}"},
         ],
         temperature=temperature_from_intensity(st.session_state.ai_intensity),
     )
     return (resp.choices[0].message.content or "").strip()
+
 
 def local_cleanup(text: str) -> str:
     t = (text or "")
@@ -1786,7 +1764,7 @@ def partner_action(action: str) -> None:
     text = st.session_state.main_text or ""
     lane = current_lane_from_draft(text)
     brief = build_partner_brief(action, lane=lane)
-    use_ai = bool(OPENAI_API_KEY)
+    use_ai = has_openai_key()
 
     def apply_replace(result: str) -> None:
         if result and result.strip():
@@ -1924,152 +1902,6 @@ def partner_action(action: str) -> None:
 
 def queue_action(action: str) -> None:
     st.session_state.pending_action = action
-
-
-def cb_create_project() -> None:
-    """Create a new project from the current Story Bible (runs as a pre-rerun callback)."""
-    synopsis = (st.session_state.get("synopsis") or "").strip()
-    title_guess = (synopsis.splitlines()[0].strip() if synopsis else "New Project")
-    pid = create_project_from_current_bible(title_guess)
-    load_project_into_session(pid)
-    st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
-    st.session_state.last_action = "Create Project"
-    autosave()
-    st.rerun()
-
-
-def cb_new_workspace_bible() -> None:
-    """Mint a fresh workspace Story Bible ID (workspace-only)."""
-    reset_workspace_story_bible(keep_templates=True)
-    
-    st.session_state.voice_status = "Workspace: new Story Bible minted"
-    st.session_state.last_action = "New Story Bible"
-    autosave()
-    st.rerun()
-
-
-def cb_promote_to(target_bay: str) -> None:
-    """Promote the active project to the target bay (pre-rerun callback)."""
-    pid = st.session_state.get("project_id")
-    if not pid:
-        st.session_state.tool_output = "No active project to promote."
-        autosave()
-        return
-    save_session_into_project()
-    promote_project(pid, target_bay)
-    st.session_state.active_project_by_bay[target_bay] = pid
-    switch_bay(target_bay)
-    st.session_state.voice_status = f"Promoted → {target_bay}: {st.session_state.project_title}"
-    st.session_state.last_action = f"Promote → {target_bay}"
-    autosave()
-
-
-def cb_import_bundle() -> None:
-    """Import a project/library bundle and optionally switch to it (pre-rerun callback)."""
-    upb = st.session_state.get("io_bundle_upload")
-    target_bay = st.session_state.get("io_bundle_target") or "NEW"
-    rename = (st.session_state.get("io_bundle_rename") or "").strip()
-    switch_after = bool(st.session_state.get("io_bundle_switch", True))
-
-    if upb is None:
-        st.session_state.tool_output = "Import bundle: upload a .json file first."
-        autosave()
-        return
-
-    raw = upb.getvalue()
-    if raw is not None and len(raw) > MAX_UPLOAD_BYTES:
-        st.session_state.tool_output = "Import bundle: file too large."
-        autosave()
-        return
-
-    try:
-        obj = json.loads((raw or b"").decode("utf-8"))
-    except Exception:
-        obj = None
-
-    if isinstance(obj, dict) and obj.get("projects"):
-        n = import_library_bundle(obj)
-        st.session_state.voice_status = f"Imported library bundle: {n} projects merged."
-        st.session_state.last_action = "Import Library Bundle"
-        autosave()
-        return
-
-    if isinstance(obj, dict) and obj.get("project"):
-        pid = import_project_bundle(obj, target_bay=target_bay, rename=rename)
-        if not pid:
-            st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
-            autosave()
-            return
-        st.session_state.voice_status = f"Imported project bundle → {pid}"
-        st.session_state.last_action = "Import Project Bundle"
-        autosave()
-        if switch_after:
-            st.session_state.active_project_by_bay[target_bay] = pid
-            switch_bay(target_bay)
-            load_project_into_session(pid)
-            st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
-            autosave()
-        return
-
-    st.session_state.tool_output = "Import bundle: bundle type not recognized."
-    autosave()
-
-
-def cb_style_delete_last() -> None:
-    st_style = (st.session_state.get("style_train_style") or "").strip()
-    st_lane = (st.session_state.get("style_train_lane") or "Narration")
-    if delete_last_style_sample(st_style, st_lane):
-        st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
-    else:
-        st.session_state.tool_output = "Style Trainer: nothing to delete for that style/lane."
-    autosave()
-
-
-def cb_style_clear_text() -> None:
-    st.session_state.style_train_paste = ""
-    st.session_state.voice_status = "Style Trainer: text cleared."
-    autosave()
-
-
-def cb_style_clear_lane() -> None:
-    st_style = (st.session_state.get("style_train_style") or "").strip()
-    st_lane = (st.session_state.get("style_train_lane") or "Narration")
-    clear_style_lane(st_style, st_lane)
-    st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
-    autosave()
-
-
-def cb_vault_create_voice() -> None:
-    name = (st.session_state.get("vault_new_voice") or "").strip()
-    if create_custom_voice(name):
-        st.session_state.vault_voice_sel = name
-        st.session_state.voice_status = f"Voice created: {name}"
-    else:
-        st.session_state.tool_output = "Could not create that voice (empty or already exists)."
-    autosave()
-
-
-def cb_vault_add_sample() -> None:
-    voice = (st.session_state.get("vault_voice_sel") or "").strip()
-    lane = (st.session_state.get("vault_lane_sel") or "Narration")
-    sample = (st.session_state.get("vault_sample_text") or "").strip()
-    if add_voice_sample(voice, lane, sample):
-        st.session_state.vault_sample_text = ""
-        st.session_state.voice_status = f"Added sample → {voice} • {lane}"
-    else:
-        st.session_state.tool_output = "No sample text found."
-    autosave()
-
-
-def cb_vault_delete_last_sample() -> None:
-    voice = (st.session_state.get("vault_voice_sel") or "").strip()
-    lane = (st.session_state.get("vault_lane_sel") or "Narration")
-    if delete_voice_sample(voice, lane, index_from_end=0):
-        st.session_state.voice_status = f"Deleted last sample → {voice} • {lane}"
-    else:
-        st.session_state.tool_output = "Nothing to delete for that lane."
-    autosave()
-
 
 
 def run_pending_action() -> None:
@@ -2217,7 +2049,7 @@ with left:
                 st.session_state.characters = ""
                 st.session_state.outline = ""
                 st.session_state.voice_sample = ""
-                st.session_state.ai_intensity = 0.75
+                set_ai_intensity(0.75)
                 st.session_state.voices = rebuild_vectors_in_voice_vault(default_voice_vault())
                 st.session_state.voices_seeded = True
                 st.session_state.voice_status = f"{bay}: (empty)"
@@ -2253,15 +2085,362 @@ with left:
     action_cols = st.columns([1, 1])
     if bay == "NEW":
         label = "Start Project (Lock Bible → Project)" if in_workspace_mode() else "Create Project (from Bible)"
-        action_cols[0].button(label, key="create_project_btn", on_click=cb_create_project)
+        if action_cols[0].button(label, key="create_project_btn"):
+            title_guess = (st.session_state.synopsis.strip().splitlines()[0].strip() if st.session_state.synopsis.strip() else "New Project")
+            pid = create_project_from_current_bible(title_guess)
+            load_project_into_session(pid)
+            st.session_state.voice_status = f"Created in NEW: {st.session_state.project_title}"
+            st.session_state.last_action = "Create Project"
+            autosave()
+            st.rerun()
 
-        if in_workspace_mode():
-            action_cols[1].button("New Story Bible (fresh ID)", key="new_workspace_bible_btn", on_click=cb_new_workspace_bible)
+        if in_workspace_mode() and action_cols[1].button("New Story Bible (fresh ID)", key="new_workspace_bible_btn"):
+            reset_workspace_story_bible(keep_templates=True)
+            st.session_state.voice_status = "Workspace: new Story Bible minted"
+            st.session_state.last_action = "New Story Bible"
+            autosave()
+            st.rerun()
 
-        action_cols[1].button("Promote → Rough", key="promote_new_to_rough", on_click=cb_promote_to, args=("ROUGH",))
+        if action_cols[1].button("Promote → Rough", key="promote_new_to_rough"):
+            if st.session_state.project_id:
+                save_session_into_project()
+                promote_project(st.session_state.project_id, "ROUGH")
+                st.session_state.active_project_by_bay["ROUGH"] = st.session_state.project_id
+                switch_bay("ROUGH")
+                st.session_state.voice_status = f"Promoted → ROUGH: {st.session_state.project_title}"
+                st.session_state.last_action = "Promote → ROUGH"
+                autosave()
+                st.rerun()
     elif bay in ("ROUGH", "EDIT"):
         nb = next_bay(bay)
-        action_cols[1].button(f"Promote → {nb.title()}", key=f"promote_{bay.lower()}", on_click=cb_promote_to, args=(nb,))
+        if action_cols[1].button(f"Promote → {nb.title()}", key=f"promote_{bay.lower()}"):
+            if st.session_state.project_id and nb:
+                save_session_into_project()
+                promote_project(st.session_state.project_id, nb)
+                st.session_state.active_project_by_bay[nb] = st.session_state.project_id
+                switch_bay(nb)
+                st.session_state.voice_status = f"Promoted → {nb}: {st.session_state.project_title}"
+                st.session_state.last_action = f"Promote → {nb}"
+                autosave()
+                st.rerun()
+
+    # Import / Export hub (restored)
+    with st.expander("📦 Import / Export", expanded=False):
+        tab_imp, tab_exp, tab_bundle = st.tabs(["Import", "Export", "Bundles"])
+
+        with tab_imp:
+            st.caption("Import a document into Draft or break it into Story Bible sections.")
+            up = st.file_uploader("Upload (.txt, .md, .docx)", type=["txt", "md", "docx"], key="io_upload")
+            paste = st.text_area("Paste text", key="io_paste", height=140)
+            target = st.radio("Import target", ["Draft", "Story Bible"], horizontal=True, key="io_target")
+            merge_mode = st.radio("Merge mode", ["Append", "Replace"], horizontal=True, key="io_merge")
+            use_ai = st.checkbox(
+                "Use AI Breakdown (Story Bible)",
+                value=has_openai_key(),
+                disabled=not has_openai_key(),
+                help="Requires OPENAI_API_KEY. Falls back to heuristic if AI fails.",
+                key="io_use_ai",
+            )
+
+            if st.button("Run Import", key="io_run_import"):
+                src_file, name = _read_uploaded_text(up)
+                src = _normalize_text(paste if (paste or "").strip() else src_file)
+                if not src.strip():
+                    st.session_state.tool_output = "Import: no text provided (or file too large)."
+                    st.session_state.voice_status = "Import blocked"
+                    autosave()
+                elif target == "Draft":
+                    if merge_mode == "Replace":
+                        st.session_state.main_text = src
+                    else:
+                        st.session_state.main_text = (st.session_state.main_text.rstrip() + "\n\n" + src).strip() if (st.session_state.main_text or "").strip() else src
+                    st.session_state.voice_status = f"Imported → Draft ({name or 'paste'})"
+                    st.session_state.last_action = "Import → Draft"
+                    autosave()
+                else:
+                    if sb_locked:
+                        st.session_state.tool_output = "Story Bible is LOCKED. Unlock Story Bible Editing to import into it."
+                        st.session_state.voice_status = "Import blocked (locked)"
+                        autosave()
+                    else:
+                        sections = sb_breakdown_ai(src) if use_ai else _sb_sections_from_text_heuristic(src)
+                        st.session_state.synopsis = _merge_section(st.session_state.synopsis, sections.get("synopsis", ""), merge_mode)
+                        st.session_state.genre_style_notes = _merge_section(
+                            st.session_state.genre_style_notes, sections.get("genre_style_notes", ""), merge_mode
+                        )
+                        st.session_state.world = _merge_section(st.session_state.world, sections.get("world", ""), merge_mode)
+                        st.session_state.characters = _merge_section(st.session_state.characters, sections.get("characters", ""), merge_mode)
+                        st.session_state.outline = _merge_section(st.session_state.outline, sections.get("outline", ""), merge_mode)
+                        st.session_state.voice_status = f"Imported → Story Bible ({'AI' if use_ai else 'heuristic'})"
+                        st.session_state.last_action = "Import → Story Bible"
+                        autosave()
+
+        with tab_exp:
+            title = "Workspace" if in_workspace_mode() else st.session_state.project_title
+            meta = {"Context": "Workspace" if in_workspace_mode() else "Project", "Bay": st.session_state.active_bay}
+            if st.session_state.project_id:
+                meta["Project ID"] = st.session_state.project_id
+            stem = _safe_filename(title, "olivetti")
+
+            # Ensure latest writes are saved into project/workspace
+            if in_workspace_mode():
+                save_workspace_from_session()
+            else:
+                save_session_into_project()
+
+            draft_txt = st.session_state.main_text or ""
+            sb_dict = {
+                "synopsis": st.session_state.synopsis,
+                "genre_style_notes": st.session_state.genre_style_notes,
+                "world": st.session_state.world,
+                "characters": st.session_state.characters,
+                "outline": st.session_state.outline,
+            }
+
+            st.download_button("Download Draft (.txt)", data=draft_txt, file_name=f"{stem}_draft.txt", mime="text/plain")
+            st.download_button(
+                "Download Draft (.md)",
+                data=draft_markdown(title, draft_txt, meta),
+                file_name=f"{stem}_draft.md",
+                mime="text/markdown",
+            )
+            st.download_button(
+                "Download Story Bible (.md)",
+                data=story_bible_markdown(title, sb_dict, meta),
+                file_name=f"{stem}_story_bible.md",
+                mime="text/markdown",
+            )
+
+            try:
+                from docx import Document  # type: ignore
+
+                def _docx_bytes(doc: "Document") -> bytes:
+                    buf = BytesIO()
+                    doc.save(buf)
+                    return buf.getvalue()
+
+                d = Document()
+                d.add_heading(f"Draft — {title}", level=0)
+                for mk, mv in meta.items():
+                    d.add_paragraph(f"{mk}: {mv}")
+                d.add_paragraph(now_ts())
+                d.add_paragraph("")
+                for para in _split_paragraphs(draft_txt):
+                    d.add_paragraph(para)
+                st.download_button(
+                    "Download Draft (.docx)",
+                    data=_docx_bytes(d),
+                    file_name=f"{stem}_draft.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            except Exception:
+                st.caption("DOCX export unavailable (python-docx not installed).")
+
+        with tab_bundle:
+            st.caption("Bundle exports are merge-safe (imports never wipe your library).")
+            if st.session_state.project_id:
+                pj = json.dumps(make_project_bundle(st.session_state.project_id), ensure_ascii=False, indent=2)
+                st.download_button(
+                    "Download Project Bundle (.json)",
+                    data=pj,
+                    file_name=f"{_safe_filename(st.session_state.project_title,'project')}_bundle.json",
+                    mime="application/json",
+                )
+            lib = json.dumps(make_library_bundle(), ensure_ascii=False, indent=2)
+            st.download_button("Download Full Library (.json)", data=lib, file_name="olivetti_library_bundle.json", mime="application/json")
+
+            st.divider()
+            target_bay = st.selectbox("Imported projects go to bay", BAYS, index=0, key="io_bundle_target")
+            rename = st.text_input("Optional rename (single project import)", key="io_bundle_rename")
+            upb = st.file_uploader("Upload .json bundle", type=["json"], key="io_bundle_upload")
+            switch_after = st.checkbox("Switch to imported project after import", value=True, key="io_bundle_switch")
+
+            if st.button("Import Bundle", key="io_bundle_import"):
+                if upb is None:
+                    st.session_state.tool_output = "Import bundle: upload a .json file first."
+                    autosave()
+                else:
+                    raw = upb.getvalue()
+                    if raw is not None and len(raw) > MAX_UPLOAD_BYTES:
+                        st.session_state.tool_output = "Import bundle: file too large."
+                        autosave()
+                    else:
+                        try:
+                            obj = json.loads((raw or b"").decode("utf-8"))
+                        except Exception:
+                            obj = None
+                        if isinstance(obj, dict) and obj.get("projects"):
+                            n = import_library_bundle(obj)
+                            st.session_state.voice_status = f"Imported library bundle: {n} projects merged."
+                            st.session_state.last_action = "Import Library Bundle"
+                            autosave()
+                        elif isinstance(obj, dict) and obj.get("project"):
+                            pid = import_project_bundle(obj, target_bay=target_bay, rename=rename)
+                            if pid:
+                                st.session_state.voice_status = f"Imported project bundle → {pid}"
+                                st.session_state.last_action = "Import Project Bundle"
+                                autosave()
+                                if switch_after:
+                                    switch_bay(target_bay)
+                                    load_project_into_session(pid)
+                                    st.session_state.voice_status = f"{target_bay}: {st.session_state.project_title} (imported)"
+                                    autosave()
+                                    st.rerun()
+                            else:
+                                st.session_state.tool_output = "Import bundle: JSON did not look like a project bundle."
+                                autosave()
+                        else:
+                            st.session_state.tool_output = "Import bundle: bundle type not recognized."
+                            autosave()
+
+    # Junk Drawer + Story Bible sections (labels hidden safely)
+    with st.expander("🗃 Junk Drawer"):
+        st.text_area(
+            "Junk Drawer",
+            key="junk",
+            height=80,
+            on_change=autosave,
+            label_visibility="collapsed",
+            help="Commands: /create: Title  |  /promote  |  /find: term",
+        )
+        st.text_area("Tool Output", value=st.session_state.tool_output, height=140, disabled=True)
+
+    with st.expander("📝 Synopsis"):
+        st.text_area("Synopsis", key="synopsis", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+
+    with st.expander("🎭 Genre / Style Notes"):
+        st.text_area(
+            "Genre / Style Notes",
+            key="genre_style_notes",
+            height=80,
+            on_change=autosave,
+            label_visibility="collapsed",
+            disabled=sb_locked,
+        )
+
+    with st.expander("🌍 World Elements"):
+        st.text_area("World", key="world", height=100, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+
+    with st.expander("👤 Characters"):
+        st.text_area(
+            "Characters",
+            key="characters",
+            height=120,
+            on_change=autosave,
+            label_visibility="collapsed",
+            disabled=sb_locked,
+        )
+
+    with st.expander("🧱 Outline"):
+        st.text_area("Outline", key="outline", height=160, on_change=autosave, label_visibility="collapsed", disabled=sb_locked)
+
+
+# ============================================================
+# CENTER — WRITING DESK
+# ============================================================
+with center:
+    st.subheader("✍️ Writing Desk")
+    st.text_area("Draft", key="main_text", height=650, on_change=autosave, label_visibility="collapsed")
+
+    b1 = st.columns(5)
+    if b1[0].button("Write", key="btn_write"):
+        queue_action("Write")
+        st.rerun()
+    if b1[1].button("Rewrite", key="btn_rewrite"):
+        queue_action("Rewrite")
+        st.rerun()
+    if b1[2].button("Expand", key="btn_expand"):
+        queue_action("Expand")
+        st.rerun()
+    if b1[3].button("Rephrase", key="btn_rephrase"):
+        queue_action("Rephrase")
+        st.rerun()
+    if b1[4].button("Describe", key="btn_describe"):
+        queue_action("Describe")
+        st.rerun()
+
+    b2 = st.columns(5)
+    if b2[0].button("Spell", key="btn_spell"):
+        queue_action("Spell")
+        st.rerun()
+    if b2[1].button("Grammar", key="btn_grammar"):
+        queue_action("Grammar")
+        st.rerun()
+    if b2[2].button("Find", key="btn_find"):
+        queue_action("__FIND_HINT__")
+        st.rerun()
+    if b2[3].button("Synonym", key="btn_synonym"):
+        queue_action("Synonym")
+        st.rerun()
+    if b2[4].button("Sentence", key="btn_sentence"):
+        queue_action("Sentence")
+        st.rerun()
+
+
+# ============================================================
+# RIGHT — VOICE BIBLE
+# ============================================================
+with right:
+    st.subheader("🎙 Voice Bible")
+
+    st.checkbox("Enable Writing Style", key="vb_style_on", on_change=autosave)
+    st.selectbox(
+        "Writing Style",
+        ["Neutral", "Minimal", "Expressive", "Hardboiled", "Poetic"] + ENGINE_STYLES,
+        key="writing_style",
+        disabled=not st.session_state.vb_style_on,
+        on_change=autosave,
+    )
+    st.slider("Style Intensity", 0.0, 1.0, key="style_intensity", disabled=not st.session_state.vb_style_on, on_change=autosave)
+
+    with st.expander("🎨 Style Trainer (Engine Styles)", expanded=False):
+        st.caption("Train per-project style banks. These steer the engine styles across all actions.")
+        s_cols = st.columns([1.2, 1.0, 1.0])
+        st_style = s_cols[0].selectbox("Engine style", ENGINE_STYLES, key="style_train_style")
+        st_lane = s_cols[1].selectbox("Lane", LANES, key="style_train_lane")
+        split_mode = s_cols[2].selectbox("Split", ["Paragraphs", "Whole"], key="style_train_split")
+
+        up = st.file_uploader("Upload training (.txt/.md/.docx)", type=["txt", "md", "docx"], key="style_train_upload")
+        paste = st.text_area("Paste training text", key="style_train_paste", height=140)
+
+        c1, c2, c3 = st.columns([1, 1, 1])
+        if c1.button("Add Samples", key="style_train_add"):
+            ftxt, fname = _read_uploaded_text(up)
+            src = _normalize_text((paste or "").strip() if (paste or "").strip() else ftxt)
+            if not src.strip():
+                st.session_state.tool_output = "Style Trainer: no text provided (or file too large)."
+                st.session_state.voice_status = "Style Trainer blocked"
+                autosave()
+            else:
+                n = add_style_samples(st_style, st_lane, src, split_mode=split_mode)
+                st.session_state.voice_status = f"Style Trainer: added {n} sample(s) → {st_style} • {st_lane}"
+                st.session_state.tool_output = _clamp_text(f"Added {n} sample(s) to {st_style} / {st_lane}.\nSource: {fname or 'paste'}")
+                autosave()
+
+        if c2.button("Delete last", key="style_train_del"):
+            if delete_last_style_sample(st_style, st_lane):
+                st.session_state.voice_status = f"Style Trainer: deleted last → {st_style} • {st_lane}"
+                autosave()
+                st.rerun()
+            else:
+                st.warning("Nothing to delete for that style/lane.")
+
+        if c3.button("Clear trainer text", key="style_train_clear"):
+            st.session_state.ui_notice = "Style trainer text cleared."
+            queue_action("__STYLE_CLEAR_PASTE__")
+            st.rerun()
+
+        st.caption("Lane sample counts:")
+        bank = (st.session_state.get("style_banks") or {}).get(st_style, {})
+        lanes = bank.get("lanes") or {}
+        counts = {ln: len((lanes.get(ln) or [])) for ln in LANES}
+        st.code("  ".join([f"{ln}: {counts[ln]}" for ln in LANES]), language="")
+
+        if st.button("Clear THIS lane", key="style_train_clear_lane"):
+            clear_style_lane(st_style, st_lane)
+            st.session_state.voice_status = f"Style Trainer: cleared lane → {st_style} • {st_lane}"
+            autosave()
+            st.rerun()
 
     st.divider()
 
@@ -2308,19 +2487,38 @@ with left:
         vcol1, vcol2 = st.columns([2, 1])
         vault_voice = vcol1.selectbox("Vault voice", existing_voices, key="vault_voice_sel")
         new_name = vcol2.text_input("New voice", key="vault_new_voice", label_visibility="collapsed", placeholder="New voice name")
-        vcol2.button("Create", key="vault_create_voice", on_click=cb_vault_create_voice)
+        if vcol2.button("Create", key="vault_create_voice"):
+            if create_custom_voice(new_name):
+                st.session_state.voice_status = f"Voice created: {new_name.strip()}"
+                autosave()
+                st.rerun()
+            else:
+                st.warning("Could not create that voice (empty or already exists).")
 
         lane = st.selectbox("Lane", LANES, key="vault_lane_sel")
         sample = st.text_area("Sample", key="vault_sample_text", height=140, label_visibility="collapsed", placeholder="Paste a passage...")
         a1, a2 = st.columns([1, 1])
-        a1.button("Add sample", key="vault_add_sample", on_click=cb_vault_add_sample)
+        if a1.button("Add sample", key="vault_add_sample"):
+            if add_voice_sample(vault_voice, lane, sample):
+                st.session_state.ui_notice = f"Added sample → {vault_voice} • {lane}"
+                queue_action("__VAULT_CLEAR_SAMPLE__")
+                autosave()
+                st.rerun()
+            else:
+                st.warning("No sample text found.")
 
         # Quick stats + delete last sample
         v = (st.session_state.voices or {}).get(vault_voice, {})
         lane_counts = {ln: len((v.get("lanes", {}) or {}).get(ln, []) or []) for ln in LANES}
         st.caption("Samples: " + "  ".join([f"{ln}: {lane_counts[ln]}" for ln in LANES]))
 
-        a2.button("Delete last sample", key="vault_del_last", on_click=cb_vault_delete_last_sample)
+        if a2.button("Delete last sample", key="vault_del_last"):
+            if delete_voice_sample(vault_voice, lane, index_from_end=0):
+                st.session_state.voice_status = f"Deleted last sample → {vault_voice} • {lane}"
+                autosave()
+                st.rerun()
+            else:
+                st.warning("Nothing to delete for that lane.")
 
     st.divider()
 
