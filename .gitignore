@@ -1,0 +1,10 @@
+# secrets / env
+.env
+credentials.toml
+
+# runtime state
+autosave/
+*.bak
+
+# misc
+.DS_Store
