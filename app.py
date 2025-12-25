@@ -909,7 +909,9 @@ init_state()
 # Apply pending widget values BEFORE widgets are created
 if st.session_state.pop("_apply_pending_widget_state", False):
     if "ai_intensity_pending" in st.session_state:
-    st.session_state["ai_intensity"] = float(st.session_state.pop("ai_intensity_pending"))
+        st.session_state["ai_intensity"] = float(st.session_state.pop("ai_intensity_pending"))
+
+    
    
 
 
