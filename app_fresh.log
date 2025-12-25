@@ -1,0 +1,87 @@
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.0.0.84:8501
+  External URL: http://172.210.53.225:8501
+
+2025-12-25 18:15:40,159 - Olivetti - INFO - ai_gateway.py not found, using inline implementations
+2025-12-25 18:15:40,368 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:15:40,370 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:15:40,372 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:15:40.657 Uncaught app execution
+Traceback (most recent call last):
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 671, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/superhappyfuntimellc/app.py", line 3796, in <module>
+    if cols[0].button("🆕 New", key="bay_new"):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/metrics_util.py", line 531, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/widgets/button.py", line 327, in button
+    return self.dg._button(
+           ^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/widgets/button.py", line 1354, in _button
+    element_id = compute_and_register_element_id(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/lib/utils.py", line 265, in compute_and_register_element_id
+    _register_element_id(ctx, element_type, element_id)
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/lib/utils.py", line 145, in _register_element_id
+    raise StreamlitDuplicateElementKey(user_key)
+streamlit.errors.StreamlitDuplicateElementKey: There are multiple elements with the same `key='bay_new'`. To fix this, please make sure that the `key` argument is unique for each element you create.
+2025-12-25 18:15:52,126 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:15:52,128 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:15:52,129 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:16:36,327 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:16:36,331 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:16:36,332 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:22:45,198 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:22:45,199 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:22:45,200 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:32:27,102 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:32:27,102 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:32:27,103 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:40:12,979 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:40:12,981 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:40:12,982 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:40:13,079 - Olivetti - INFO - Autosave completed (0 projects, 5 bytes)
+2025-12-25 18:42:28,364 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:42:28,367 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:42:28,367 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:43:13,071 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:43:13,073 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:43:13,076 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:43:21,982 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:43:21,985 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:43:21,988 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 18:43:22,274 - Olivetti - INFO - Autosave completed (0 projects, 5 bytes)
+2025-12-25 18:54:54,192 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 18:54:54,194 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 18:54:54,197 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 19:14:32,321 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 19:14:32,324 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 19:14:32,326 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 19:14:39,138 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 19:14:39,141 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 19:14:39,143 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 20:06:04,548 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 20:06:04,550 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 20:06:04,552 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 20:06:08,987 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 20:06:08,989 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 20:06:08,990 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 20:06:09,349 - Olivetti - INFO - Autosave completed (0 projects, 5 bytes)
+2025-12-25 20:06:25,039 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 20:06:25,041 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 20:06:25,043 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 20:06:35,895 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 20:06:35,896 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 20:06:35,897 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 20:23:47,680 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 20:23:47,683 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 20:23:47,685 - Olivetti - INFO - Successfully initialized workspace with 0 projects

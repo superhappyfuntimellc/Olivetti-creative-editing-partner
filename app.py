@@ -4074,7 +4074,15 @@ with left:
     if bay == "NEW":
         # NEW BAY: Story Bible workspace only
         st.subheader("📖 Story Bible Setup")
+        
+        # Display workspace story bible status
+        w = st.session_state.sb_workspace or default_story_bible_workspace()
+        wsb_id = w.get('workspace_story_bible_id', '—')
+        wsb_created = w.get('workspace_story_bible_created_ts', '—')
+        st.caption(f"Workspace Story Bible • Bible ID: **{wsb_id}** • Created: **{wsb_created}**")
         st.caption("Build your Story Bible, then send to ROUGH/EDIT/FINAL as chapters")
+        
+        st.divider()
         
         # Two simple options
         setup_mode = st.radio(

@@ -10,7 +10,7 @@ class Config:
     """Production configuration for Olivetti Creative Editing Partner"""
     
     # ═══ AI SERVICE ═══
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", "90"))
     OPENAI_MAX_RETRIES: int = int(os.getenv("OPENAI_MAX_RETRIES", "3"))

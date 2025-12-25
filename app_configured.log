@@ -5,3 +5,38 @@
   Network URL: http://10.0.0.84:8501
   External URL: http://172.210.53.225:8501
 
+2025-12-25 17:35:34,926 - Olivetti - INFO - ai_gateway.py not found, using inline implementations
+2025-12-25 17:35:35,402 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 17:35:35,403 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 17:35:35,416 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 17:35:35.863 Uncaught app execution
+Traceback (most recent call last):
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 671, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/superhappyfuntimellc/app.py", line 3796, in <module>
+    if cols[0].button("🆕 New", key="bay_new"):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/runtime/metrics_util.py", line 531, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/widgets/button.py", line 327, in button
+    return self.dg._button(
+           ^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/widgets/button.py", line 1354, in _button
+    element_id = compute_and_register_element_id(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/lib/utils.py", line 265, in compute_and_register_element_id
+    _register_element_id(ctx, element_type, element_id)
+  File "/home/vscode/.local/lib/python3.11/site-packages/streamlit/elements/lib/utils.py", line 145, in _register_element_id
+    raise StreamlitDuplicateElementKey(user_key)
+streamlit.errors.StreamlitDuplicateElementKey: There are multiple elements with the same `key='bay_new'`. To fix this, please make sure that the `key` argument is unique for each element you create.
+2025-12-25 17:45:43,004 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 17:45:43,005 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 17:45:43,007 - Olivetti - INFO - Successfully initialized workspace with 0 projects
+2025-12-25 17:45:51,283 - Olivetti - INFO - Performance monitoring and rate limiting initialized
+2025-12-25 17:45:51,289 - Olivetti - INFO - Successfully loaded from primary autosave: autosave/olivetti_state.json
+2025-12-25 17:45:51,293 - Olivetti - INFO - Successfully initialized workspace with 0 projects
