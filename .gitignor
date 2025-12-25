@@ -1,0 +1,7 @@
+# secrets / env
+.env
+credentials.toml
+
+# runtime state
+autosave/
+*.bak
