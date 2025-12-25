@@ -1,10 +1,61 @@
-# secrets / env
-.env
-credentials.toml
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# runtime state
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Secrets / env
+.env
+.env.local
+credentials.toml
+.streamlit/secrets.toml
+
+# Runtime state
 autosave/
 *.bak
+*.bak[0-9]*
+olivetti_state.json
+olivetti_state.json.bak*
 
-# misc
+# Logs
+*.log
+logs/
+olivetti.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/config.toml

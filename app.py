@@ -100,8 +100,6 @@
 
 import os
 import re
-import os
-import re
 import math
 import json
 import hashlib
@@ -149,16 +147,28 @@ except ImportError:
 # LOGGING & ERROR HANDLING INFRASTRUCTURE
 # ============================================================
 
-# Configure logging
+# Configure logging with rotation
+from logging.handlers import RotatingFileHandler
+
+log_handler = RotatingFileHandler(
+    'olivetti.log',
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=3
+)
+log_handler.setFormatter(
+    logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('olivetti.log'),
+        log_handler,
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger("Olivetti")
+logger.info("Olivetti application starting")
 
 class OlivettiError(Exception):
     """Base exception for Olivetti-specific errors"""
@@ -305,7 +315,7 @@ except ImportError:
 os.environ.setdefault("MS_APP_ID", "olivetti-writing-desk")
 os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 def _get_openai_key_or_empty() -> str:
     try:
