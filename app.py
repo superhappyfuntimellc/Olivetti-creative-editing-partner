@@ -2803,7 +2803,7 @@ def export_as_pdf(content: str, title: str = "Untitled") -> bytes:
             pdf.multi_cell(0, 6, clean_para)
             pdf.ln(4)
     
-    return pdf.output(dest='S').encode('latin-1')
+    return bytes(pdf.output())
 
 
 def get_export_content() -> Tuple[str, str]:
@@ -3591,10 +3591,10 @@ def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
         pdf.set_font("Times", 'B', 16)
-        pdf.multi_cell(0, 10, txt=title or "Untitled", align='C')
+        pdf.multi_cell(0, 10, text=title or "Untitled", align='C')
         pdf.ln(6)
         pdf.set_font("Times", '', 12)
-        pdf.multi_cell(0, 8, txt=f"by {author or 'Author'}", align='C')
+        pdf.multi_cell(0, 8, text=f"by {author or 'Author'}", align='C')
         pdf.ln(10)
         pdf.set_font("Times", '', 12)
         paragraphs = text.split("\n\n")
@@ -3605,17 +3605,14 @@ def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
                 if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
                         pdf.ln(4)
                         pdf.set_font("Times", 'B', 13)
-                        pdf.multi_cell(0, 8, txt=para, align='C')
+                        pdf.multi_cell(0, 8, text=para, align='C')
                         pdf.set_font("Times", '', 12)
                         pdf.ln(2)
                 else:
-                        pdf.multi_cell(0, 8, txt=para)
+                        pdf.multi_cell(0, 8, text=para)
                         pdf.ln(2)
-        output = pdf.output(dest='S')
-        # Handle both bytes, bytearray, and string outputs from different fpdf2 versions
-        if isinstance(output, (bytes, bytearray)):
-                return bytes(output)
-        return output.encode('latin1')
+        # output() returns bytearray in modern fpdf2 versions
+        return bytes(pdf.output())
 
 
 def build_kindle_package(title: str, author: str, text: str) -> bytes:
