@@ -350,7 +350,12 @@ def require_openai_key() -> str:
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
+try:
+    st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
+except Exception as e:
+    import streamlit as st
+    st.error(f"Config Error: {e}")
+    st.stop()
 
 # Olivetti Quaderno-inspired UI — Sleek, sexy, fun, easy
 st.markdown(
@@ -3931,7 +3936,11 @@ def run_pending_action() -> None:
 
 
 # Run queued actions early (pre-widget)
-run_pending_action()
+try:
+    run_pending_action()
+except Exception as e:
+    st.error(f"❌ Action Error: {str(e)}")
+    logger.error(f"Failed to run pending action: {e}\n{traceback.format_exc()}")
 
 
 # ============================================================
@@ -3946,8 +3955,13 @@ try:
         else:
             st.error("❌ AI Not Connected | Set OPENAI_API_KEY in Streamlit Secrets to enable AI features")
 except Exception as e:
-    st.error(f"❌ Initialization Error: {str(e)}")
-    logger.error(f"Failed to initialize UI: {e}\n{traceback.format_exc()}")
+    st.error(f"❌ Top Bar Error: {str(e)}")
+    logger.error(f"Failed to render top bar: {e}\n{traceback.format_exc()}")
+    st.write("Debug info:")
+    st.write(f"Error type: {type(e).__name__}")
+    st.write(f"Error details: {str(e)}")
+    import sys
+    st.write(f"Python version: {sys.version}")
     st.stop()
 
 # Main navigation: Bays + Story Bible + Flow Controls
