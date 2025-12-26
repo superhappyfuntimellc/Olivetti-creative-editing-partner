@@ -3965,49 +3965,50 @@ except Exception as e:
     st.stop()
 
 # Main navigation: Bays + Story Bible + Flow Controls
-nav_cols = st.columns([0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 2])
+try:
+    nav_cols = st.columns([0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 2])
 
-# Bay navigation
-if nav_cols[0].button("🆕 New", key="bay_new", use_container_width=True):
-    switch_bay("NEW")
-    save_all_to_disk(force=True)
-
-if nav_cols[1].button("✏️ Rough", key="bay_rough", use_container_width=True):
-    switch_bay("ROUGH")
-    save_all_to_disk(force=True)
-
-if nav_cols[2].button("🛠 Edit", key="bay_edit", use_container_width=True):
-    switch_bay("EDIT")
-    save_all_to_disk(force=True)
-
-if nav_cols[3].button("✅ Final", key="bay_final", use_container_width=True):
-    switch_bay("FINAL")
-    save_all_to_disk(force=True)
-
-# Story Bible quick access
-if nav_cols[4].button("📖 Bible", key="nav_story_bible", use_container_width=True, help="Jump to Story Bible (left panel)"):
-    # Toggle Story Bible focus via UI hint
-    st.session_state.ui_notice = "📖 Story Bible ready (see left panel)"
-
-# Flow control: Promote to next bay
-current_bay = st.session_state.active_bay
-has_project = bool(st.session_state.project_id)
-next_bay_name = next_bay(current_bay)
-
-if next_bay_name and has_project:
-    if nav_cols[5].button(f"→ {next_bay_name[0]}", key="nav_promote", use_container_width=True, 
-                          help=f"Promote to {next_bay_name}"):
-        save_session_into_project()
-        promote_project(st.session_state.project_id, next_bay_name)
-        st.session_state.active_project_by_bay[next_bay_name] = st.session_state.project_id
-        switch_bay(next_bay_name)
-        st.session_state.voice_status = f"Promoted → {next_bay_name}: {st.session_state.project_title}"
-        st.session_state.last_action = f"Promote → {next_bay_name}"
+    # Bay navigation
+    if nav_cols[0].button("🆕 New", key="bay_new", use_container_width=True):
+        switch_bay("NEW")
         save_all_to_disk(force=True)
-        st.rerun()
 
-# Status display
-nav_cols[6].markdown(
+    if nav_cols[1].button("✏️ Rough", key="bay_rough", use_container_width=True):
+        switch_bay("ROUGH")
+        save_all_to_disk(force=True)
+
+    if nav_cols[2].button("🛠 Edit", key="bay_edit", use_container_width=True):
+        switch_bay("EDIT")
+        save_all_to_disk(force=True)
+
+    if nav_cols[3].button("✅ Final", key="bay_final", use_container_width=True):
+        switch_bay("FINAL")
+        save_all_to_disk(force=True)
+
+    # Story Bible quick access
+    if nav_cols[4].button("📖 Bible", key="nav_story_bible", use_container_width=True, help="Jump to Story Bible (left panel)"):
+        # Toggle Story Bible focus via UI hint
+        st.session_state.ui_notice = "📖 Story Bible ready (see left panel)"
+
+    # Flow control: Promote to next bay
+    current_bay = st.session_state.active_bay
+    has_project = bool(st.session_state.project_id)
+    next_bay_name = next_bay(current_bay)
+
+    if next_bay_name and has_project:
+        if nav_cols[5].button(f"→ {next_bay_name[0]}", key="nav_promote", use_container_width=True, 
+                              help=f"Promote to {next_bay_name}"):
+            save_session_into_project()
+            promote_project(st.session_state.project_id, next_bay_name)
+            st.session_state.active_project_by_bay[next_bay_name] = st.session_state.project_id
+            switch_bay(next_bay_name)
+            st.session_state.voice_status = f"Promoted → {next_bay_name}: {st.session_state.project_title}"
+            st.session_state.last_action = f"Promote → {next_bay_name}"
+            save_all_to_disk(force=True)
+            st.rerun()
+
+    # Status display
+    nav_cols[6].markdown(
     f"""
     <div style='text-align:right;font-size:12px;'>
         <b>{st.session_state.active_bay}</b>: {st.session_state.project_title}
@@ -4018,13 +4019,23 @@ nav_cols[6].markdown(
     """,
     unsafe_allow_html=True,
 )
+except Exception as e:
+    st.error(f"❌ Navigation Error: {str(e)}")
+    logger.error(f"Failed to render navigation: {e}\n{traceback.format_exc()}")
+    st.write(f"Session state keys: {list(st.session_state.keys())}")
+    st.stop()
 
 st.divider()
 
 # ============================================================
 # LOCKED LAYOUT (same ratios)
 # ============================================================
-left, center, right = st.columns([1.2, 3.2, 1.6])
+try:
+    left, center, right = st.columns([1.2, 3.2, 1.6])
+except Exception as e:
+    st.error(f"❌ Layout Error: {str(e)}")
+    logger.error(f"Failed to create layout: {e}\n{traceback.format_exc()}")
+    st.stop()
 
 
 # ============================================================
