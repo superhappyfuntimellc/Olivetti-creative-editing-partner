@@ -82,7 +82,7 @@ Critical state: `project_id`, `active_bay`, `main_text`, `ai_intensity`, `voice_
 - **app.py** (5000+ lines): Main orchestrator, UI, inline fallback implementations
 - **ARCHITECTURE.md**: Complete module guide with examples
 - **SETUP_API_KEY.md**: User-facing API key setup guide (reference for error messages)
-- **requirements.txt**: Pin versions exactly as specified (openai>=2.0.0)
+- **requirements.txt**: Minimum version constraints (e.g., openai>=2.0.0) - respect these when adding dependencies
 
 ## Common Modifications
 

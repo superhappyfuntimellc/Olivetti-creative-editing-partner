@@ -1138,7 +1138,7 @@ An OpenAI API key is required for AI features to work.
 3. Replace `"your-api-key-here"` with your actual key (starts with `sk-`)
 4. Refresh this page
 
-See **SETUP_API_KEY.md** for detailed instructions.
+See [SETUP_API_KEY.md](SETUP_API_KEY.md) for detailed instructions.
             """,
             "severity": "warning"
         })
