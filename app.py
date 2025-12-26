@@ -3584,6 +3584,7 @@ def build_epub_bytes(title: str, author: str, text: str) -> Optional[bytes]:
 
 
 def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
+        """Build PDF bytes from text. Handles fpdf2 output compatibility."""
         if not PDF_AVAILABLE:
                 return None
         pdf = FPDF()
