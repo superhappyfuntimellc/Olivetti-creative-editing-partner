@@ -1,15 +1,4 @@
-"""
-============================================================
-AI GATEWAY - Unified OpenAI Interface
-============================================================
-Single gateway for all AI calls with:
-- Rate limiting
-- Error handling & retry logic
-- Performance monitoring
-- Input validation
-- Consistent temperature mapping
-============================================================
-"""
+"""AI Gateway - Unified OpenAI interface with rate limiting, retries & monitoring."""
 
 from typing import Dict, Any, Optional
 import os
@@ -17,14 +6,6 @@ import time
 import streamlit as st
 from openai import OpenAI
 
-# Import performance monitoring if available
-try:
-    from performance import PerformanceMonitor
-    HAS_PERF = True
-except ImportError:
-    HAS_PERF = False
-
-# Import performance monitoring if available
 try:
     from performance import PerformanceMonitor
     HAS_PERF = True
@@ -41,39 +22,25 @@ class APIError(OlivettiError):
 HAS_ERROR_HANDLING = True
 
 
+def _get_key() -> str:
+    """Get API key from env or secrets."""
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        try:
+            key = str(st.secrets.get("OPENAI_API_KEY", ""))
+        except:
+            pass
+    return key or ""
+
+
 def has_openai_key() -> bool:
-    """Check if OpenAI API key is configured."""
-    return bool(os.getenv("OPENAI_API_KEY"))
+    """Check if API key configured."""
+    return bool(_get_key())
 
 
 def call_openai(system_brief: str, user_task: str, text: str, 
                 temperature: Optional[float] = None) -> str:
-    """
-    ═══════════════════════════════════════════════════════════════
-    UNIFIED AI GATEWAY
-    ═══════════════════════════════════════════════════════════════
-    All AI generation routes through this function.
-    
-    Args:
-        system_brief: Complete Voice Bible brief from build_partner_brief()
-        user_task: Specific task instructions (e.g., "Write 200 words")
-        text: Current draft text for context
-        temperature: Override temperature (default: use AI Intensity)
-    
-    Returns:
-        Generated text from AI
-    
-    Raises:
-        APIError: If OpenAI call fails after retries
-    
-    FEATURES:
-    - Rate limiting check before API call
-    - Input validation (max 100k chars)
-    - Retry logic (3 attempts with exponential backoff)
-    - Performance tracking (if enabled)
-    - Error classification (rate limit vs. auth vs. general)
-    ═══════════════════════════════════════════════════════════════
-    """
+    """Unified AI gateway with rate limiting, retries, and validation."""
     if not has_openai_key():
         raise APIError("OPENAI_API_KEY not configured")
     
@@ -113,9 +80,14 @@ def call_openai(system_brief: str, user_task: str, text: str,
     max_retries = 3
     last_error = None
     
+    # Get API key
+    api_key = _get_key()
+    if not api_key:
+        raise APIError("OPENAI_API_KEY not configured")
+    
     for attempt in range(max_retries):
         try:
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = OpenAI(api_key=api_key)
             
             response = client.chat.completions.create(
                 model=model,
@@ -136,49 +108,32 @@ def call_openai(system_brief: str, user_task: str, text: str,
             
         except Exception as e:
             last_error = e
-            error_str = str(e).lower()
+            err = str(e).lower()
             
-            # Classify error
-            if "rate" in error_str or "429" in error_str:
-                # Rate limit - don't retry
+            # Don't retry auth/rate errors
+            if "rate" in err or "429" in err:
                 raise APIError(f"Rate limit: {e}")
-            elif "auth" in error_str or "401" in error_str:
-                # Auth error - don't retry
-                raise APIError(f"Authentication failed: {e}")
-            elif "timeout" in error_str:
-                # Timeout - retry with backoff
-                if attempt < max_retries - 1:
-                    wait = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    time.sleep(wait)
-                    continue
-            else:
-                # General error - retry once
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                    continue
+            if "auth" in err or "401" in err:
+                raise APIError(f"Auth failed: {e}")
             
-            # If we get here, it's the last attempt
-            raise APIError(f"OpenAI call failed after {attempt + 1} attempts: {e}")
+            # Retry with backoff
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt if "timeout" in err else 1)
+                continue
+            
+            raise APIError(f"Failed after {attempt + 1} attempts: {e}")
     
     # Should never reach here, but just in case
     raise APIError(f"OpenAI call failed: {last_error}")
 
 
 def estimate_tokens(text: str) -> int:
-    """
-    Rough token estimate (1 token ≈ 4 characters).
-    Used for cost estimation and limits.
-    """
+    """Rough token estimate (1 token ≈ 4 chars)."""
     return len(text) // 4
 
 
 def get_ai_status() -> Dict[str, Any]:
-    """
-    Get AI system status for display.
-    
-    Returns:
-        Dict with keys: api_key_set, rate_limit_info, performance_stats
-    """
+    """Get AI system status (key, rate limits, performance)."""
     status = {
         "api_key_set": has_openai_key(),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
