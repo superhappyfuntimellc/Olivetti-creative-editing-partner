@@ -3611,7 +3611,10 @@ def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
                         pdf.multi_cell(0, 8, txt=para)
                         pdf.ln(2)
         output = pdf.output(dest='S')
-        return output if isinstance(output, bytes) else output.encode('latin1')
+        # Handle both bytes, bytearray, and string outputs from different fpdf2 versions
+        if isinstance(output, (bytes, bytearray)):
+                return bytes(output)
+        return output.encode('latin1')
 
 
 def build_kindle_package(title: str, author: str, text: str) -> bytes:
