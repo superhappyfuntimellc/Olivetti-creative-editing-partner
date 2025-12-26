@@ -1,6 +1,6 @@
 # ============================================================
 # OLIVETTI CREATIVE EDITING PARTNER
-# Professional-Grade AI Author Engine
+# Professional-Grade AI Author Engine v2.0
 # ============================================================
 #
 # SYSTEM ARCHITECTURE (Spiderweb of Intelligent, Trainable Functions):
