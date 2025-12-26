@@ -56,6 +56,3 @@ olivetti.log
 # OS
 .DS_Store
 Thumbs.db
-
-# Streamlit
-.streamlit/config.toml

@@ -1095,6 +1095,74 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus {
 )
 
 # ============================================================
+# STARTUP CHECKS & DEPENDENCY VALIDATION
+# ============================================================
+
+# Check for critical dependencies first
+def check_startup_requirements():
+    """Check critical requirements and display helpful error messages"""
+    errors = []
+    warnings = []
+    
+    # Check 1: OpenAI SDK installation
+    try:
+        import openai
+        logger.info(f"✅ OpenAI SDK installed (version {openai.__version__})")
+    except ImportError:
+        errors.append({
+            "title": "🔴 OpenAI SDK Not Installed",
+            "message": """
+The OpenAI Python package is required but not installed.
+
+**To fix this:**
+1. Open a terminal
+2. Run: `pip install openai>=2.0.0`
+3. Restart Streamlit
+
+Or add `openai>=2.0.0` to requirements.txt and run `pip install -r requirements.txt`
+            """,
+            "severity": "error"
+        })
+    
+    # Check 2: API Key configuration
+    api_key = os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty()
+    if not api_key or api_key == "your-api-key-here":
+        warnings.append({
+            "title": "⚠️ OpenAI API Key Not Configured",
+            "message": """
+An OpenAI API key is required for AI features to work.
+
+**To fix this:**
+1. Get your API key from: https://platform.openai.com/api-keys
+2. Edit `.streamlit/secrets.toml`
+3. Replace `"your-api-key-here"` with your actual key (starts with `sk-`)
+4. Refresh this page
+
+See [SETUP_API_KEY.md](SETUP_API_KEY.md) for detailed instructions.
+            """,
+            "severity": "warning"
+        })
+    else:
+        logger.info("✅ OpenAI API key configured")
+    
+    # Display errors/warnings
+    if errors:
+        st.error("## ❌ Critical Startup Errors")
+        for err in errors:
+            with st.expander(err["title"], expanded=True):
+                st.markdown(err["message"])
+        st.error("**⚠️ Please fix the errors above before continuing.**")
+        st.stop()
+    
+    if warnings:
+        for warn in warnings:
+            with st.expander(warn["title"], expanded=True):
+                st.warning(warn["message"])
+
+# Run startup checks
+check_startup_requirements()
+
+# ============================================================
 # GLOBALS
 # ============================================================
 LANES = ["Dialogue", "Narration", "Interiority", "Action"]
