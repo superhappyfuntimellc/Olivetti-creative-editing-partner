@@ -3937,13 +3937,20 @@ run_pending_action()
 # ============================================================
 # UI — TOP BAR (Integrated Navigation)
 # ============================================================
-top = st.container()
-with top:
-    # Connection status indicator
-    if has_openai_key():
-        st.success("✅ AI Connected | System Ready")
-    else:
-        st.error("❌ AI Not Connected | Set OPENAI_API_KEY in Streamlit Secrets to enable AI features")
+try:
+    top = st.container()
+    with top:
+        # Connection status indicator
+        if has_openai_key():
+            st.success("✅ AI Connected | System Ready")
+        else:
+            st.error("❌ AI Not Connected | Set OPENAI_API_KEY in Streamlit Secrets to enable AI features")
+except Exception as e:
+    st.error(f"❌ Initialization Error: {str(e)}")
+    logger.error(f"Failed to initialize UI: {e}\n{traceback.format_exc()}")
+    st.stop()
+
+try:
     
     # Main navigation: Bays + Story Bible + Flow Controls
     nav_cols = st.columns([0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 2])
@@ -5238,4 +5245,9 @@ with right:
 # ============================================================
 # SAFETY NET SAVE EVERY RERUN
 # ============================================================
+except Exception as e:
+    st.error(f"❌ UI Rendering Error: {str(e)}")
+    logger.error(f"Failed to render UI: {e}\n{traceback.format_exc()}")
+    st.stop()
+
 save_all_to_disk()
