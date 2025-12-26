@@ -3950,10 +3950,8 @@ except Exception as e:
     logger.error(f"Failed to initialize UI: {e}\n{traceback.format_exc()}")
     st.stop()
 
-try:
-    
-    # Main navigation: Bays + Story Bible + Flow Controls
-    nav_cols = st.columns([0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 2])
+# Main navigation: Bays + Story Bible + Flow Controls
+nav_cols = st.columns([0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 2])
 
     # Bay navigation
     if nav_cols[0].button("🆕 New", key="bay_new", use_container_width=True):
@@ -5245,9 +5243,4 @@ with right:
 # ============================================================
 # SAFETY NET SAVE EVERY RERUN
 # ============================================================
-except Exception as e:
-    st.error(f"❌ UI Rendering Error: {str(e)}")
-    logger.error(f"Failed to render UI: {e}\n{traceback.format_exc()}")
-    st.stop()
-
 save_all_to_disk()
