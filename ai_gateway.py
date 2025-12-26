@@ -24,16 +24,21 @@ try:
 except ImportError:
     HAS_PERF = False
 
-# Import error handling if available
+# Import performance monitoring if available
 try:
-    from app import OlivettiError, APIError, safe_execute, validate_text_input
-    HAS_ERROR_HANDLING = True
+    from performance import PerformanceMonitor
+    HAS_PERF = True
 except ImportError:
-    HAS_ERROR_HANDLING = False
-    class OlivettiError(Exception):
-        pass
-    class APIError(OlivettiError):
-        pass
+    HAS_PERF = False
+
+# Define error classes locally to avoid circular import
+class OlivettiError(Exception):
+    pass
+
+class APIError(OlivettiError):
+    pass
+
+HAS_ERROR_HANDLING = True
 
 
 def has_openai_key() -> bool:
@@ -79,18 +84,12 @@ def call_openai(system_brief: str, user_task: str, text: str,
             raise APIError(f"Rate limit exceeded. Wait {wait_time:.0f}s before next call.")
     
     # Input validation
-    if HAS_ERROR_HANDLING:
-        system_brief = validate_text_input(system_brief, "system_brief", max_length=100000)
-        user_task = validate_text_input(user_task, "user_task", max_length=10000)
-        text = validate_text_input(text, "text", max_length=100000)
-    else:
-        # Basic validation
-        if len(system_brief) > 100000:
-            raise APIError("system_brief exceeds 100k character limit")
-        if len(user_task) > 10000:
-            raise APIError("user_task exceeds 10k character limit")
-        if len(text) > 100000:
-            raise APIError("text exceeds 100k character limit")
+    if len(system_brief) > 100000:
+        raise APIError("system_brief exceeds 100k character limit")
+    if len(user_task) > 10000:
+        raise APIError("user_task exceeds 10k character limit")
+    if len(text) > 100000:
+        raise APIError("text exceeds 100k character limit")
     
     # Get temperature from AI Intensity if not provided
     if temperature is None:
