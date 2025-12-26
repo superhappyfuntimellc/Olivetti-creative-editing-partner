@@ -129,13 +129,6 @@ try:
 except ImportError:
     EPUB_AVAILABLE = False
 
-# Optional PDF support (lightweight fpdf2)
-try:
-    from fpdf import FPDF  # type: ignore
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-
 # Optional audio export support (gTTS)
 try:
     from gtts import gTTS  # type: ignore
@@ -2776,36 +2769,6 @@ def export_as_docx(content: str, title: str = "Untitled") -> bytes:
     return buffer.getvalue()
 
 
-def export_as_pdf(content: str, title: str = "Untitled") -> bytes:
-    """Export text content as .pdf file."""
-    if not PDF_AVAILABLE:
-        raise OlivettiError("PDF export requires fpdf2. Install with: pip install fpdf2")
-    
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    # Title
-    pdf.set_font('Arial', 'B', 16)
-    pdf.cell(0, 10, title, ln=True, align='C')
-    pdf.ln(10)
-    
-    # Content
-    pdf.set_font('Arial', '', 12)
-    
-    # Split into paragraphs and encode properly
-    paragraphs = content.split('\n\n')
-    for para in paragraphs:
-        if para.strip():
-            # Replace problematic characters
-            clean_para = para.strip().replace('\u2019', "'").replace('\u2018', "'").replace('\u201c', '"').replace('\u201d', '"')
-            clean_para = clean_para.encode('latin-1', 'replace').decode('latin-1')
-            pdf.multi_cell(0, 6, clean_para)
-            pdf.ln(4)
-    
-    return pdf.output(dest='S').encode('latin-1')
-
-
 def get_export_content() -> Tuple[str, str]:
     """Get content and title for export based on current context."""
     if st.session_state.active_bay in ["ROUGH", "EDIT", "FINAL"] and st.session_state.project_id:
@@ -3581,41 +3544,6 @@ def build_epub_bytes(title: str, author: str, text: str) -> Optional[bytes]:
         buf = BytesIO()
         epub.write_epub(buf, book)
         return buf.getvalue()
-
-
-def build_pdf_bytes(title: str, author: str, text: str) -> Optional[bytes]:
-        """Build PDF bytes from text. Handles fpdf2 output compatibility."""
-        if not PDF_AVAILABLE:
-                return None
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        pdf.set_font("Times", 'B', 16)
-        pdf.multi_cell(0, 10, txt=title or "Untitled", align='C')
-        pdf.ln(6)
-        pdf.set_font("Times", '', 12)
-        pdf.multi_cell(0, 8, txt=f"by {author or 'Author'}", align='C')
-        pdf.ln(10)
-        pdf.set_font("Times", '', 12)
-        paragraphs = text.split("\n\n")
-        for para in paragraphs:
-                para = para.strip()
-                if not para:
-                        continue
-                if para.isupper() or para.startswith("Chapter") or para.startswith("CHAPTER"):
-                        pdf.ln(4)
-                        pdf.set_font("Times", 'B', 13)
-                        pdf.multi_cell(0, 8, txt=para, align='C')
-                        pdf.set_font("Times", '', 12)
-                        pdf.ln(2)
-                else:
-                        pdf.multi_cell(0, 8, txt=para)
-                        pdf.ln(2)
-        output = pdf.output(dest='S')
-        # Handle both bytes, bytearray, and string outputs from different fpdf2 versions
-        if isinstance(output, (bytes, bytearray)):
-                return bytes(output)
-        return output.encode('latin1')
 
 
 def build_kindle_package(title: str, author: str, text: str) -> bytes:
@@ -4503,21 +4431,6 @@ with left:
             else:
                 st.caption("EPUB export unavailable (install ebooklib to enable).")
 
-            # PDF
-            pdf_bytes = build_pdf_bytes(title, st.session_state.get("export_author", "Author Name"), draft_txt) if PDF_AVAILABLE else None
-            if PDF_AVAILABLE:
-                st.download_button(
-                    "📄 PDF (.pdf)",
-                    data=pdf_bytes or b"",
-                    file_name=f"{stem}.pdf",
-                    mime="application/pdf",
-                    help="Lightweight PDF export (fpdf2)",
-                    use_container_width=True,
-                    disabled=pdf_bytes is None
-                )
-            else:
-                st.caption("PDF export unavailable (install fpdf2 to enable).")
-
             # Kindle package (HTML + OPF + NCX zip)
             kindle_zip = build_kindle_package(title, st.session_state.get("export_author", "Author Name"), draft_txt)
             st.download_button(
@@ -4983,21 +4896,7 @@ with center:
             st.button("📘 DOCX", disabled=True, use_container_width=True, help="Install python-docx to enable")
     
     with exp_cols[2]:
-        if PDF_AVAILABLE and content.strip():
-            try:
-                pdf_data = export_as_pdf(content, title)
-                st.download_button(
-                    "📕 PDF",
-                    data=pdf_data,
-                    file_name=f"{title}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    help="Export as PDF"
-                )
-            except Exception as e:
-                st.button("📕 PDF", disabled=True, use_container_width=True, help=f"Error: {str(e)}")
-        else:
-            st.button("📕 PDF", disabled=True, use_container_width=True, help="Install fpdf2 to enable")
+        st.caption("💡 PDF export removed")
     
     with exp_cols[3]:
         # Full manuscript export (if in chapter mode)
@@ -5020,7 +4919,7 @@ with center:
             else:
                 st.caption("💡 Single chapter - use buttons on left")
         else:
-            st.caption("💡 Export options: TXT, DOCX, PDF")
+            st.caption("💡 Export options: TXT, DOCX")
 
     # Primary Actions (all respect Voice Bible + AI Intensity)
     b1 = st.columns(5)
